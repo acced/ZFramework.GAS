@@ -1,0 +1,14 @@
+{
+  "name": "com.acced.zframework.gas",
+  "version": "0.1.0",
+  "displayName": "ZFramework GAS",
+  "description": "Gameplay Ability System for Unity. Attribute / Effect / Ability / Tag / Cue in idiomatic C#, with no host-project coupling.",
+  "unity": "6000.3",
+  "author": {
+    "name": "acced"
+  },
+  "dependencies": {
+    "com.acced.zframework.gameplaytags": "1.0.0"
+  },
+  "license": "MIT"
+}

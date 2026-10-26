@@ -107,3 +107,10 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# Package-owned build projects and hidden standalone output
+.build~/
+bin/
+obj/
+!ZFramework.GAS.Core.csproj
+!Tests~/Core/Core.csproj

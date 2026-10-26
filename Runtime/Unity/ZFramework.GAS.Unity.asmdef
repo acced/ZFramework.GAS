@@ -1,0 +1,17 @@
+{
+    "name": "ZFramework.GAS.Unity",
+    "rootNamespace": "ZFramework.GAS.Unity",
+    "references": [
+        "ZFramework.GAS",
+        "ZFramework.GameplayTags"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
