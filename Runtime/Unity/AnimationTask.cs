@@ -22,13 +22,21 @@ namespace ZFramework.GAS.Unity
         private readonly Action<AnimationTask, AnimationMarker> _onMarker;
         private readonly Action<AnimationTask> _onFinished;
         private readonly bool[] _regionOpen;
-
-        /// <summary>实际时长 ÷ 授权时长。标记点与区间的时间都按它缩放。</summary>
-        private readonly float _scale;
+        private readonly int[] _windowTagsAdded;
+        private readonly TimelineTaskContext _taskContext;
+        private readonly Boundary[] _boundaries;
+        private int _nextBoundary;
+        private readonly struct Boundary
+        {
+            /// <summary>构造完成后是本次播放的实际秒数（已缩放并夹到 <see cref="Duration"/>）。</summary>
+            public readonly float Time;
+            public readonly int Kind, Index;
+            public Boundary(float time, int kind, int index) { Time = time; Kind = kind; Index = index; }
+        }
 
         private float _cycleTime;
-        private int _nextMarker;
-        private int _nextRegion;
+
+
 
         /// <summary>
         /// 构造即开播——与 <see cref="ProjectileTask"/> 在构造时定下起点同源，
@@ -56,7 +64,8 @@ namespace ZFramework.GAS.Unity
             AbilitySystemComponent target = null,
             float durationOverride = 0f,
             Action<AnimationTask, AnimationMarker> onMarker = null,
-            Action<AnimationTask> onFinished = null)
+            Action<AnimationTask> onFinished = null,
+            TimelineTaskContext taskContext = null)
         {
             _definition = definition ?? throw new ArgumentNullException(nameof(definition));
             _driver = driver ?? throw new ArgumentNullException(nameof(driver));
@@ -71,6 +80,28 @@ namespace ZFramework.GAS.Unity
             _onMarker = onMarker;
             _onFinished = onFinished;
             _regionOpen = definition.CueRegions.Length > 0 ? new bool[definition.CueRegions.Length] : NoRegions;
+            _windowTagsAdded = new int[definition.TagWindows.Length];
+            _taskContext = taskContext;
+            if (definition.TaskEvents.Length > 0 && taskContext == null)
+                throw new ArgumentNullException(nameof(taskContext), "Task events require host scene services.");
+            _boundaries = new Boundary[definition.Markers.Length + definition.CueRegions.Length * 2 + definition.TagWindows.Length * 2 + definition.TaskEvents.Length];
+            int b = 0;
+            for (int i = 0; i < definition.TagWindows.Length; i++)
+            {
+                var w = definition.TagWindows[i];
+                _boundaries[b++] = new Boundary(w.Start, 0, i);
+                _boundaries[b++] = new Boundary(w.End < 0 ? definition.Duration : w.End, 4, i);
+            }
+            for (int i = 0; i < definition.CueRegions.Length; i++)
+            {
+                var r = definition.CueRegions[i];
+                _boundaries[b++] = new Boundary(r.Start, 1, i);
+                _boundaries[b++] = new Boundary(r.End < 0 ? definition.Duration : r.End, 5, i);
+            }
+            for (int i = 0; i < definition.Markers.Length; i++) _boundaries[b++] = new Boundary(definition.Markers[i].Time, 2, i);
+            for (int i = 0; i < definition.TaskEvents.Length; i++) _boundaries[b++] = new Boundary(definition.TaskEvents[i].Time, 3, i);
+            Array.Sort(_boundaries, static (a, c) =>
+            { int order = a.Time.CompareTo(c.Time); if (order == 0) order = a.Kind.CompareTo(c.Kind); return order == 0 ? a.Index.CompareTo(c.Index) : order; });
 
             float played = driver.Play(definition.ClipName, durationOverride, definition.Loop);
 
@@ -79,7 +110,19 @@ namespace ZFramework.GAS.Unity
             Duration = played > 0f ? played
                 : durationOverride > 0f ? durationOverride
                 : definition.Duration;
-            _scale = Duration / definition.Duration;
+
+            // 实际时长 ÷ 授权时长。所有时间点都按它缩放，且只算这一次。
+            float scale = Duration / definition.Duration;
+
+            // authored × scale 在浮点下可能比 Duration 多出一个 ulp
+            // （如授权 0.8s 拉到 0.44s），圈末 head 恰好等于 Duration，多出的那一点会让
+            // 「随动画结束」的区间与窗口收不掉，循环到下一圈再开一次就泄漏了计数。
+            // 夹到 Duration 保持单调，排好的顺序不变。
+            for (int i = 0; i < _boundaries.Length; i++)
+            {
+                Boundary authored = _boundaries[i];
+                _boundaries[i] = new Boundary(Math.Min(authored.Time * scale, Duration), authored.Kind, authored.Index);
+            }
         }
 
         /// <summary>本次播放的实际时长（秒）。</summary>
@@ -98,13 +141,14 @@ namespace ZFramework.GAS.Unity
                 // 否则同一圈里靠后的标记点会被跳过。
                 float head = _cycleTime < Duration ? _cycleTime : Duration;
 
-                if (!FireMarkers(head) || !OpenRegions(head) || !CloseRegions(head))
+                if (!ProcessBoundaries(head))
                 {
                     // 效果连锁取消了所属能力，任务已随之结束。
                     return;
                 }
 
                 _driver.Advance(head / Duration);
+                if (!IsActive) return;
 
                 if (_cycleTime < Duration)
                 {
@@ -119,114 +163,94 @@ namespace ZFramework.GAS.Unity
 
                 // 循环动画不自行结束，由能力结束它。每圈重新触发标记点与区间。
                 _cycleTime -= Duration;
-                _nextMarker = 0;
-                _nextRegion = 0;
+
+
+                _nextBoundary = 0;
             }
         }
 
         protected override void OnEnd(bool cancelled)
         {
+            Exception error = null;
+            for (int i = 0; i < _windowTagsAdded.Length; i++)
+            {
+                while (_windowTagsAdded[i] > 0)
+                {
+                    int tag = --_windowTagsAdded[i];
+                    try { Ability.Owner.OwnedTags.RemoveTag(_definition.TagWindows[i].Tags[tag]); }
+                    catch (Exception ex) { error ??= ex; }
+                }
+            }
             // 被打断时把已开的区间收尾，否则持续特效会永远挂着。
             for (int i = 0; i < _regionOpen.Length; i++)
             {
                 if (_regionOpen[i])
                 {
                     _regionOpen[i] = false;
-                    DispatchCue(_definition.CueRegions[i].CueTag, GameplayCueEvent.Removed);
+                    try { DispatchCue(_definition.CueRegions[i].CueTag, GameplayCueEvent.Removed); }
+                    catch (Exception ex) { error ??= ex; }
                 }
             }
 
-            _driver.Stop();
+            try { _driver.Stop(); } catch (Exception ex) { error ??= ex; }
 
             // 放在最后：回调里多半要结束能力，届时区间已收尾、动画已停。
-            _onFinished?.Invoke(this);
+            try { _onFinished?.Invoke(this); } catch (Exception ex) { error ??= ex; }
+            if (error != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
         }
 
-        /// <summary>返回 false 表示任务已在回调中结束，调用方应立刻停手。</summary>
-        private bool FireMarkers(float head)
+        // Merge boundaries once at construction. Large ticks still observe the correct window state
+        // at every marker; same-time opens precede events and closes follow events.
+        private bool ProcessBoundaries(float head)
         {
-            AnimationMarker[] markers = _definition.Markers;
-            while (_nextMarker < markers.Length)
+            while (_nextBoundary < _boundaries.Length && _boundaries[_nextBoundary].Time <= head)
             {
-                int index = _nextMarker;
-                ref readonly AnimationMarker marker = ref markers[index];
-                if (marker.Time * _scale > head)
+                Boundary b = _boundaries[_nextBoundary++];
+                switch (b.Kind)
                 {
-                    return true;
+                    case 0:
+                        var tags = _definition.TagWindows[b.Index].Tags;
+                        for (int i = 0; i < tags.Count; i++)
+                        {
+                            // Commit ownership before notification: cancellation can reenter OnEnd.
+                            _windowTagsAdded[b.Index] = i + 1;
+                            Ability.Owner.OwnedTags.AddTag(tags[i]);
+                            if (!IsActive) return false;
+                        }
+                        break;
+                    case 1:
+                        _regionOpen[b.Index] = true;
+                        DispatchCue(_definition.CueRegions[b.Index].CueTag, GameplayCueEvent.OnActive);
+                        break;
+                    case 2:
+                        var marker = _definition.Markers[b.Index];
+                        if (marker.Effect != null)
+                        {
+                            var owner = Ability.Owner;
+                            var receiver = marker.Target == AnimationMarkerTarget.Self ? owner : _target;
+                            receiver.Effects.Apply(new GameplayEffectSpec(marker.Effect, owner.Attributes, owner));
+                            if (!IsActive) return false;
+                        }
+                        _onMarker?.Invoke(this, marker);
+                        break;
+                    case 3:
+                        _definition.TaskEvents[b.Index].Spawner.Spawn(Ability, _taskContext);
+                        break;
+                    case 4:
+                        while (_windowTagsAdded[b.Index] > 0)
+                        {
+                            int index = --_windowTagsAdded[b.Index];
+                            Ability.Owner.OwnedTags.RemoveTag(_definition.TagWindows[b.Index].Tags[index]);
+                            if (!IsActive) return false;
+                        }
+                        break;
+                    case 5:
+                        _regionOpen[b.Index] = false;
+                        DispatchCue(_definition.CueRegions[b.Index].CueTag, GameplayCueEvent.Removed);
+                        break;
                 }
-
-                // 先推进游标再触发：回调里若结束能力，重入时不会再看到这个标记点。
-                _nextMarker = index + 1;
-
-                if (marker.Effect != null)
-                {
-                    AbilitySystemComponent owner = Ability.Owner;
-                    AbilitySystemComponent receiver = marker.Target == AnimationMarkerTarget.Self ? owner : _target;
-                    receiver.Effects.Apply(new GameplayEffectSpec(marker.Effect, owner.Attributes, owner));
-                    if (!IsActive)
-                    {
-                        return false;
-                    }
-                }
-
-                _onMarker?.Invoke(this, marker);
-                if (!IsActive)
-                {
-                    return false;
-                }
+                if (!IsActive) return false;
             }
-
-            return true;
-        }
-
-        private bool OpenRegions(float head)
-        {
-            AnimationCueRegion[] regions = _definition.CueRegions;
-            while (_nextRegion < regions.Length)
-            {
-                int index = _nextRegion;
-                if (regions[index].Start * _scale > head)
-                {
-                    return true;
-                }
-
-                _nextRegion = index + 1;
-                _regionOpen[index] = true;
-                DispatchCue(regions[index].CueTag, GameplayCueEvent.OnActive);
-                if (!IsActive)
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private bool CloseRegions(float head)
-        {
-            AnimationCueRegion[] regions = _definition.CueRegions;
-            for (int i = 0; i < regions.Length; i++)
-            {
-                if (!_regionOpen[i])
-                {
-                    continue;
-                }
-
-                // End 为负表示随动画结束；head 在圈末恰好等于 Duration，因此区间一定收得掉。
-                float end = regions[i].End < 0f ? Duration : regions[i].End * _scale;
-                if (end > head)
-                {
-                    continue;
-                }
-
-                _regionOpen[i] = false;
-                DispatchCue(regions[i].CueTag, GameplayCueEvent.Removed);
-                if (!IsActive)
-                {
-                    return false;
-                }
-            }
-
             return true;
         }
 

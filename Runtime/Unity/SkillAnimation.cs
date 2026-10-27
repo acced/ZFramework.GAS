@@ -115,6 +115,8 @@ namespace ZFramework.GAS.Unity
 
         /// <summary>按开始时间升序。</summary>
         public AnimationCueRegion[] CueRegions { get; }
+        public AnimationTagWindow[] TagWindows { get; }
+        public AnimationTaskEvent[] TaskEvents { get; }
 
         /// <summary>是否存在「作用于固定目标」的效果标记点——任务据此在构造时就要求传入目标。</summary>
         public bool RequiresTarget { get; }
@@ -124,14 +126,16 @@ namespace ZFramework.GAS.Unity
             float duration,
             bool loop = false,
             AnimationMarker[] markers = null,
-            AnimationCueRegion[] cueRegions = null)
+            AnimationCueRegion[] cueRegions = null,
+            AnimationTagWindow[] tagWindows = null,
+            AnimationTaskEvent[] taskEvents = null)
         {
             if (string.IsNullOrEmpty(clipName))
             {
                 throw new ArgumentException("Clip name must not be empty.", nameof(clipName));
             }
 
-            if (!(duration > 0f))
+            if (!(duration > 0f) || float.IsInfinity(duration))
             {
                 throw new ArgumentOutOfRangeException(nameof(duration), duration, "Animation duration must be positive.");
             }
@@ -142,6 +146,12 @@ namespace ZFramework.GAS.Unity
 
             Markers = markers == null || markers.Length == 0 ? NoMarkers : (AnimationMarker[])markers.Clone();
             CueRegions = cueRegions == null || cueRegions.Length == 0 ? NoRegions : (AnimationCueRegion[])cueRegions.Clone();
+            TagWindows = tagWindows == null ? Array.Empty<AnimationTagWindow>() : (AnimationTagWindow[])tagWindows.Clone();
+            TaskEvents = taskEvents == null ? Array.Empty<AnimationTaskEvent>() : (AnimationTaskEvent[])taskEvents.Clone();
+            foreach (var window in TagWindows)
+                if (window.Start > duration || window.End > duration) throw new ArgumentOutOfRangeException(nameof(tagWindows));
+            foreach (var task in TaskEvents)
+                if (task.Time > duration || task.Spawner == null) throw new ArgumentOutOfRangeException(nameof(taskEvents));
 
             bool requiresTarget = false;
             for (int i = 0; i < Markers.Length; i++)
@@ -185,6 +195,8 @@ namespace ZFramework.GAS.Unity
             // 排序在这里做一次，运行期就只剩游标前进。
             Array.Sort(Markers, static (a, b) => a.Time.CompareTo(b.Time));
             Array.Sort(CueRegions, static (a, b) => a.Start.CompareTo(b.Start));
+            Array.Sort(TagWindows, static (a, b) => a.Start.CompareTo(b.Start));
+            Array.Sort(TaskEvents, static (a, b) => a.Time.CompareTo(b.Time));
         }
     }
 }

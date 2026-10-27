@@ -1,0 +1,5 @@
+{
+  "name": "ZFramework.GAS.PlayMode.Tests",
+  "references": ["ZFramework.GAS", "ZFramework.GAS.Unity", "ZFramework.GameplayTags"],
+  "optionalUnityReferences": ["TestAssemblies"]
+}

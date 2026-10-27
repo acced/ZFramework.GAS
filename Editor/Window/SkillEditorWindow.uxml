@@ -1,0 +1,5 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
+    <ui:VisualElement name="toolbar-host" />
+    <ui:VisualElement name="workspace" class="workspace" />
+    <ui:VisualElement name="status-host" class="status-bar" />
+</ui:UXML>

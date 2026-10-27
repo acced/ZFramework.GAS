@@ -1,0 +1,9 @@
+{
+  "name": "ZFramework.GAS.Unity.Spine",
+  "rootNamespace": "ZFramework.GAS.Unity.Spine",
+  "references": ["ZFramework.GAS.Unity", "spine-unity", "spine-csharp"],
+  "defineConstraints": ["GAS_SPINE"],
+  "versionDefines": [
+    { "name": "com.esotericsoftware.spine.spine-unity", "expression": "[4.0,5.0)", "define": "GAS_SPINE" }
+  ]
+}

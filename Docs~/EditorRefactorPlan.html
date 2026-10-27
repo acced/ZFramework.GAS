@@ -1,0 +1,1359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZFramework GAS · 技能编辑器重构计划</title>
+<style>
+  :root {
+    --bg: #1b1d21;
+    --panel: #23262b;
+    --panel-2: #2a2e34;
+    --line: #363b43;
+    --text: #d6d9de;
+    --muted: #8d939c;
+    --accent: #4f9cf5;
+    --ok: #4cc38a;
+    --warn: #e7b24a;
+    --bad: #e5604f;
+    --ability: #3d7be0;
+    --cost: #d9a43a;
+    --cooldown: #2fb3c4;
+    --instant: #e0803a;
+    --duration: #46b36d;
+    --infinite: #9a6ce0;
+    --anim: #d65a9c;
+    --cue: #27a596;
+    --task: #7f8c9c;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.7 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+  }
+  nav {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 232px;
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 20px 14px; overflow-y: auto;
+  }
+  nav .brand { font-weight: 700; font-size: 15px; margin-bottom: 2px; }
+  nav .ver { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  nav a {
+    display: block; color: var(--muted); text-decoration: none;
+    padding: 4px 8px; border-radius: 4px; font-size: 13px;
+  }
+  nav a:hover { background: var(--panel-2); color: var(--text); }
+  nav a .n { display: inline-block; width: 22px; color: var(--accent); font-family: var(--mono); font-size: 12px; }
+  main { margin-left: 232px; padding: 36px 56px 120px; max-width: 1280px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  h2 {
+    font-size: 21px; margin: 56px 0 14px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .n { color: var(--accent); font-family: var(--mono); margin-right: 10px; }
+  h3 { font-size: 16px; margin: 28px 0 10px; }
+  h4 { font-size: 14px; margin: 18px 0 6px; color: #fff; }
+  p { margin: 8px 0; }
+  .lead { color: var(--muted); font-size: 15px; }
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--panel-2); padding: 1px 5px; border-radius: 3px; }
+  pre {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
+    background: #15171a; border: 1px solid var(--line); border-radius: 6px;
+    padding: 14px 16px; overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  .kw { color: #c792ea; } .ty { color: #82aaff; } .cm { color: #6b7380; } .st { color: #c3e88d; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 16px; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel-2); font-weight: 600; }
+  td.c, th.c { text-align: center; }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: 1fr 1fr; }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
+  }
+  .card h4 { margin-top: 0; }
+  .card.bad { border-left: 3px solid var(--bad); }
+  .card.ok { border-left: 3px solid var(--ok); }
+  .card.warn { border-left: 3px solid var(--warn); }
+  .card.info { border-left: 3px solid var(--accent); }
+  .metric { font-size: 26px; font-weight: 700; }
+  .metric small { font-size: 13px; color: var(--muted); font-weight: 400; }
+  .tag {
+    display: inline-block; font-size: 11.5px; padding: 0 7px; border-radius: 10px;
+    background: var(--panel-2); border: 1px solid var(--line); margin: 1px 2px; white-space: nowrap;
+  }
+  .tag.p0 { border-color: var(--bad); color: #ffb3a8; }
+  .tag.p1 { border-color: var(--warn); color: #ffe0a0; }
+  .tag.p2 { border-color: var(--muted); }
+  .tag.rt { border-color: var(--infinite); color: #d5c0ff; }
+  .tag.ed { border-color: var(--accent); color: #b8d6ff; }
+  ul, ol { padding-left: 22px; margin: 6px 0; }
+  li { margin: 3px 0; }
+  .muted { color: var(--muted); }
+  .ref { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .callout {
+    background: #1f2a3a; border: 1px solid #2f4566; border-radius: 6px; padding: 12px 16px; margin: 14px 0;
+  }
+  .callout.warn { background: #33291a; border-color: #5c4824; }
+
+  /* ===== 界面布局示意 ===== */
+  .mock {
+    border: 1px solid #111; border-radius: 6px; overflow: hidden; background: #191919;
+    font-size: 11.5px; line-height: 1.4; color: #c8c8c8; user-select: none;
+    box-shadow: 0 10px 30px rgba(0,0,0,.4);
+  }
+  .mock .titlebar { background: #282828; padding: 4px 10px; border-bottom: 1px solid #111; display: flex; gap: 10px; align-items: center; }
+  .mock .tab { background: #383838; padding: 2px 10px; border-radius: 3px 3px 0 0; }
+  .mock .toolbar { background: #303030; padding: 5px 8px; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid #111; flex-wrap: wrap; }
+  .mock .btn { background: #444; border: 1px solid #222; padding: 1px 8px; border-radius: 3px; }
+  .mock .btn.primary { background: #2f6fc9; color: #fff; }
+  .mock .crumb { color: #9ab; }
+  .mock .sep { width: 1px; height: 16px; background: #222; }
+  .mock .body { display: grid; grid-template-columns: 190px 1fr 230px; height: 520px; }
+  .mock .left, .mock .right { background: #232323; border-right: 1px solid #111; overflow: hidden; }
+  .mock .right { border-right: none; border-left: 1px solid #111; }
+  .mock .phead { background: #2c2c2c; padding: 3px 8px; font-weight: 600; border-bottom: 1px solid #111; display: flex; justify-content: space-between; }
+  .mock .search { margin: 6px 8px; background: #1a1a1a; border: 1px solid #111; border-radius: 3px; padding: 2px 6px; color: #777; }
+  .mock .tree { padding: 0 8px 8px; }
+  .mock .tree div { padding: 1px 0; white-space: nowrap; }
+  .mock .tree .sec { color: #999; margin-top: 6px; font-weight: 600; }
+  .mock .tree .sel { background: #2c5d87; margin: 0 -8px; padding-left: 8px; }
+  .mock .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+  .mock .center { display: grid; grid-template-rows: 1fr 196px; min-width: 0; }
+  .mock .graph {
+    position: relative; overflow: hidden;
+    background-color: #202020;
+    background-image: linear-gradient(#2a2a2a 1px, transparent 1px), linear-gradient(90deg, #2a2a2a 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  .mock .gtabs { position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 2px; background: #262626; padding: 2px 6px 0; border-bottom: 1px solid #111; }
+  .mock .gtabs span { padding: 2px 10px; background: #2e2e2e; border-radius: 3px 3px 0 0; color: #999; }
+  .mock .gtabs span.on { background: #3a3a3a; color: #fff; }
+  .mock .node { position: absolute; background: #2b2b2b; border: 1px solid #111; border-radius: 5px; width: 168px; box-shadow: 0 3px 8px rgba(0,0,0,.5); }
+  .mock .node .nh { padding: 3px 8px; border-radius: 4px 4px 0 0; color: #fff; font-weight: 600; display: flex; justify-content: space-between; }
+  .mock .node .nb { padding: 4px 8px; }
+  .mock .node .row { display: flex; justify-content: space-between; gap: 6px; }
+  .mock .node .f { background: #1c1c1c; border: 1px solid #111; padding: 0 4px; border-radius: 2px; color: #ddd; }
+  .mock .node .pin { display: inline-block; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #ccc; margin: 0 4px; vertical-align: middle; }
+  .mock .node .pin.on { background: #ccc; }
+  .mock .node.err { outline: 2px solid var(--bad); }
+  .mock .badge { background: var(--bad); color: #fff; border-radius: 8px; padding: 0 5px; font-size: 10px; }
+  .mock svg.wires { position: absolute; inset: 0; pointer-events: none; }
+  .mock .minimap { position: absolute; right: 8px; bottom: 8px; width: 110px; height: 66px; background: rgba(0,0,0,.45); border: 1px solid #444; }
+  .mock .timeline { background: #222; border-top: 2px solid #111; display: grid; grid-template-columns: 150px 1fr; grid-template-rows: 22px 18px 1fr; min-width: 0; }
+  .mock .tl-bar { grid-column: 1 / 3; background: #2c2c2c; display: flex; gap: 6px; align-items: center; padding: 0 8px; border-bottom: 1px solid #111; }
+  .mock .tl-corner { background: #262626; border-right: 1px solid #111; border-bottom: 1px solid #111; }
+  .mock .ruler { position: relative; background: #262626; border-bottom: 1px solid #111; overflow: hidden; }
+  .mock .ruler span { position: absolute; top: 2px; font-size: 10px; color: #888; border-left: 1px solid #555; padding-left: 2px; }
+  .mock .tracks-h { border-right: 1px solid #111; }
+  .mock .tracks-h div, .mock .tracks-b > div { height: 26px; border-bottom: 1px solid #1a1a1a; }
+  .mock .tracks-h div { padding: 5px 8px; white-space: nowrap; }
+  .mock .tracks-b { position: relative; overflow: hidden; }
+  .mock .tracks-b > div { position: relative; }
+  .mock .clip { position: absolute; top: 3px; height: 19px; border-radius: 3px; padding: 1px 6px; color: #fff; white-space: nowrap; overflow: hidden; }
+  .mock .mk { position: absolute; top: 5px; width: 12px; height: 12px; transform: translateX(-6px) rotate(45deg); border-radius: 2px; }
+  .mock .mk-l { position: absolute; top: 4px; font-size: 10px; color: #ddd; white-space: nowrap; }
+  .mock .tracks-b > .playhead { position: absolute; top: 0; bottom: 0; height: auto; width: 2px; background: #e5604f; border: none; }
+  .mock .viewport {
+    height: 170px; margin: 6px 8px; border: 1px solid #111; border-radius: 3px;
+    background: radial-gradient(ellipse at 50% 80%, #3b4250 0%, #1d2026 70%);
+    position: relative;
+  }
+  .mock .viewport .fig { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%); width: 34px; height: 84px; border-radius: 16px 16px 6px 6px; background: #8a93a3; }
+  .mock .viewport .slash { position: absolute; left: 50%; bottom: 60px; width: 70px; height: 70px; border-radius: 50%; border-top: 5px solid #ffcf6e; border-right: 5px solid transparent; transform: translateX(-10%) rotate(20deg); opacity: .8; }
+  .mock .viewport .vtxt { position: absolute; left: 6px; top: 4px; color: #aaa; }
+  .mock .kv { padding: 2px 8px; display: grid; grid-template-columns: 78px 1fr; gap: 4px; align-items: center; }
+  .mock .kv .f { background: #1a1a1a; border: 1px solid #111; border-radius: 2px; padding: 0 5px; }
+  .mock .chip { display: inline-block; background: #2f4a63; border-radius: 8px; padding: 0 6px; margin: 1px; }
+  .mock .status { background: #2a2a2a; border-top: 1px solid #111; padding: 3px 10px; display: flex; gap: 16px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 10px 0 4px; font-size: 12.5px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .num { display: inline-flex; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; align-items: center; justify-content: center; margin-right: 6px; flex-shrink: 0; }
+  .annot { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 24px; margin-top: 14px; font-size: 13px; }
+  .annot div { display: flex; align-items: flex-start; }
+
+  /* ===== 流程对比 ===== */
+  .flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+  .flow .s { background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 4px 9px; font-size: 12.5px; }
+  .flow .s.win { border-color: #5c4824; }
+  .flow .a { color: var(--muted); }
+
+  /* ===== 架构图 ===== */
+  .layers { display: grid; gap: 8px; }
+  .layer { display: grid; grid-template-columns: 150px 1fr; gap: 10px; align-items: stretch; }
+  .layer .ln { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-weight: 600; display: flex; align-items: center; }
+  .layer .boxes { display: flex; flex-wrap: wrap; gap: 6px; }
+  .layer .b { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 6px 10px; font-size: 12.5px; }
+  .layer .b b { display: block; font-size: 13px; }
+  .layer .b span { color: var(--muted); font-size: 11.5px; }
+  .layer.l-view .ln { border-left: 3px solid var(--accent); }
+  .layer.l-vm .ln { border-left: 3px solid var(--ok); }
+  .layer.l-svc .ln { border-left: 3px solid var(--warn); }
+  .layer.l-data .ln { border-left: 3px solid var(--infinite); }
+  .layer.l-rt .ln { border-left: 3px solid var(--anim); }
+
+  /* ===== 里程碑 ===== */
+  .ms { border: 1px solid var(--line); border-radius: 8px; margin: 14px 0; overflow: hidden; }
+  .ms .mh { background: var(--panel-2); padding: 10px 16px; display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+  .ms .mh .id { font-family: var(--mono); color: var(--accent); font-weight: 700; }
+  .ms .mh .t { font-weight: 700; font-size: 15px; }
+  .ms .mh .d { color: var(--muted); margin-left: auto; font-size: 12.5px; }
+  .ms .mb { padding: 10px 16px 14px; display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; }
+  .ms .mb h4 { margin-top: 4px; }
+  .gantt { display: grid; grid-template-columns: 210px repeat(14, 1fr); font-size: 11.5px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .gantt div { border-bottom: 1px solid var(--line); padding: 4px 6px; min-height: 26px; }
+  .gantt .gh { background: var(--panel-2); color: var(--muted); text-align: center; }
+  .gantt .gl { background: var(--panel); }
+  .gantt .bar { border-radius: 4px; margin: 3px 0; padding: 1px 6px; color: #fff; font-size: 11px; white-space: nowrap; overflow: hidden; }
+
+  /* ===== 类图 ===== */
+  .uml { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .cls { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 12px; }
+  .cls .ch { padding: 6px 10px; border-bottom: 1px solid var(--line); font-weight: 700; text-align: center; }
+  .cls .ch i { display: block; font-style: normal; font-weight: 400; color: var(--muted); font-size: 11px; }
+  .cls .cb { padding: 6px 10px; white-space: pre; line-height: 1.5; overflow-x: auto; }
+  .cls.iface .ch { color: #82aaff; }
+  .cls.abs .ch { color: #c792ea; }
+  .cls.new { border-color: #3f6b4f; }
+  .cls.new .ch::after { content: " NEW"; font-size: 10px; color: var(--ok); }
+
+  @media (max-width: 1100px) {
+    nav { display: none; } main { margin-left: 0; padding: 24px; }
+    .g3, .g4, .uml { grid-template-columns: 1fr 1fr; }
+    .mock .body { grid-template-columns: 150px 1fr 190px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="brand">技能编辑器重构计划</div>
+  <div class="ver">ZFramework.GAS · 编辑器层 v2 · 2026-10-26</div>
+  <a href="#overview"><span class="n">00</span>概览与目标</a>
+  <a href="#diagnosis"><span class="n">01</span>现状诊断</a>
+  <a href="#references"><span class="n">02</span>参考借鉴</a>
+  <a href="#layout"><span class="n">03</span>目标界面</a>
+  <a href="#workflow"><span class="n">04</span>核心工作流</a>
+  <a href="#architecture"><span class="n">05</span>总体架构</a>
+  <a href="#strategy"><span class="n">06</span>动画策略模式</a>
+  <a href="#graph"><span class="n">07</span>结构图重构</a>
+  <a href="#timeline"><span class="n">08</span>时间轴重构</a>
+  <a href="#details"><span class="n">09</span>Details 与字段编辑</a>
+  <a href="#preview"><span class="n">10</span>预览视口</a>
+  <a href="#validation"><span class="n">11</span>校验系统</a>
+  <a href="#data"><span class="n">12</span>数据模型与迁移</a>
+  <a href="#interaction"><span class="n">13</span>交互规范</a>
+  <a href="#milestones"><span class="n">14</span>分阶段计划</a>
+  <a href="#testing"><span class="n">15</span>测试与验收</a>
+  <a href="#risks"><span class="n">16</span>风险与对策</a>
+  <a href="#decisions"><span class="n">17</span>待决策事项</a>
+</nav>
+
+<main>
+
+<!-- ============================================================ -->
+<section id="overview">
+  <h1>ZFramework GAS 技能编辑器重构计划</h1>
+  <p class="lead">这次重构以用户体验为目标，完全重写 <code>Editor/</code>。设计上参考 UE 蓝图编辑器、UE Montage/Notify 时间轴和团结引擎 AnimGraph 1.0。
+  要达到的效果是：<b>一个窗口、一个文件、几分钟</b>做出一个带动作的技能；Animator、旧版 Animation、序列帧、Spine 等动画形式通过策略模式统一接入。</p>
+
+  <div class="grid g4" style="margin-top:18px">
+    <div class="card info"><div class="metric">1 <small>个窗口</small></div>建技能、编时间轴、预览、查错都在同一个编辑器里完成，不用再在 Project、Inspector 和结构图之间来回切换。</div>
+    <div class="card info"><div class="metric">1 <small>个文件</small></div>技能默认用子资产内嵌自己的效果和动画，同时仍能引用外部共享的效果。</div>
+    <div class="card info"><div class="metric">≤ 6 <small>步</small></div>做出「带动画的普攻」，现在要 15 步以上（见 §04）。</div>
+    <div class="card info"><div class="metric">N <small>种动画后端</small></div>运行期和编辑期各有一个策略接口，新增后端不需要修改编辑器。</div>
+  </div>
+
+  <h3>范围</h3>
+  <div class="grid g2">
+    <div class="card ok">
+      <h4>本次包含</h4>
+      <ul>
+        <li>重写编辑器窗口：技能库、结构图、时间轴、Details、预览、消息日志</li>
+        <li>动画后端策略化：运行期 <code>AnimationBackend</code> 加编辑期 <code>IAnimationEditorAdapter</code></li>
+        <li>Spine 适配器：放在独立 asmdef 里，由 <code>versionDefines</code> 控制，装了 Spine 才参与编译</li>
+        <li>技能模板与新建向导，属性和 SetByCaller 键改成从词表下拉选择</li>
+        <li>数据模型做小幅、向后兼容的扩展：稳定 ID、子资产、新的轨道类型</li>
+        <li>集中化的校验系统，同时提供 CI 用的批量校验菜单</li>
+      </ul>
+    </div>
+    <div class="card bad">
+      <h4>本次不包含（保持现有设计取舍）</h4>
+      <ul>
+        <li><b>运行期图解释器</b>：沿用 README 的立场，效果和能力仍是数据资产，图只用来授权和可视化</li>
+        <li>改动纯 C# Core 的规则语义（Attribute / Effect / Ability / Tag / Cue）</li>
+        <li>具体的特效、音效实现：预览只通过 Cue 预览钩子调用使用方提供的实现</li>
+        <li>动画混合、IK 这类姿态编辑：那是 AnimGraph 的职责，GAS 只管「什么时候发生什么」</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="diagnosis">
+  <h2><span class="n">01</span>现状诊断</h2>
+  <p>现有编辑器共 4 个文件、约 1,570 行。结构图（<code>SkillGraphView</code> / <code>AssetNode</code>）是「已有资产引用关系的投影」，时间轴（<code>AnimationTimelinePanel</code>）是 IMGUI 实现、只能拖时间点的面板。
+  它的工程质量很扎实：撤销统一走 <code>SerializedObject</code>，连线规则提前校验，拖拽一次正好对应一步撤销。<b>问题出在交互模型上，代码质量没有问题。</b></p>
+
+  <table>
+    <tr><th style="width:34px">#</th><th style="width:220px">问题</th><th>具体表现</th><th style="width:220px">代码位置</th><th style="width:70px" class="c">级别</th></tr>
+    <tr><td>1</td><td><b>图上不能「创建」</b></td><td>右键「新建效果资产」只会在 Project 里新建一个文件并打一行日志，用户还要自己从 Project 面板把它拖回端口。图里没有节点搜索面板，从端口拖出连线后也不能就地新建。</td><td class="ref">SkillGraphView.cs:597–613</td><td class="c"><span class="tag p0">P0</span></td></tr>
+    <tr><td>2</td><td><b>所有字段都要去 Inspector 改</b></td><td>节点上只有一行只读描述（「持续 3s · 修改器 2 个」）。改数值、改标签、改修改器都要双击节点跳到 Project，再去 Inspector 改，然后回来刷新。</td><td class="ref">AssetNode.cs:208–243</td><td class="c"><span class="tag p0">P0</span></td></tr>
+    <tr><td>3</td><td><b>属性 ID 是裸 int</b></td><td><code>targetAttributeId</code>、<code>captureAttributeId</code>、<code>durationAttributeId</code> 在 Inspector 里是数字框。策划必须记住「3 = 攻击力」。SetByCaller 键也是手打的字符串，键缺失到运行期才抛异常。</td><td class="ref">GameplayEffectAsset.cs:13–37</td><td class="c"><span class="tag p0">P0</span></td></tr>
+    <tr><td>4</td><td><b>动画只能手打片段名和时长</b></td><td><code>clipName</code> 是字符串，<code>duration</code> 要手填。不能从角色身上枚举可用片段，不能自动读取时长，也看不到动作，只能凭数字去对命中帧。</td><td class="ref">SkillAnimationAsset.cs:57–62</td><td class="c"><span class="tag p0">P0</span></td></tr>
+    <tr><td>5</td><td><b>一个技能散成 5 个以上文件</b></td><td>能力、消耗、冷却、伤害效果、动画各是一个 <code>.asset</code>，Project 面板里很快就乱了。复制一个技能做变体时，要手动复制 5 个文件再逐个重新连接引用。</td><td class="ref">—</td><td class="c"><span class="tag p1">P1</span></td></tr>
+    <tr><td>6</td><td><b>时间轴没有播放和预览</b></td><td>没有播放头，不能拖动查看（scrub），不能播放。只有标记点和 Cue 区间两种元素，表达不了「霸体窗口」「连招输入窗口」「这一帧发射投射物」。</td><td class="ref">AnimationTimelinePanel.cs</td><td class="c"><span class="tag p1">P1</span></td></tr>
+    <tr><td>7</td><td><b>节点不能删除，布局不持久</b></td><td>出于数据安全，节点被禁止删除，但这也让「移除一个子效果」只能靠删连线。布局每次按列和行自动摆放，用户拖好的位置一重建就丢了。</td><td class="ref">AssetNode.cs:38–42 · SkillGraphView.cs:20–21</td><td class="c"><span class="tag p1">P1</span></td></tr>
+    <tr><td>8</td><td><b>任何改动都整图重建</b></td><td>每次写回都执行 <code>DeleteElements(graphElements)</code> 再全量重建。选中状态、视口位置都会丢，节点多了以后会闪。</td><td class="ref">SkillGraphView.cs:84–107</td><td class="c"><span class="tag p1">P1</span></td></tr>
+    <tr><td>9</td><td><b>报错打断操作</b></td><td>连线被拒时弹模态对话框，需要点「知道了」才能继续。现在没有一个持续可见的错误列表，配置问题只有连线那一刻才会暴露。</td><td class="ref">SkillGraphView.cs:244–257</td><td class="c"><span class="tag p1">P1</span></td></tr>
+    <tr><td>10</td><td><b>端口身份靠解析字符串</b></td><td>标记点端口名形如「标记 3 · 命中」，靠 <code>TryParseMarkerPort</code> 解析出下标。所以授权数组不能排序，下标一变连线就错位。</td><td class="ref">AssetNode.cs:105–138</td><td class="c"><span class="tag p2">P2</span></td></tr>
+    <tr><td>11</td><td><b>没有技能总览</b></td><td>一次只能看一个能力。看不到项目里有哪些技能，找不到「谁引用了这个效果」，也没有搜索。</td><td class="ref">SkillGraphWindow.cs</td><td class="c"><span class="tag p2">P2</span></td></tr>
+    <tr><td>12</td><td><b>动画策略只在运行期</b></td><td><code>IAnimationDriver</code> 已经是策略接口，但驱动由宿主代码手动 new，编辑器完全不知道角色用的是哪种动画，也就做不了片段枚举和预览。Spine 没有实现。</td><td class="ref">AnimationDriver.cs · AnimationDrivers.cs</td><td class="c"><span class="tag p1">P1</span></td></tr>
+  </table>
+
+  <div class="callout"><b>保留的好设计：</b>视图是数据的投影（不维护第二份数据），所有写操作都走 <code>SerializedObject</code> 和 Undo，连线规则提前到编辑期拦截，拖拽期间不写数据、抬手时一次提交。新架构把这几条原则<b>提升为框架级约束</b>（见 §05 的 <code>SkillDocument</code> 和 <code>EditCommand</code>），不推倒重来。</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="references">
+  <h2><span class="n">02</span>参考借鉴</h2>
+  <div class="grid g3">
+    <div class="card">
+      <h4>UE 蓝图编辑器</h4>
+      <ul>
+        <li><b>My Blueprint 面板</b>：左侧列出图、函数、变量，可以搜索、拖拽</li>
+        <li><b>从端口拖到空白处</b>会弹出已按类型过滤好的节点搜索框，选中后自动连线</li>
+        <li><b>Details 面板</b>跟随选中项变化；节点引脚上直接内联默认值</li>
+        <li><b>Compiler Results</b>：持续列出错误和警告，点击跳到对应节点；节点上显示红色角标</li>
+        <li>注释框（Comment）、重路由点、小地图、书签、按 F 聚焦</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>UE Montage / Anim Notify</h4>
+      <ul>
+        <li><b>多轨时间轴</b>：动画片段轨、Notify 轨（瞬时点）、Notify State 轨（区间）</li>
+        <li>视口里实时预览，拖动播放头即时看到姿态</li>
+        <li>按帧吸附，可调预览播放速率</li>
+        <li>Notify 由类型系统扩展，新的 Notify 类型自动出现在右键菜单里</li>
+        <li>GAS 的 <code>PlayMontageAndWait</code> 加 <code>WaitGameplayEvent</code>：动画事件驱动技能逻辑</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>团结引擎 AnimGraph 1.0</h4>
+      <ul>
+        <li><b>三栏布局</b>：左侧 Blackboard（Graphs / Parameters），中间是图，右侧 Inspector</li>
+        <li>节点<b>按类别着色</b>，标题条颜色就是语义，不用读字也能分辨</li>
+        <li>端口左侧内联常量输入框（Speed = 1，Start Position = 0）</li>
+        <li>节点内嵌专用可视化（AimOffset 的混合空间网格）</li>
+        <li><b>Live Link</b>：运行时高亮当前执行状态</li>
+        <li>Script2Function：降低「一个个拖节点」的门槛</li>
+      </ul>
+    </div>
+  </div>
+  <p class="muted" style="margin-top:12px">参考来源：<a href="https://developer.unity.cn/projects/6a8bad4aedbc2a6639edcdbf" style="color:var(--accent)">团结引擎动画系统｜AnimGraph 1.0.0 正式版发布</a>（Unity 中国开发者社区）、UE5 Blueprint Editor / Animation Montage / Gameplay Ability System 官方文档。</p>
+
+  <h3>映射到本项目的取舍</h3>
+  <table>
+    <tr><th>借鉴点</th><th>落地方式</th><th>不照搬的部分</th></tr>
+    <tr><td>My Blueprint / Blackboard</td><td>左侧「技能库」面板分两层：项目里的所有技能，以及当前技能内的效果、动画、SetByCaller 参数、Cue</td><td>没有「变量」的概念，GAS 的数据就是资产字段</td></tr>
+    <tr><td>拖线搜索建节点</td><td><code>SkillNodeSearchProvider</code>（<code>ISearchWindowProvider</code>）按端口类型过滤，选中后创建子资产并连线</td><td>没有执行流（exec pin），图只表达「引用」和「触发时机」</td></tr>
+    <tr><td>Compiler Results</td><td>底部「消息」页签，加节点和轨道元素上的红/黄角标</td><td>没有「编译」步骤：校验实时增量进行</td></tr>
+    <tr><td>Montage 多轨</td><td>时间轴升级为多轨序列器，轨道类型可扩展（§08）</td><td>不做动画混合轨，一个技能动画对应一个片段</td></tr>
+    <tr><td>节点着色与内联字段</td><td>每类资产有固定颜色（§13），节点内直接编辑最常改的 3～5 个字段</td><td>完整字段仍在 Details 面板，节点不会变成第二个 Inspector</td></tr>
+    <tr><td>Live Link</td><td>Play Mode 下选中一个场景单位，时间轴播放头跟随它的 <code>AnimationTask</code>，图上高亮当前活跃的效果（M6，可选）</td><td>—</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="layout">
+  <h2><span class="n">03</span>目标界面</h2>
+  <p>窗口名为 <b>GAS 技能编辑器</b>（<code>Window/ZFramework GAS/技能编辑器</code>，双击能力资产也会打开）。下图是布局示意，用于对齐交互，不代表最终视觉稿。</p>
+
+  <div class="mock">
+    <div class="titlebar"><span class="tab">GAS 技能编辑器</span><span style="color:#777">— 普攻_剑士.asset</span></div>
+    <div class="toolbar">
+      <span class="btn primary">＋ 新建技能 ▾</span>
+      <span class="btn">保存 Ctrl+S</span>
+      <span class="sep"></span>
+      <span class="crumb">技能 / 剑士 / <b style="color:#fff">普攻_剑士</b></span>
+      <span class="sep"></span>
+      <span class="btn">◀ ▶</span>
+      <span style="margin-left:auto"></span>
+      <span>预览角色 <span class="btn">Swordsman.prefab ◉</span></span>
+      <span>后端 <span class="btn">Animator ▾</span></span>
+      <span class="btn" style="color:#e7b24a">⚠ 1</span>
+      <span class="btn" style="color:#e5604f">✖ 1</span>
+    </div>
+    <div class="body">
+      <!-- 左 -->
+      <div class="left">
+        <div class="phead"><span>技能库</span><span>＋</span></div>
+        <div class="search">🔍 搜索技能 / 效果 / 标签</div>
+        <div class="tree">
+          <div class="sec">▾ 剑士</div>
+          <div class="sel">&nbsp;&nbsp;<span class="dot" style="background:var(--ability)"></span>普攻_剑士</div>
+          <div>&nbsp;&nbsp;<span class="dot" style="background:var(--ability)"></span>旋风斩</div>
+          <div>&nbsp;&nbsp;<span class="dot" style="background:var(--ability)"></span>狂暴</div>
+          <div class="sec">▸ 弓手 (6)</div>
+          <div class="sec">▸ 共享效果 (12)</div>
+        </div>
+        <div class="phead"><span>当前技能</span><span>＋</span></div>
+        <div class="tree">
+          <div class="sec">▾ 效果（内嵌）</div>
+          <div>&nbsp;&nbsp;<span class="dot" style="background:var(--cost)"></span>消耗·体力 10</div>
+          <div>&nbsp;&nbsp;<span class="dot" style="background:var(--cooldown)"></span>冷却 0.8s</div>
+          <div>&nbsp;&nbsp;<span class="dot" style="background:var(--instant)"></span>伤害·挥砍</div>
+          <div class="sec">▾ 引用（外部）</div>
+          <div>&nbsp;&nbsp;<span class="dot" style="background:var(--duration)"></span>击退 ↗</div>
+          <div class="sec">▾ 动画</div>
+          <div>&nbsp;&nbsp;<span class="dot" style="background:var(--anim)"></span>Attack01 · 0.8s</div>
+          <div class="sec">▾ 参数（SetByCaller）</div>
+          <div>&nbsp;&nbsp;◇ Damage.Scale</div>
+          <div class="sec">▾ Cue</div>
+          <div>&nbsp;&nbsp;◆ Cue.Sword.Trail</div>
+        </div>
+      </div>
+      <!-- 中 -->
+      <div class="center">
+        <div class="graph">
+          <div class="gtabs"><span class="on">结构图</span><span>能力设置</span></div>
+          <svg class="wires" id="mock-wires"></svg>
+          <div class="node" style="left:12px; top:40px">
+            <div class="nh" style="background:var(--ability)">⚔ 普攻_剑士</div>
+            <div class="nb">
+              <div class="row"><span>标签</span><span class="chip">Ability.Attack</span></div>
+              <div class="row"><span>消耗</span><span class="pin on" data-wire="n-cost" data-color="#d9a43a"></span></div>
+              <div class="row"><span>冷却</span><span class="pin on" data-wire="n-cd" data-color="#2fb3c4"></span></div>
+              <div class="row"><span>动画</span><span class="pin on" data-wire="n-anim" data-color="#d65a9c"></span></div>
+            </div>
+          </div>
+          <div class="node" style="left:262px; top:30px; width:150px">
+            <div class="nh" id="n-cost" style="background:var(--cost)">消耗·体力</div>
+            <div class="nb"><div class="row"><span>体力</span><span class="f">− 10</span></div></div>
+          </div>
+          <div class="node" style="left:262px; top:106px; width:150px">
+            <div class="nh" id="n-cd" style="background:var(--cooldown)">冷却</div>
+            <div class="nb"><div class="row"><span>时长</span><span class="f">0.8 s</span></div><div class="row"><span>授予</span><span class="chip">CD.Attack</span></div></div>
+          </div>
+          <div class="node" style="left:262px; top:196px; width:170px">
+            <div class="nh" id="n-anim" style="background:var(--anim)">▶ Attack01 <span style="font-weight:400">0.8s</span></div>
+            <div class="nb">
+              <div class="row"><span>◆ 0.35s 命中</span><span class="pin on" data-wire="n-dmg" data-color="#e0803a"></span></div>
+              <div class="row"><span>◆ 0.60s 收招</span><span class="pin"></span></div>
+              <div class="row" style="color:#888"><span>▭ Cue.Sword.Trail</span></div>
+            </div>
+          </div>
+          <div class="node err" style="left:482px; top:150px; width:150px">
+            <div class="nh" id="n-dmg" style="background:var(--instant)">伤害·挥砍 <span class="badge">1</span></div>
+            <div class="nb"><div class="row"><span>生命</span><span class="f">− 攻击×1.2</span></div><div class="row" style="color:#e5604f"><span>✖ 缺 SetByCaller 键</span></div><div class="row"><span>生效时</span><span class="pin on" data-wire="n-kb" data-color="#46b36d" data-dash="1"></span></div></div>
+          </div>
+          <div class="node" style="left:482px; top:250px; width:150px; opacity:.85">
+            <div class="nh" id="n-kb" style="background:var(--duration)">击退 ↗ <span style="font-weight:400">外部</span></div>
+            <div class="nb"><div class="row"><span>持续</span><span class="f">0.3 s</span></div></div>
+          </div>
+          <div class="minimap"></div>
+        </div>
+        <div class="timeline">
+          <div class="tl-bar">
+            <span class="btn">⏮</span><span class="btn">▶</span><span class="btn">⏭</span><span class="btn">⟳</span>
+            <span>0.35s / 0.80s · 第 11 帧</span>
+            <span class="sep"></span>
+            <span>攻速预览 <span class="btn">×1.0 ▾</span></span>
+            <span>吸附 <span class="btn">30fps ▾</span></span>
+            <span style="margin-left:auto" class="btn">＋ 轨道 ▾</span>
+          </div>
+          <div class="tl-corner"></div>
+          <div class="ruler">
+            <span style="left:0%">0</span><span style="left:12.5%">0.1</span><span style="left:25%">0.2</span><span style="left:37.5%">0.3</span><span style="left:50%">0.4</span><span style="left:62.5%">0.5</span><span style="left:75%">0.6</span><span style="left:87.5%">0.7</span>
+          </div>
+          <div class="tracks-h">
+            <div><span class="dot" style="background:var(--anim)"></span>动画</div>
+            <div><span class="dot" style="background:var(--instant)"></span>事件 · 效果</div>
+            <div><span class="dot" style="background:var(--cue)"></span>Cue 区间</div>
+            <div><span class="dot" style="background:var(--infinite)"></span>标签窗口</div>
+            <div><span class="dot" style="background:var(--task)"></span>任务</div>
+          </div>
+          <div class="tracks-b">
+            <div><div class="clip" style="left:0; width:100%; background:#8a3d67">Attack01（Animator · Base Layer）</div></div>
+            <div><div class="mk" style="left:43.75%; background:var(--instant)"></div><div class="mk-l" style="left:45.5%">命中 → 伤害·挥砍</div><div class="mk" style="left:75%; background:#6aa2e0"></div><div class="mk-l" style="left:76.8%">收招</div></div>
+            <div><div class="clip" style="left:25%; width:45%; background:#1f7f74">Cue.Sword.Trail</div></div>
+            <div><div class="clip" style="left:12.5%; width:50%; background:#5e3f99">State.SuperArmor</div><div class="clip" style="left:68%; width:32%; background:#4a3a70">Window.Combo</div></div>
+            <div></div>
+            <div class="playhead" style="left:43.75%"></div>
+          </div>
+        </div>
+      </div>
+      <!-- 右 -->
+      <div class="right">
+        <div class="phead"><span>预览</span><span>⛶</span></div>
+        <div class="viewport"><span class="vtxt">Attack01 @ 0.35s</span><div class="slash"></div><div class="fig"></div></div>
+        <div class="phead"><span>Details · 事件「命中」</span></div>
+        <div class="kv"><span>时间</span><span class="f">0.350 s (11f)</span></div>
+        <div class="kv"><span>名称</span><span class="f">命中</span></div>
+        <div class="kv"><span>效果</span><span class="f">伤害·挥砍 ◉</span></div>
+        <div class="kv"><span>作用于</span><span class="f">目标 ▾</span></div>
+        <div class="phead" style="margin-top:6px"><span>伤害·挥砍 · 修改器</span></div>
+        <div class="kv"><span>属性</span><span class="f">生命 ▾</span></div>
+        <div class="kv"><span>运算</span><span class="f">加 ▾</span></div>
+        <div class="kv"><span>数值</span><span class="f">来源·攻击 × 1.2</span></div>
+        <div class="kv"><span>标签</span><span><span class="chip">Hit.Melee</span></span></div>
+      </div>
+    </div>
+    <div class="status"><span>✖ 伤害·挥砍：修改器引用了 SetByCaller「Damage.Scale」但能力未声明</span><span style="margin-left:auto;color:#888">9 个节点 · 已保存</span></div>
+  </div>
+
+  <div class="annot">
+    <div><span class="num">1</span><span><b>工具栏</b>：新建（模板）、保存、面包屑与前进后退、预览角色与动画后端、错误和警告计数（点击打开消息页）。</span></div>
+    <div><span class="num">2</span><span><b>技能库</b>（左上）：扫描项目里所有 <code>GameplayAbilityAsset</code>，按文件夹或标签分组，支持搜索、拖拽、右键复制为变体、查找引用。</span></div>
+    <div><span class="num">3</span><span><b>当前技能大纲</b>（左下）：列出内嵌效果、外部引用、动画、SetByCaller 参数和 Cue。单击定位节点，拖进图或时间轴就能挂上。</span></div>
+    <div><span class="num">4</span><span><b>结构图</b>（中上）：节点按类型着色、带内联字段，从端口拖到空白处会弹出搜索框新建并连线；有小地图、注释框，布局持久保存。</span></div>
+    <div><span class="num">5</span><span><b>时间轴</b>（中下）：多轨序列器，有播放头、播放控制、帧吸附和攻速预览。轨道类型可扩展。</span></div>
+    <div><span class="num">6</span><span><b>预览视口</b>（右上）：按当前动画后端采样姿态，支持 scrub，并调用 Cue 预览钩子。</span></div>
+    <div><span class="num">7</span><span><b>Details</b>（右下）：显示选中节点或时间轴元素的全部字段，提供属性下拉、标签选择器和数值来源编辑器。</span></div>
+    <div><span class="num">8</span><span><b>状态栏和消息页</b>：实时校验结果，点击一条消息会跳到对应的节点或轨道元素。</span></div>
+  </div>
+  <p class="muted">面板用 UI Toolkit（UXML + USS）搭建，各面板可以折叠，分隔条位置用 <code>EditorPrefs</code> 记住。窗口宽度不足 900px 时，预览和 Details 合并成右侧页签。</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="workflow">
+  <h2><span class="n">04</span>核心工作流对比</h2>
+
+  <h3>场景 A：做一个「带动画的近战普攻」</h3>
+  <h4>现在：15 步以上，5 个文件，3 个窗口来回切换</h4>
+  <div class="flow">
+    <span class="s win">Project：建能力资产</span><span class="a">→</span>
+    <span class="s win">Project：建 3 个效果资产</span><span class="a">→</span>
+    <span class="s win">Inspector：逐个填时长、修改器（属性填 int）</span><span class="a">→</span>
+    <span class="s win">Project：建动画资产</span><span class="a">→</span>
+    <span class="s win">Inspector：手打 clipName</span><span class="a">→</span>
+    <span class="s win">打开 Animator 查看片段时长并手填</span><span class="a">→</span>
+    <span class="s">打开结构图</span><span class="a">→</span>
+    <span class="s">把消耗、冷却、动画拖到端口</span><span class="a">→</span>
+    <span class="s">时间轴右键加标记点，凭数字估命中帧</span><span class="a">→</span>
+    <span class="s">把伤害效果拖到标记点端口</span><span class="a">→</span>
+    <span class="s win">Inspector：配标签</span><span class="a">→</span>
+    <span class="s win">进 Play Mode 看效果，不对就回去改</span>
+  </div>
+  <h4>目标：6 步，1 个文件，1 个窗口</h4>
+  <div class="flow">
+    <span class="s"><b>①</b> 新建技能 ▸ 模板「近战普攻」</span><span class="a">→</span>
+    <span class="s"><b>②</b> 选预览角色（自动识别为 Animator 后端）</span><span class="a">→</span>
+    <span class="s"><b>③</b> 动画轨下拉选 <code>Attack01</code>（时长自动填入）</span><span class="a">→</span>
+    <span class="s"><b>④</b> 拖播放头看着视口找到命中帧，按 <code>M</code>，事件点自动挂上模板里的伤害效果</span><span class="a">→</span>
+    <span class="s"><b>⑤</b> 节点或 Details 里改伤害系数、冷却时长</span><span class="a">→</span>
+    <span class="s"><b>⑥</b> <code>Ctrl+S</code></span>
+  </div>
+
+  <h3>场景 B：从现有技能派生变体（「重击」= 普攻 + 更长冷却 + 击退）</h3>
+  <div class="flow">
+    <span class="s">技能库右键「普攻」▸ 复制为变体</span><span class="a">→</span>
+    <span class="s">内嵌子资产整体深拷贝，外部引用保持原样</span><span class="a">→</span>
+    <span class="s">冷却节点内联改为 2s</span><span class="a">→</span>
+    <span class="s">从「伤害」的「生效时」端口拖到空白处 ▸ 搜索「击退」▸ 引用外部共享效果</span>
+  </div>
+
+  <h3>场景 C：换动画后端（Animator → Spine）</h3>
+  <div class="flow">
+    <span class="s">工具栏「预览角色」换成 Spine 预制体</span><span class="a">→</span>
+    <span class="s">适配器自动切换为 Spine，片段下拉改为列出 SkeletonData 里的动画</span><span class="a">→</span>
+    <span class="s">时间轴和事件点不变，因为时间都存为秒，命中点按时长等比映射</span><span class="a">→</span>
+    <span class="s">运行期角色身上挂 <code>SkillAnimator</code> 并把 Backend 选为 Spine 即可</span>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="architecture">
+  <h2><span class="n">05</span>总体架构</h2>
+  <p>采用 <b>Document / Command / View</b> 三层。所有面板都只观察同一个 <code>SkillDocument</code>，所有写操作都封装成 <code>EditCommand</code>，统一处理 Undo 分组、脏标记、增量通知和校验触发。
+  这样把现有「视图是数据的投影」「写回走 SerializedObject」两条原则固化下来，同时去掉「整图重建」和「面板之间互相调用」的耦合。</p>
+
+  <div class="layers">
+    <div class="layer l-view">
+      <div class="ln">View<br>面板</div>
+      <div class="boxes">
+        <div class="b"><b>SkillEditorWindow</b><span>停靠布局、工具栏、快捷键分发</span></div>
+        <div class="b"><b>LibraryPanel</b><span>技能库与当前技能大纲</span></div>
+        <div class="b"><b>GraphPanel</b><span>GraphView、节点、搜索面板、小地图</span></div>
+        <div class="b"><b>TimelinePanel</b><span>UI Toolkit 序列器、轨道视图</span></div>
+        <div class="b"><b>DetailsPanel</b><span>InspectorElement 与自定义 Drawer</span></div>
+        <div class="b"><b>PreviewPanel</b><span>PreviewRenderUtility 视口</span></div>
+        <div class="b"><b>MessagePanel</b><span>校验结果与跳转</span></div>
+      </div>
+    </div>
+    <div class="layer l-vm">
+      <div class="ln">Document<br>编辑模型</div>
+      <div class="boxes">
+        <div class="b"><b>SkillDocument</b><span>当前技能的 SerializedObject 集合与变更事件</span></div>
+        <div class="b"><b>SelectionModel</b><span>跨面板共享的选中状态（节点 ⇄ 轨道元素 ⇄ 大纲）</span></div>
+        <div class="b"><b>PlaybackModel</b><span>播放头时间、播放状态、攻速倍率</span></div>
+        <div class="b"><b>EditCommand</b><span>Undo 分组、增量 ChangeSet</span></div>
+        <div class="b"><b>LayoutStore</b><span>节点坐标、注释框、折叠状态（只在编辑器内）</span></div>
+      </div>
+    </div>
+    <div class="layer l-svc">
+      <div class="ln">Service<br>可扩展服务</div>
+      <div class="boxes">
+        <div class="b"><b>AnimationAdapterRegistry</b><span>IAnimationEditorAdapter 策略（§06）</span></div>
+        <div class="b"><b>TrackTypeRegistry</b><span>时间轴轨道类型（§08）</span></div>
+        <div class="b"><b>NodeTypeRegistry</b><span>节点外观与端口规则</span></div>
+        <div class="b"><b>ValidationService</b><span>ISkillValidationRule 规则集（§11）</span></div>
+        <div class="b"><b>SkillTemplateRegistry</b><span>新建向导模板</span></div>
+        <div class="b"><b>AttributeCatalog</b><span>属性词表（名字 ⇄ id）</span></div>
+        <div class="b"><b>CuePreviewRegistry</b><span>编辑期 Cue 预览钩子</span></div>
+        <div class="b"><b>SkillAssetFactory</b><span>子资产的创建、深拷贝、内嵌与外置互转</span></div>
+      </div>
+    </div>
+    <div class="layer l-data">
+      <div class="ln">Authoring<br>授权数据</div>
+      <div class="boxes">
+        <div class="b"><b>GameplayAbilityAsset</b><span>主资产，可携带子资产</span></div>
+        <div class="b"><b>GameplayEffectAsset</b><span>内嵌（子资产）或外部</span></div>
+        <div class="b"><b>SkillAnimationAsset</b><span>增加稳定 ID 和新轨道数据</span></div>
+        <div class="b"><b>AttributeCatalogAsset</b><span>NEW · 项目级属性词表</span></div>
+      </div>
+    </div>
+    <div class="layer l-rt">
+      <div class="ln">Runtime<br>运行期</div>
+      <div class="boxes">
+        <div class="b"><b>IAnimationDriver</b><span>保持不变</span></div>
+        <div class="b"><b>AnimationBackend</b><span>NEW · SerializeReference 策略，负责创建 Driver</span></div>
+        <div class="b"><b>SkillAnimator</b><span>NEW · 角色身上的 MonoBehaviour</span></div>
+        <div class="b"><b>AnimationTask</b><span>扩展：标签窗口、任务事件</span></div>
+        <div class="b"><b>Core（纯 C#）</b><span>不改动</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>数据流</h3>
+<pre><code><span class="cm">// 任何写操作都走同一条路径：</span>
+View 手势 ──► EditCommand.Execute(doc)
+               ├─ Undo.SetCurrentGroupName(<span class="st">"移动事件点「命中」"</span>)
+               ├─ SerializedObject 修改 + ApplyModifiedProperties   <span class="cm">// 自带 Undo 记录</span>
+               ├─ 产生 ChangeSet { 资产, 属性路径[], 结构是否变化 }
+               └─ doc.Notify(changeSet)
+                     ├─ GraphPanel    只刷新受影响节点；结构变化时 diff 节点集合（不整图重建）
+                     ├─ TimelinePanel 只重绘受影响轨道
+                     ├─ DetailsPanel  由 InspectorElement 自动绑定
+                     └─ ValidationService 只重跑受影响资产的规则（防抖 150ms）
+
+Undo/Redo ──► Undo.undoRedoEvent ──► doc.Reload(受影响资产) ──► 同上 Notify</code></pre>
+
+  <h3>目录结构</h3>
+<pre><code>Editor/
+  ZFramework.GAS.Editor.asmdef
+  Window/          SkillEditorWindow.cs · SkillEditorWindow.uxml · SkillEditor.uss · Shortcuts.cs
+  Document/        SkillDocument.cs · SelectionModel.cs · PlaybackModel.cs · ChangeSet.cs · LayoutStore.cs
+  Commands/        EditCommand.cs · NodeCommands.cs · TimelineCommands.cs · AssetCommands.cs
+  Library/         LibraryPanel.cs · SkillIndex.cs（AssetPostprocessor 维护的索引）
+  Graph/           GraphPanel.cs · SkillGraphView.cs · SkillNodeSearchProvider.cs
+    Nodes/         SkillNode.cs（基类）· AbilityNode · EffectNode · AnimationNode · CueNode
+    Ports/         PortId.cs（类型化端口身份，替代解析字符串）· PortRules.cs
+  Timeline/        TimelinePanel.cs · TimeRuler.cs · TrackView.cs · Playhead.cs · TimelineMath.cs
+    Tracks/        ITrackType.cs · AnimationTrack · EventTrack · CueRegionTrack · TagWindowTrack · TaskTrack
+  Details/         DetailsPanel.cs
+    Drawers/       AttributeIdDrawer · MagnitudeDrawer · TagFieldDrawer · CallerKeyDrawer · ClipPickerDrawer
+  Preview/         PreviewPanel.cs · SkillPreviewScene.cs · ICuePreview.cs
+  Animation/       IAnimationEditorAdapter.cs · AnimationAdapterRegistry.cs
+    Adapters/      AnimatorEditorAdapter · LegacyAnimationEditorAdapter · SpriteSequenceEditorAdapter
+  Validation/      ValidationService.cs · ISkillValidationRule.cs · Rules/*.cs · BatchValidateMenu.cs
+  Templates/       SkillTemplate.cs · Builtin/（近战普攻、投射物、Buff、引导、召唤）
+Editor.Spine/      ZFramework.GAS.Editor.Spine.asmdef（versionDefines → GAS_SPINE）· SpineEditorAdapter.cs
+Runtime/Unity/Animation/
+                   AnimationBackend.cs · SkillAnimator.cs · Backends/（Animator、Legacy、Sprite）
+Runtime.Spine/     ZFramework.GAS.Unity.Spine.asmdef（versionDefines → GAS_SPINE）· SpineBackend.cs · SpineAnimationDriver.cs
+Tests~/Editor/     EditMode 测试（Unity Test Framework）</code></pre>
+</section>
+
+<!-- ============================================================ -->
+<section id="strategy">
+  <h2><span class="n">06</span>动画策略模式</h2>
+  <p>动画适配拆成<b>两个独立的策略族</b>，二者按 <code>BackendId</code> 配对，但互不依赖：</p>
+  <ul>
+    <li><b>运行期策略</b> <code>AnimationBackend</code>：知道怎么在角色身上<b>播放</b>，负责创建 <code>IAnimationDriver</code>。需要打进包里，不能依赖 UnityEditor。</li>
+    <li><b>编辑期策略</b> <code>IAnimationEditorAdapter</code>：知道怎么<b>枚举片段、读取时长、采样姿态</b>，给编辑器选片段和做预览用，只存在于 Editor 程序集。</li>
+  </ul>
+  <p>现有的 <code>IAnimationDriver</code> 契约（时长由调用方下达、时钟以 gameplay 侧为准）<b>保持不变</b>，<code>AnimationTask</code> 也不用改。三个现有驱动原样保留，只在外面包一层 Backend。</p>
+
+  <div class="uml">
+    <div class="cls iface"><div class="ch">«interface»<br>IAnimationDriver<i>Runtime · 已有，不改</i></div><div class="cb">float Play(clip, duration, loop)
+void  Advance(normalizedTime)
+void  Stop()</div></div>
+    <div class="cls abs new"><div class="ch">«abstract»<br>AnimationBackend<i>Runtime · [Serializable]</i></div><div class="cb">string BackendId { get; }
+IAnimationDriver CreateDriver(
+    GameObject host)
+bool Validate(GameObject host,
+    out string error)</div></div>
+    <div class="cls new"><div class="ch">SkillAnimator<i>Runtime · MonoBehaviour</i></div><div class="cb">[SerializeReference]
+AnimationBackend backend
+IAnimationDriver Driver { get; }
+<span class="cm">// 懒创建、缓存，OnDestroy 时 Stop</span></div></div>
+
+    <div class="cls"><div class="ch">AnimatorBackend<i>→ AnimatorAnimationDriver</i></div><div class="cb">int layer
+<span class="cm">// 状态名即 clip</span></div></div>
+    <div class="cls"><div class="ch">LegacyAnimationBackend<i>→ LegacyAnimationDriver</i></div><div class="cb"><span class="cm">// Animation 组件</span></div></div>
+    <div class="cls"><div class="ch">SpriteSequenceBackend<i>→ SpriteSequenceDriver</i></div><div class="cb">SpriteSequence[] sequences
+<span class="cm">// 名字 → Sprite[] + fps</span></div></div>
+    <div class="cls new"><div class="ch">SpineBackend<i>Runtime.Spine · #if GAS_SPINE</i></div><div class="cb">int trackIndex
+float mixDuration
+<span class="cm">// → SpineAnimationDriver</span></div></div>
+    <div class="cls new"><div class="ch">PlayableBackend<i>可选 · M6</i></div><div class="cb"><span class="cm">// AnimationClip 直播，不依赖</span>
+<span class="cm">// AnimatorController 状态</span></div></div>
+    <div class="cls"><div class="ch">（使用方自定义）<i>继承即被 SerializeReference 下拉发现</i></div><div class="cb"><span class="cm">// TypeCache 扫描子类</span></div></div>
+
+    <div class="cls iface new"><div class="ch">«interface»<br>IAnimationEditorAdapter<i>Editor</i></div><div class="cb">string BackendId { get; }
+string DisplayName { get; }
+int    Priority { get; }
+bool   CanHandle(GameObject preview)
+IReadOnlyList&lt;ClipInfo&gt;
+       EnumerateClips(GameObject preview)
+IPoseSampler BeginPreview(GameObject inst)
+AnimationBackend CreateDefaultBackend(
+       GameObject preview)</div></div>
+    <div class="cls iface new"><div class="ch">«interface»<br>IPoseSampler : IDisposable<i>Editor</i></div><div class="cb">void Sample(string clip,
+            float time)
+<span class="cm">// Dispose 时恢复原始姿态</span></div></div>
+    <div class="cls new"><div class="ch">ClipInfo<i>Editor · readonly struct</i></div><div class="cb">string Name
+float  Length      <span class="cm">// 秒</span>
+float  FrameRate
+bool   Loop
+Object Source      <span class="cm">// 用于 Ping</span></div></div>
+  </div>
+
+  <h3>运行期骨架</h3>
+<pre><code><span class="kw">namespace</span> ZFramework.GAS.Unity
+{
+    <span class="cm">/// 一种动画形式的播放策略。挂在 SkillAnimator 上，经 [SerializeReference] 多态序列化，
+    /// Inspector 下拉里列出所有子类——新增后端不需要改任何已有代码。</span>
+    [Serializable]
+    <span class="kw">public abstract class</span> <span class="ty">AnimationBackend</span>
+    {
+        <span class="kw">public abstract string</span> BackendId { <span class="kw">get</span>; }
+        <span class="kw">public abstract</span> <span class="ty">IAnimationDriver</span> CreateDriver(<span class="ty">GameObject</span> host);
+
+        <span class="cm">/// 宿主缺少所需组件时给出可读原因，而不是等到 Play 返回 0。</span>
+        <span class="kw">public abstract bool</span> Validate(<span class="ty">GameObject</span> host, <span class="kw">out string</span> error);
+    }
+
+    [Serializable]
+    <span class="kw">public sealed class</span> <span class="ty">AnimatorBackend</span> : <span class="ty">AnimationBackend</span>
+    {
+        [SerializeField] <span class="kw">private int</span> layer;
+        <span class="kw">public override string</span> BackendId => <span class="st">"animator"</span>;
+        <span class="kw">public override</span> <span class="ty">IAnimationDriver</span> CreateDriver(<span class="ty">GameObject</span> host)
+            => <span class="kw">new</span> <span class="ty">AnimatorAnimationDriver</span>(host.GetComponentInChildren&lt;<span class="ty">Animator</span>&gt;(), layer);
+        <span class="cm">// Validate: 缺 Animator / 缺 RuntimeAnimatorController 时报错</span>
+    }
+
+    [DisallowMultipleComponent]
+    <span class="kw">public sealed class</span> <span class="ty">SkillAnimator</span> : <span class="ty">MonoBehaviour</span>
+    {
+        [SerializeReference] <span class="kw">private</span> <span class="ty">AnimationBackend</span> backend = <span class="kw">new</span> <span class="ty">AnimatorBackend</span>();
+        <span class="kw">private</span> <span class="ty">IAnimationDriver</span> _driver;
+
+        <span class="kw">public</span> <span class="ty">IAnimationDriver</span> Driver => _driver ??= backend.CreateDriver(gameObject);
+        <span class="kw">private void</span> OnDestroy() => _driver?.Stop();
+    }
+}
+
+<span class="cm">// 宿主侧施法从「手动 new 某种 Driver」变成统一写法：</span>
+<span class="kw">var</span> task = <span class="kw">new</span> <span class="ty">AnimationTask</span>(ability.Animation.Definition, unit.SkillAnimator.Driver, target, onMarker: ...);</code></pre>
+
+  <h3>Spine 后端（条件编译）</h3>
+<pre><code><span class="cm">// Runtime.Spine/ZFramework.GAS.Unity.Spine.asmdef
+//   "references": ["ZFramework.GAS", "ZFramework.GAS.Unity", "spine-unity"],
+//   "defineConstraints": ["GAS_SPINE"],
+//   "versionDefines": [{ "name": "com.esotericsoftware.spine.spine-unity", "expression": "4.0", "define": "GAS_SPINE" }]
+// 没装 Spine 时整个程序集不参与编译，库里不会留下「编不过」的代码。</span>
+<span class="kw">public sealed class</span> <span class="ty">SpineAnimationDriver</span> : <span class="ty">IAnimationDriver</span>
+{
+    <span class="kw">private readonly</span> <span class="ty">SkeletonAnimation</span> _skeleton;
+    <span class="kw">private readonly int</span> _track;
+    <span class="kw">private readonly float</span> _mix;
+    <span class="kw">private</span> <span class="ty">TrackEntry</span> _entry;
+
+    <span class="kw">public float</span> Play(<span class="kw">string</span> clip, <span class="kw">float</span> duration, <span class="kw">bool</span> loop)
+    {
+        <span class="ty">Animation</span> anim = _skeleton.Skeleton.Data.FindAnimation(clip);
+        <span class="kw">if</span> (anim == <span class="kw">null</span>) <span class="kw">return</span> 0f;                           <span class="cm">// 与其他驱动同义：找不到返回 0</span>
+        _entry = _skeleton.AnimationState.SetAnimation(_track, anim, loop);
+        <span class="kw">bool</span> stretch = duration > 0f &amp;&amp; anim.Duration > 0f;
+        _entry.TimeScale = stretch ? anim.Duration / duration : 1f;  <span class="cm">// 时长下达，引擎自行推进</span>
+        <span class="kw">return</span> stretch ? duration : anim.Duration;
+    }
+    <span class="kw">public void</span> Advance(<span class="kw">float</span> t) { }                              <span class="cm">// Spine 自己推进</span>
+    <span class="kw">public void</span> Stop()
+    {
+        <span class="kw">if</span> (_entry == <span class="kw">null</span>) <span class="kw">return</span>;
+        <span class="kw">if</span> (_skeleton != <span class="kw">null</span>) _skeleton.AnimationState.SetEmptyAnimation(_track, _mix);
+        _entry = <span class="kw">null</span>;
+    }
+}</code></pre>
+
+  <h3>编辑期适配器的发现与选择</h3>
+<pre><code><span class="cm">// AnimationAdapterRegistry：TypeCache 扫描所有 IAnimationEditorAdapter 实现，无需手动注册。</span>
+<span class="kw">public static</span> <span class="ty">IAnimationEditorAdapter</span> Resolve(<span class="ty">GameObject</span> preview)
+{
+    <span class="cm">// 1. 预览体上有 SkillAnimator → 按其 backend.BackendId 精确匹配
+    // 2. 否则按 Priority 从高到低问 CanHandle（Spine 80 > Animator 50 > Legacy 40 > Sprite 10）
+    // 3. 都不行 → NullAdapter：片段名退回文本框，预览显示「该后端不支持预览」</span>
+}</code></pre>
+
+  <h3>各后端能力矩阵</h3>
+  <table>
+    <tr><th>能力</th><th class="c">Animator</th><th class="c">Legacy Animation</th><th class="c">序列帧</th><th class="c">Spine</th><th class="c">Playable（可选）</th></tr>
+    <tr><td>枚举片段</td><td class="c">✔ Controller 各层状态（含子状态机）</td><td class="c">✔ Animation 组件的片段列表</td><td class="c">✔ Backend 里配置的序列</td><td class="c">✔ SkeletonData.Animations</td><td class="c">✔ 直接引用 AnimationClip</td></tr>
+    <tr><td>自动读时长</td><td class="c">✔ 状态 Motion 的长度 ÷ 状态速度</td><td class="c">✔ clip.length</td><td class="c">✔ 帧数 ÷ fps</td><td class="c">✔ Animation.Duration</td><td class="c">✔</td></tr>
+    <tr><td>帧率</td><td class="c">clip.frameRate</td><td class="c">clip.frameRate</td><td class="c">配置的 fps</td><td class="c">固定 30，可改</td><td class="c">clip.frameRate</td></tr>
+    <tr><td>编辑期姿态采样</td><td class="c">✔ AnimationMode.SampleAnimationClip</td><td class="c">✔ 同左</td><td class="c">✔ 设置 sprite</td><td class="c">✔ Skeleton.SetToSetupPose + Animation.Apply</td><td class="c">✔ PlayableGraph.Evaluate</td></tr>
+    <tr><td>BlendTree 状态</td><td class="c">⚠ 用默认参数下的第一个子 Motion 采样，并提示</td><td class="c">—</td><td class="c">—</td><td class="c">—</td><td class="c">—</td></tr>
+    <tr><td>依赖</td><td class="c">内置</td><td class="c">内置</td><td class="c">内置</td><td class="c">spine-unity ≥ 4.0（versionDefines）</td><td class="c">内置</td></tr>
+  </table>
+
+  <div class="callout warn"><b>关于 README「库内不留未经编译验证的代码」：</b>Spine 程序集靠 <code>versionDefines</code> 加 <code>defineConstraints</code> 实现「装了才编译」，没装时完全不参与编译。但它<b>仍需在一个装了 Spine 的工程里实际编译并跑通一次</b>才能算交付，M4 的验收项里已列出这一点。</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="graph">
+  <h2><span class="n">07</span>结构图重构</h2>
+  <p>继续用 <code>UnityEditor.Experimental.GraphView</code>（Unity 6000.3 下仍可用、生态成熟），但把它<b>封装在 GraphPanel 内部</b>，节点和端口规则不直接依赖 GraphView 的类型，以后迁移到 Graph Toolkit 时只需重写 GraphPanel。</p>
+
+  <div class="grid g2">
+    <div class="card">
+      <h4>节点类型与端口</h4>
+      <table>
+        <tr><th>节点</th><th>输出端口</th><th>内联字段</th></tr>
+        <tr><td><span class="dot" style="background:var(--ability);display:inline-block;width:10px;height:10px;border-radius:2px"></span> 能力</td><td>消耗 · 冷却 · 动画</td><td>能力标签、阻断标签（标签条）</td></tr>
+        <tr><td><span class="dot" style="background:var(--instant);display:inline-block;width:10px;height:10px;border-radius:2px"></span> 效果</td><td>生效时 · 每周期 · 移除时</td><td>时长策略、时长、周期、第一条修改器的摘要</td></tr>
+        <tr><td><span class="dot" style="background:var(--anim);display:inline-block;width:10px;height:10px;border-radius:2px"></span> 动画</td><td>每个事件点一个端口（按 <b>ID</b> 绑定）</td><td>片段（下拉）、时长、是否循环</td></tr>
+        <tr><td><span class="dot" style="background:var(--cue);display:inline-block;width:10px;height:10px;border-radius:2px"></span> Cue（只读）</td><td>—</td><td>Cue 标签、来源（效果或区间）</td></tr>
+      </table>
+      <p class="muted">效果节点的标题颜色随时长策略变化：瞬时为橙色，持续为绿色，永久为紫色。作为消耗和冷却时会覆盖成专用色。</p>
+    </div>
+    <div class="card">
+      <h4>创建与连接</h4>
+      <ul>
+        <li><b>Space / 右键 / 从端口拖到空白处</b>：打开 <code>SkillNodeSearchProvider</code>。从端口拖出时<b>只列出该端口能接受的类型</b>，分组如下：
+          <ul>
+            <li>新建内嵌效果 ▸ 瞬时 / 持续 / 永久 / 模板（伤害、治疗、Buff…）</li>
+            <li>引用项目中的效果 ▸ 模糊搜索资产名和标签</li>
+            <li>新建动画 ▸ 从当前预览角色的片段列表里选</li>
+          </ul>
+        </li>
+        <li>选中后创建子资产、连好线、节点放在鼠标位置，并<b>立即选中</b>，Details 面板显示新节点的字段，整个过程算一步 Undo。</li>
+        <li>从 Project 面板或大纲<b>拖资产到端口</b>：保留现有行为；拖到空白处时，能力资产切换为根节点，效果资产在落点创建一个「未连接」的游离节点。</li>
+        <li>连线规则（消耗必须是 Instant、冷却必须授予标签等）由 <code>PortRules</code> 统一提供。不合法的端口<b>在拖线过程中就变灰</b>，悬停时 tooltip 说明原因，<b>不再弹模态框</b>。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>删除语义（替代「禁止删除」）</h4>
+      <ul>
+        <li>删除<b>连线</b>：只解除引用，与现在一致。</li>
+        <li>删除<b>外部引用节点</b>：解除所有指向它的引用，资产文件保留。节点画虚线框，表示它只是个引用。</li>
+        <li>删除<b>内嵌节点</b>：解除引用并删除子资产。如果它还被其他地方引用，就不删，提示「仍被 N 处引用」并列出位置。</li>
+        <li>删除<b>根能力节点</b>：不允许，与现在一致。</li>
+        <li>以上操作全部可以撤销（子资产删除用 <code>Undo.DestroyObjectImmediate</code>）。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>布局与导航</h4>
+      <ul>
+        <li>节点坐标、注释框、折叠状态存到 <code>LayoutStore</code>，持久化在主资产 importer 的 <code>userData</code>（JSON）里。<b>只在编辑器内存在</b>，不进运行期数据。</li>
+        <li>没有存过坐标的节点（比如从 Inspector 新挂上的）用 Sugiyama 分层算法自动排在相邻空位；工具栏提供「自动整理」。</li>
+        <li>小地图、<code>F</code> 聚焦选中、<code>A</code> 显示全部、注释框（<code>C</code>）、重路由点（双击连线）。</li>
+        <li>增量更新：按 ChangeSet 刷新节点；结构变化时 diff 节点集合，保留选中状态和视口。</li>
+        <li>复制、粘贴、复制节点（<code>Ctrl+C/V/D</code>）：内嵌节点深拷贝，外部引用节点只复制引用。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>「能力设置」页签</h3>
+  <p>能力本身的标签门禁（required / blocked / owned / cancel）字段多、也不适合画成连线，所以放进结构图旁的「能力设置」页签。用 5 个标签选择器分组展示，并提供<b>门禁模拟器</b>：勾选一组「持有者当前标签」，实时显示能否激活以及原因。模拟器直接调用 Core 的 <code>GameplayTagSet</code> 和 <code>GameplayAbilityDefinition</code> 判定逻辑，结果与运行期一致。</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="timeline">
+  <h2><span class="n">08</span>时间轴重构</h2>
+  <p>从 IMGUI 重写为 <b>UI Toolkit 序列器</b>：横轴可以缩放平移（滚轮缩放、中键拖动），左侧是轨道头，顶部是刻度和播放头。时间仍然<b>只存秒</b>，帧只是显示和吸附单位，与 <code>SkillAnimationDefinition</code> 的约定一致。</p>
+
+  <h3>轨道类型</h3>
+  <table>
+    <tr><th style="width:130px">轨道</th><th>元素</th><th style="width:300px">对应数据</th><th style="width:110px">运行期改动</th><th style="width:80px">阶段</th></tr>
+    <tr><td><b>动画</b></td><td>一段片段条，显示片段名、后端和真实长度；授权时长与片段长度不一致时，条尾画出差值并提供「同步时长」按钮</td><td><code>clipName</code> · <code>duration</code> · <code>loop</code></td><td>无</td><td><span class="tag ed">M2</span></td></tr>
+    <tr><td><b>事件</b></td><td>菱形点。挂了效果的显示为效果色，纯回调的显示为蓝色；超出时长的标红</td><td><code>markers[]</code>（time / key / effect / target）+ 新增 <code>id</code></td><td>无</td><td><span class="tag ed">M2</span></td></tr>
+    <tr><td><b>Cue 区间</b></td><td>色条，两端可以拖；终点可设为「随动画结束」（条尾画箭头）</td><td><code>cueRegions[]</code></td><td>无</td><td><span class="tag ed">M2</span></td></tr>
+    <tr><td><b>标签窗口</b></td><td>色条，区间内给持有者授予标签（霸体、无敌、可连招窗口、不可转向…）</td><td>NEW <code>tagWindows[]</code>（start / end / tags）</td><td><span class="tag rt">AnimationTask</span> 区间起止时增减 <code>OwnedTags</code>，被打断时回滚</td><td><span class="tag rt">M5</span></td></tr>
+    <tr><td><b>任务</b></td><td>点：到点时起一个 Task（发射投射物、开启区域效果），参数在 Details 里配</td><td>NEW <code>taskEvents[]</code>（time / <code>[SerializeReference] TaskSpawner</code>）</td><td><span class="tag rt">TaskSpawner</span> 策略：Projectile / AreaEffect / 自定义</td><td><span class="tag rt">M5</span></td></tr>
+    <tr><td><b>自定义</b></td><td>使用方实现 <code>ITrackType</code>，并在运行期配套一个 <code>ITimelineEventHandler</code></td><td>NEW 通用的 <code>[SerializeReference]</code> 事件数组</td><td><span class="tag rt">扩展点</span></td><td><span class="tag p2">M6</span></td></tr>
+  </table>
+
+  <h3>交互</h3>
+  <div class="grid g2">
+    <div class="card">
+      <h4>播放与预览</h4>
+      <ul>
+        <li>播放头：在刻度上点击或拖动即可 scrub，预览视口跟着实时采样（§10）。</li>
+        <li><code>Space</code> 播放/暂停，<code>,</code> <code>.</code> 逐帧，<code>Home</code> <code>End</code> 跳到首尾，<code>L</code> 切换循环预览。</li>
+        <li><b>攻速预览</b>：倍率 ×0.5～×3。标记点按 <code>实际时长 / 授权时长</code> 缩放后画成「虚影」，直观展示 <code>AnimationTask._scale</code> 的效果。</li>
+        <li>预览经过事件点和区间起止时，调用 <code>ICuePreview</code> 钩子并让轨道元素闪烁。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>编辑</h4>
+      <ul>
+        <li><code>M</code>：在播放头位置加事件点；<code>R</code>：从播放头开始加 Cue 区间（再按一次结束）。</li>
+        <li>拖效果资产到事件轨：在落点建事件点并挂上效果。拖 Cue 标签到区间轨：从落点建区间。</li>
+        <li>多选（框选、Shift、Ctrl）后整体拖动；<code>Ctrl+C/V</code> 粘贴到播放头；<code>Del</code> 删除。</li>
+        <li>按帧吸附（按住 <code>Alt</code> 临时关闭，沿用现在的习惯），同时吸附到其他元素的边缘和播放头。</li>
+        <li>拖动期间只改临时状态，抬手时提交一个 EditCommand，一次拖拽对应一步撤销（保留现有原则）。</li>
+        <li>选中元素时，结构图里对应的端口和连线同步高亮；反之亦然（共享 <code>SelectionModel</code>）。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>轨道类型扩展接口</h3>
+<pre><code><span class="kw">public interface</span> <span class="ty">ITrackType</span>
+{
+    <span class="kw">string</span> DisplayName { <span class="kw">get</span>; }                       <span class="cm">// 「＋ 轨道」菜单里显示的名字</span>
+    <span class="ty">Color</span>  Color { <span class="kw">get</span>; }
+    <span class="kw">string</span> PropertyPath { <span class="kw">get</span>; }                      <span class="cm">// 对应 SkillAnimationAsset 上的数组字段</span>
+    <span class="ty">TrackElementShape</span> Shape { <span class="kw">get</span>; }                   <span class="cm">// Point / Range</span>
+    (<span class="kw">float</span> start, <span class="kw">float</span> end) ReadSpan(<span class="ty">SerializedProperty</span> element);
+    <span class="kw">void</span>   WriteSpan(<span class="ty">SerializedProperty</span> element, <span class="kw">float</span> start, <span class="kw">float</span> end);
+    <span class="kw">string</span> Label(<span class="ty">SerializedProperty</span> element);
+    <span class="kw">void</span>   InitializeNew(<span class="ty">SerializedProperty</span> element, <span class="kw">float</span> time, <span class="ty">Object</span> dropped);
+    <span class="kw">bool</span>   AcceptsDrop(<span class="ty">Object</span> dropped);
+}</code></pre>
+</section>
+
+<!-- ============================================================ -->
+<section id="details">
+  <h2><span class="n">09</span>Details 面板与字段编辑</h2>
+  <p>Details 面板用 <code>InspectorElement</code> 绑定选中对象，自动获得 Undo 和多选编辑能力。在此基础上，用自定义 <code>PropertyDrawer</code> 解决「Inspector 不好用」的根源问题。这些 Drawer 同时作用于<b>普通 Inspector</b>，不打开编辑器的人也能受益。</p>
+  <table>
+    <tr><th style="width:190px">Drawer</th><th>替代</th><th>行为</th></tr>
+    <tr><td><code>AttributeIdDrawer</code></td><td>裸 int 的属性 id</td><td>从 <code>AttributeCatalogAsset</code> 读取「id ⇄ 名字 ⇄ 分类」，下拉显示「战斗 / 攻击力」。如果 id 不在词表里，标黄并显示原值，不会静默清空。用 <code>[AttributeIdField]</code> 特性标注字段。</td></tr>
+    <tr><td><code>MagnitudeDrawer</code></td><td>6 个平铺字段</td><td>一行显示公式：「固定 10」「来源·攻击力 × 1.2 + 5」「调用方·Damage.Scale」。点开后根据 kind 只显示相关字段。</td></tr>
+    <tr><td><code>CallerKeyDrawer</code></td><td>手打字符串</td><td>下拉列出项目内已用过的键并支持新建；能力级汇总「本技能需要调用方提供的键」，校验规则据此检查。</td></tr>
+    <tr><td><code>TagFieldDrawer</code></td><td>Tags 包自带的字段</td><td>标签以条状（chip）显示，可以多选，支持层级搜索；标注由父标签继承来的项。如果 Tags 包已提供选择器就复用，不重复造。</td></tr>
+    <tr><td><code>ClipPickerDrawer</code></td><td>手打 <code>clipName</code></td><td>根据当前预览角色的适配器列出片段（含时长）。选中后可一键同步 <code>duration</code> 和 <code>frameRate</code>；没有预览角色时退回文本框。</td></tr>
+    <tr><td><code>ModifierListDrawer</code></td><td>默认数组</td><td>每条修改器一行：「生命 加 来源·攻击力×1.2」，可拖动排序、折叠展开。</td></tr>
+  </table>
+  <div class="callout"><b>AttributeCatalog 是本次唯一新增的项目级配置。</b>它在 Unity 层（编辑期和运行期都能读）提供「名字 ⇄ id」映射，Core 里的 <code>AttributeId</code> 仍是包装 int 的结构体，规则层零改动。另提供「从代码常量生成词表」的菜单：扫描标了 <code>[AttributeCatalogSource]</code> 的静态类（如 README 里的 <code>Attr</code>）。</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="preview">
+  <h2><span class="n">10</span>预览视口</h2>
+  <ul>
+    <li>基于 <code>PreviewRenderUtility</code> 建一个独立的预览场景：实例化预览预制体（项目级默认值，加上每个技能可单独覆盖），提供地面网格和轨道相机（拖动旋转、滚轮缩放、<code>F</code> 聚焦）。</li>
+    <li>姿态由 <code>IAnimationEditorAdapter.BeginPreview</code> 返回的 <code>IPoseSampler</code> 负责采样，切换后端不影响视口代码。</li>
+    <li><b>Cue 预览钩子</b> <code>ICuePreview</code>：使用方按 Cue 标签注册编辑期预览（生成粒子预制体、播放音频剪辑）。没注册的 Cue 在视口左上角用文字提示「Cue.Sword.Trail ▶」，所以缺特效也能对时机。</li>
+    <li><b>目标假人</b>（可选）：放一个目标模型，事件点触发时在它头顶飘出「效果名 + 数值估算」，数值估算基于预览属性表。</li>
+    <li>预览完全隔离：不进 Play Mode，不改场景对象，关闭时 <code>Dispose</code> 恢复原状。</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section id="validation">
+  <h2><span class="n">11</span>校验系统</h2>
+  <p>把散落在 <code>TryAttach</code> 里的规则，以及运行期构造定义时才抛出的异常，统一收敛成 <code>ISkillValidationRule</code>。编辑器实时显示结果，CI 可以通过 <code>-executeMethod</code> 批量运行。</p>
+<pre><code><span class="kw">public interface</span> <span class="ty">ISkillValidationRule</span>
+{
+    <span class="kw">string</span> Id { <span class="kw">get</span>; }                                         <span class="cm">// 「GAS012」，可在项目设置里单独关闭</span>
+    <span class="kw">void</span> Validate(<span class="ty">ValidationContext</span> ctx, <span class="ty">ScriptableObject</span> asset, <span class="ty">List</span>&lt;<span class="ty">Issue</span>&gt; issues);
+}
+<span class="kw">public readonly struct</span> <span class="ty">Issue</span> { Severity · Message · Asset · PropertyPath · FixAction? }</code></pre>
+  <table>
+    <tr><th style="width:80px">Id</th><th>规则</th><th style="width:80px">级别</th><th style="width:180px">一键修复</th></tr>
+    <tr><td>GAS001</td><td>消耗效果必须是 Instant</td><td>错误</td><td>改为 Instant</td></tr>
+    <tr><td>GAS002</td><td>冷却效果必须至少授予一个标签</td><td>错误</td><td>打开标签选择器</td></tr>
+    <tr><td>GAS003</td><td>子效果链成环，或深度超过 8（运行期会抛异常）</td><td>错误</td><td>定位到成环的连线</td></tr>
+    <tr><td>GAS004</td><td>同一 (子效果, 时机) 重复挂载</td><td>错误</td><td>删除重复项</td></tr>
+    <tr><td>GAS010</td><td>动画片段名为空，或在预览角色上找不到</td><td>错误 / 警告</td><td>打开片段选择器</td></tr>
+    <tr><td>GAS011</td><td>事件点或区间超出动画时长</td><td>错误</td><td>夹到时长以内</td></tr>
+    <tr><td>GAS012</td><td>事件点 key 重名</td><td>错误</td><td>自动加后缀</td></tr>
+    <tr><td>GAS013</td><td>授权时长与片段真实长度不一致</td><td>警告</td><td>同步时长</td></tr>
+    <tr><td>GAS020</td><td>修改器使用了 SetByCaller 键，但能力的「调用方参数」里没有声明</td><td>警告</td><td>声明该键</td></tr>
+    <tr><td>GAS021</td><td>属性 id 不在 AttributeCatalog 中</td><td>警告</td><td>—</td></tr>
+    <tr><td>GAS022</td><td>Cue 标签未注册或为空（运行期会跳过并告警）</td><td>警告</td><td>打开标签选择器</td></tr>
+    <tr><td>GAS030</td><td>周期效果把「常驻加成」和周期修改器混在一起（README 语义 9）</td><td>提示</td><td>拆成子效果链</td></tr>
+    <tr><td>GAS031</td><td>预览角色缺少 SkillAnimator，或 Backend 的 Validate 失败</td><td>警告</td><td>添加组件</td></tr>
+  </table>
+  <p>结果显示在三个地方：节点和轨道元素上的角标、消息页列表（可以按级别和资产过滤）、状态栏计数。保存时有错误不会阻止保存，但会在工具栏上持续标红。<b>原则是不打断操作，但始终可见。</b></p>
+</section>
+
+<!-- ============================================================ -->
+<section id="data">
+  <h2><span class="n">12</span>数据模型变更与迁移</h2>
+  <p>所有变更都是<b>增量、向后兼容</b>的：不改已有字段名，不改 Core，旧资产不经迁移也能直接打开。</p>
+  <table>
+    <tr><th style="width:220px">变更</th><th>说明</th><th style="width:120px">位置</th><th style="width:130px">兼容性</th></tr>
+    <tr><td>技能子资产</td><td>效果、动画可以作为能力主资产的子资产（<code>AssetDatabase.AddObjectToAsset</code>），Project 里折叠在技能下面。提供「内嵌 ⇄ 外置」双向转换。</td><td>编辑器（SkillAssetFactory）</td><td>✔ 引用方式不变，运行期无感知</td></tr>
+    <tr><td>事件点和区间加稳定 <code>id</code></td><td><code>AnimationMarkerAsset</code> / <code>AnimationCueRegionAsset</code> 增加 <code>[SerializeField, HideInInspector] string id</code>（GUID）。图上端口改按 id 绑定，不再依赖下标，授权数组从此可以排序。</td><td>Runtime/Unity</td><td>✔ 打开时为缺 id 的元素补上</td></tr>
+    <tr><td>轨道数据</td><td><code>SkillAnimationAsset</code> 新增 <code>tagWindows[]</code>、<code>taskEvents[]</code>；<code>SkillAnimationDefinition</code> 和 <code>AnimationTask</code> 增加对应处理。</td><td>Runtime/Unity</td><td>✔ 默认是空数组</td></tr>
+    <tr><td>能力的调用方参数声明</td><td><code>GameplayAbilityAsset</code> 新增 <code>callerParameters[]</code>（key 加默认值说明），只用于校验和文档，不进 <code>Definition</code>。</td><td>Runtime/Unity</td><td>✔</td></tr>
+    <tr><td><code>AttributeCatalogAsset</code></td><td>项目级属性词表；Drawer 和校验都读它。</td><td>Runtime/Unity</td><td>✔ 可选；没有词表时 Drawer 退回 int</td></tr>
+    <tr><td><code>SkillAnimator</code> 加 <code>AnimationBackend</code></td><td>新增，现有手动 new Driver 的写法继续可用。</td><td>Runtime/Unity</td><td>✔</td></tr>
+    <tr><td>布局</td><td>节点坐标存到 importer 的 <code>userData</code>（JSON），只在编辑器内存在。</td><td>Editor</td><td>✔</td></tr>
+    <tr><td>删除旧编辑器</td><td><code>SkillGraphWindow</code> / <code>SkillGraphView</code> / <code>AssetNode</code> / <code>AnimationTimelinePanel</code> 在 M3 验收后删除；保留同一个菜单入口，并重定向到新窗口。</td><td>Editor</td><td>⚠ 引用了 <code>SkillGraphWindow.Show</code> 的测试需要改到新入口</td></tr>
+  </table>
+  <h4>迁移工具</h4>
+  <ul>
+    <li><code>Tools/ZFramework GAS/迁移/为时间轴元素补 ID</code>：批量处理，幂等。</li>
+    <li><code>Tools/ZFramework GAS/迁移/把仅被单个技能引用的效果内嵌</code>：先 dry-run 列出清单，确认后执行。保留 GUID 引用关系的做法是「先复制内容为子资产，再改写引用」；这一步不可逆，执行前提示先提交 VCS。</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section id="interaction">
+  <h2><span class="n">13</span>交互规范</h2>
+  <h3>颜色语义（全编辑器统一）</h3>
+  <div class="legend">
+    <span><i style="background:var(--ability)"></i>能力</span>
+    <span><i style="background:var(--cost)"></i>消耗</span>
+    <span><i style="background:var(--cooldown)"></i>冷却</span>
+    <span><i style="background:var(--instant)"></i>瞬时效果</span>
+    <span><i style="background:var(--duration)"></i>持续效果</span>
+    <span><i style="background:var(--infinite)"></i>永久效果 / 标签窗口</span>
+    <span><i style="background:var(--anim)"></i>动画</span>
+    <span><i style="background:var(--cue)"></i>Cue</span>
+    <span><i style="background:var(--task)"></i>任务</span>
+    <span><i style="background:var(--bad)"></i>错误</span>
+    <span><i style="background:var(--warn)"></i>警告</span>
+  </div>
+  <p class="muted">颜色定义在 <code>SkillEditor.uss</code> 的 CSS 变量里，并同时用图标或形状区分（菱形 = 点，条 = 区间，虚线框 = 外部引用），不依赖色觉。</p>
+
+  <h3>快捷键</h3>
+  <div class="grid g3">
+    <table>
+      <tr><th colspan="2">全局</th></tr>
+      <tr><td><code>Ctrl+S</code></td><td>保存</td></tr>
+      <tr><td><code>Ctrl+Z / Y</code></td><td>撤销 / 重做</td></tr>
+      <tr><td><code>Ctrl+F</code></td><td>聚焦技能库搜索</td></tr>
+      <tr><td><code>Alt+← / →</code></td><td>后退 / 前进</td></tr>
+      <tr><td><code>Ctrl+N</code></td><td>新建技能</td></tr>
+    </table>
+    <table>
+      <tr><th colspan="2">结构图</th></tr>
+      <tr><td><code>Space</code> / 右键</td><td>节点搜索</td></tr>
+      <tr><td><code>F</code> / <code>A</code></td><td>聚焦选中 / 显示全部</td></tr>
+      <tr><td><code>C</code></td><td>为选中节点加注释框</td></tr>
+      <tr><td><code>Ctrl+D</code></td><td>复制节点</td></tr>
+      <tr><td><code>Del</code></td><td>删除（语义见 §07）</td></tr>
+    </table>
+    <table>
+      <tr><th colspan="2">时间轴（获得焦点时）</th></tr>
+      <tr><td><code>Space</code></td><td>播放 / 暂停</td></tr>
+      <tr><td><code>, / .</code></td><td>上一帧 / 下一帧</td></tr>
+      <tr><td><code>M</code> / <code>R</code></td><td>加事件点 / 加区间</td></tr>
+      <tr><td><code>L</code></td><td>循环预览</td></tr>
+      <tr><td>按住 <code>Alt</code></td><td>临时关闭吸附</td></tr>
+    </table>
+  </div>
+  <p class="muted">快捷键通过 Unity <code>ShortcutManager</code>（<code>[Shortcut]</code> 特性，作用域限定为本窗口）注册，用户可以在 Edit ▸ Shortcuts 里改键。</p>
+
+  <h3>反馈原则</h3>
+  <ul>
+    <li><b>不弹模态框</b>：拒绝的操作在端口上变灰并给出 tooltip；完成的操作在窗口底部弹 2 秒提示（<code>ShowNotification</code>）。</li>
+    <li><b>选中联动</b>：技能大纲、结构图、时间轴、Details 四处的选中状态始终一致。</li>
+    <li><b>可发现</b>：空状态有引导（「还没有动画 · 从预览角色选择片段」按钮），右键菜单列出所有可执行操作并标注快捷键。</li>
+    <li><b>可撤销</b>：每个用户手势正好对应一步 Undo，Undo 名称写成中文动宾结构（「添加事件点「命中」」）。</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section id="milestones">
+  <h2><span class="n">14</span>分阶段计划</h2>
+  <p>按「先打地基、再替换体验、最后扩展运行期」的顺序排。M0～M3 只改编辑器，运行期零风险，M3 结束时新编辑器完整替代旧的；M4、M5 涉及运行期扩展，单独验收。工期按 1 名熟悉 UI Toolkit 和 GraphView 的工程师估算。</p>
+
+  <div class="gantt">
+    <div class="gh">里程碑</div>
+    <div class="gh">W1</div><div class="gh">W2</div><div class="gh">W3</div><div class="gh">W4</div><div class="gh">W5</div><div class="gh">W6</div><div class="gh">W7</div><div class="gh">W8</div><div class="gh">W9</div><div class="gh">W10</div><div class="gh">W11</div><div class="gh">W12</div><div class="gh">W13</div><div class="gh">W14</div>
+
+    <div class="gl">M0 地基：文档模型 / 命令 / 窗口骨架</div>
+    <div style="grid-column: span 2"><div class="bar" style="background:#3d6fa8">M0</div></div><div style="grid-column: span 12"></div>
+
+    <div class="gl">M1 结构图 v2 + Details + Drawers</div>
+    <div style="grid-column: span 2"></div><div style="grid-column: span 3"><div class="bar" style="background:#2f8a5c">M1</div></div><div style="grid-column: span 9"></div>
+
+    <div class="gl">M2 时间轴 v2 + 编辑期动画适配器</div>
+    <div style="grid-column: span 4"></div><div style="grid-column: span 3"><div class="bar" style="background:#a04d7b">M2</div></div><div style="grid-column: span 7"></div>
+
+    <div class="gl">M3 预览 / 校验 / 技能库 / 模板，替换旧编辑器</div>
+    <div style="grid-column: span 6"></div><div style="grid-column: span 3"><div class="bar" style="background:#b07c22">M3</div></div><div style="grid-column: span 5"></div>
+
+    <div class="gl">M4 运行期后端策略 + Spine</div>
+    <div style="grid-column: span 7"></div><div style="grid-column: span 2"><div class="bar" style="background:#6b52a8">M4</div></div><div style="grid-column: span 5"></div>
+
+    <div class="gl">M5 新轨道：标签窗口 / 任务</div>
+    <div style="grid-column: span 9"></div><div style="grid-column: span 2"><div class="bar" style="background:#6b52a8">M5</div></div><div style="grid-column: span 3"></div>
+
+    <div class="gl">M6 打磨：Live Link / 自定义轨道 / 文档</div>
+    <div style="grid-column: span 11"></div><div style="grid-column: span 3"><div class="bar" style="background:#55606e">M6</div></div>
+  </div>
+  <p class="muted">M2 和 M1 有一周重叠：编辑期动画适配器不依赖结构图，可以并行开发。M4 也可以和 M3 并行。</p>
+
+  <div class="ms">
+    <div class="mh"><span class="id">M0</span><span class="t">地基：文档模型、命令系统、窗口骨架</span><span class="tag ed">仅编辑器</span><span class="d">约 2 周</span></div>
+    <div class="mb">
+      <div>
+        <h4>任务</h4>
+        <ul>
+          <li><code>SkillDocument</code>：加载能力及其可达的全部资产（消耗、冷却、子效果链、动画），维护 SerializedObject 池和 <code>Changed(ChangeSet)</code> 事件。</li>
+          <li><code>EditCommand</code> 基类：Undo 分组、<code>ApplyModifiedProperties</code>、产生 ChangeSet；对接 <code>Undo.undoRedoEvent</code>，实现定向 Reload。</li>
+          <li><code>SelectionModel</code>、<code>PlaybackModel</code>、<code>LayoutStore</code>（importer userData 读写）。</li>
+          <li><code>SkillEditorWindow</code> 的 UXML 和 USS 三栏骨架，分隔条持久化，ShortcutManager 作用域。</li>
+          <li><code>PortId</code> 类型化端口身份与 <code>PortRules</code>（从现有 <code>TryAttach</code> 平移过来，原有断言全部保留）。</li>
+          <li>为时间轴元素补稳定 <code>id</code>（数据加迁移菜单）。</li>
+        </ul>
+      </div>
+      <div>
+        <h4>验收</h4>
+        <ul>
+          <li>EditMode 测试：命令执行后 Undo 和 Redo 都能精确往返；ChangeSet 内容正确。</li>
+          <li><code>PortRules</code> 覆盖现有全部连线规则（消耗必须 Instant、冷却必须授予标签、不能自引用、不能重复挂载、片段名和时长检查）。</li>
+          <li>窗口能打开、能切换根能力，面板都是占位但布局可以拖动并能记住。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="ms">
+    <div class="mh"><span class="id">M1</span><span class="t">结构图 v2 + Details 面板 + 字段 Drawer</span><span class="tag ed">仅编辑器</span><span class="d">约 3 周</span></div>
+    <div class="mb">
+      <div>
+        <h4>任务</h4>
+        <ul>
+          <li>节点基类加四类节点：着色、内联字段（字段直接绑定 SerializedProperty）、错误角标插槽。</li>
+          <li><code>SkillNodeSearchProvider</code>：Space、右键、从端口拖到空白处三种入口；按端口类型过滤；支持「新建内嵌」和「引用外部」。</li>
+          <li><code>SkillAssetFactory</code>：子资产的创建、删除、深拷贝，以及内嵌与外置互转。</li>
+          <li>删除语义（§07）、复制粘贴、注释框、小地图、自动整理、增量更新。</li>
+          <li>「能力设置」页签与门禁模拟器。</li>
+          <li>DetailsPanel；<code>AttributeCatalogAsset</code> 及其生成菜单；<code>AttributeIdDrawer</code>、<code>MagnitudeDrawer</code>、<code>CallerKeyDrawer</code>、<code>ModifierListDrawer</code>、标签 chip Drawer。</li>
+        </ul>
+      </div>
+      <div>
+        <h4>验收</h4>
+        <ul>
+          <li>不碰 Project 面板和 Inspector，只在窗口里搭出 README 里的「狂暴 Buff」（Duration、授予标签、堆叠、子效果链、周期回复）。</li>
+          <li>编辑 100 个节点的图时，单次改动不闪烁，选中状态和视口不丢失。</li>
+          <li>原有的 46 项图编辑断言迁移到新 API 后全部通过。</li>
+          <li>所有操作都能一步撤销，Undo 名称可读。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="ms">
+    <div class="mh"><span class="id">M2</span><span class="t">时间轴 v2 + 编辑期动画适配器</span><span class="tag ed">仅编辑器</span><span class="d">约 3 周</span></div>
+    <div class="mb">
+      <div>
+        <h4>任务</h4>
+        <ul>
+          <li>UI Toolkit 序列器：刻度、缩放平移、播放头、播放控制、吸附、多选、复制粘贴。</li>
+          <li><code>ITrackType</code> 加三种内置轨道：动画、事件、Cue 区间。</li>
+          <li><code>IAnimationEditorAdapter</code>、<code>IPoseSampler</code>、<code>AnimationAdapterRegistry</code>（TypeCache 发现、优先级、NullAdapter）。</li>
+          <li>Animator 适配器（递归遍历层和子状态机；BlendTree 降级处理）、Legacy 适配器、序列帧适配器。</li>
+          <li><code>ClipPickerDrawer</code> 与「同步时长」；攻速预览虚影。</li>
+          <li>与结构图双向选中联动。</li>
+        </ul>
+      </div>
+      <div>
+        <h4>验收</h4>
+        <ul>
+          <li>补上 README 里「动画时间轴尚未验证的部分」中的<b>编辑器断言</b>：连线、断开、撤销，时间轴拖拽写回，以及一次拖拽一步撤销。</li>
+          <li>三个适配器在真实组件上能正确枚举片段并读出时长（EditMode 测试用测试夹具预制体）。</li>
+          <li>0.8s、30fps 的片段在默认缩放下逐帧可点，吸附误差 ≤ 0.5 帧。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="ms">
+    <div class="mh"><span class="id">M3</span><span class="t">预览、校验、技能库、模板，替换旧编辑器</span><span class="tag ed">仅编辑器</span><span class="d">约 3 周</span></div>
+    <div class="mb">
+      <div>
+        <h4>任务</h4>
+        <ul>
+          <li>PreviewPanel：PreviewRenderUtility 场景、轨道相机、按适配器采样、<code>ICuePreview</code> 钩子、目标假人。</li>
+          <li><code>ValidationService</code> 加 §11 的全部规则；消息页、节点和轨道角标、一键修复；<code>BatchValidateMenu</code> 供 CI 调用（失败返回非 0）。</li>
+          <li>LibraryPanel：<code>SkillIndex</code>（AssetPostprocessor 增量维护）、搜索、分组、复制为变体、查找引用。</li>
+          <li>新建向导和 5 个内置模板（近战普攻、投射物、Buff、引导、召唤骨架）。</li>
+          <li>删除旧编辑器的 4 个文件，菜单入口重定向；更新 README 的编辑器章节。</li>
+        </ul>
+      </div>
+      <div>
+        <h4>验收</h4>
+        <ul>
+          <li><b>可用性测试</b>：请 2 名没用过本编辑器的策划，按 §04 场景 A 从零完成，中位用时 ≤ 5 分钟，过程中无需讲解。</li>
+          <li>批量校验菜单在示例工程上能报出人为注入的 13 类错误，并能逐条一键修复。</li>
+          <li>Samples/BasicCombat（需要先补回仓库）里的 5 个技能都能在新编辑器里打开、编辑、保存，运行结果与之前一致。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="ms">
+    <div class="mh"><span class="id">M4</span><span class="t">运行期后端策略与 Spine</span><span class="tag rt">运行期扩展</span><span class="d">约 2 周（可与 M3 并行）</span></div>
+    <div class="mb">
+      <div>
+        <h4>任务</h4>
+        <ul>
+          <li><code>AnimationBackend</code> 抽象类、<code>SkillAnimator</code>，以及 Animator、Legacy、序列帧三种 Backend（包装现有 Driver）。</li>
+          <li><code>Runtime.Spine</code> / <code>Editor.Spine</code> 两个条件程序集：<code>SpineAnimationDriver</code>、<code>SpineBackend</code>、<code>SpineEditorAdapter</code>。</li>
+          <li><code>[SerializeReference]</code> 子类下拉（编辑器端用 TypeCache 列出全部子类）。</li>
+          <li>宿主接入文档：从「手动 new Driver」迁移到 <code>SkillAnimator.Driver</code>。</li>
+        </ul>
+      </div>
+      <div>
+        <h4>验收</h4>
+        <ul>
+          <li>补上 README 未验证项：<b>三个驱动适配器在真实 Play Mode 下</b>的播放、拉伸、Stop 恢复。</li>
+          <li>Spine：在一个装了 spine-unity 的工程里编译通过，Play Mode 下标记点触发时机与 Animator 版一致（误差 ≤ 1 帧）。没装 Spine 的工程里程序集不参与编译、0 警告。</li>
+          <li><code>SkillAnimator.Driver</code> 预热后 Play/Stop 零托管分配（沿用现有 GC 测量方法）。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="ms">
+    <div class="mh"><span class="id">M5</span><span class="t">新轨道：标签窗口与任务事件</span><span class="tag rt">运行期扩展</span><span class="d">约 2 周</span></div>
+    <div class="mb">
+      <div>
+        <h4>任务</h4>
+        <ul>
+          <li><code>SkillAnimationDefinition</code> 增加 <code>TagWindows</code>；<code>AnimationTask</code> 在区间起止时增减 <code>OwnedTags</code> 计数，<code>OnEnd</code> 时回滚已开启的窗口（与 Cue 区间收尾对称）。</li>
+          <li><code>TaskSpawner</code> 策略（<code>[SerializeReference]</code>）：ProjectileSpawner、AreaEffectSpawner；到点时调用 <code>StartTask</code>。</li>
+          <li>编辑器：TagWindowTrack、TaskTrack，以及对应的 Details Drawer。</li>
+          <li>重入断言：窗口开启期间能力被取消、窗口标签触发了取消本能力、单帧跨过整个窗口，等等。</li>
+        </ul>
+      </div>
+      <div>
+        <h4>验收</h4>
+        <ul>
+          <li>Core 回归（19 组）和 Unity 集成测试全部通过；新增的重入用例写进 README 的「重入保证」表。</li>
+          <li><code>AnimationTask.OnTick</code> 加入新轨道后，每圈都经过窗口和任务事件，1000 帧内仍然零分配。</li>
+          <li>用新轨道做出「霸体 + 连招窗口」示例技能。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="ms">
+    <div class="mh"><span class="id">M6</span><span class="t">打磨与扩展（可选）</span><span class="tag p2">可选</span><span class="d">约 2～3 周</span></div>
+    <div class="mb">
+      <div>
+        <h4>任务</h4>
+        <ul>
+          <li><b>Live Link</b>：Play Mode 下选中场景单位，时间轴播放头跟随它当前的 <code>AnimationTask</code>，结构图高亮活跃效果。需要运行期暴露只读的调试快照接口，并用 <code>#if UNITY_EDITOR || DEVELOPMENT_BUILD</code> 包起来。</li>
+          <li>自定义轨道的扩展示例与文档。</li>
+          <li>Playable 后端（直接播 AnimationClip，不依赖 Controller 状态）。</li>
+          <li>深浅色主题适配、无障碍检查、性能剖析（500 个技能的技能库首次扫描 ≤ 1s）。</li>
+        </ul>
+      </div>
+      <div>
+        <h4>验收</h4>
+        <ul>
+          <li>按需求逐项验收；不阻塞 1.0 发布。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="testing">
+  <h2><span class="n">15</span>测试与验收</h2>
+  <div class="grid g2">
+    <div class="card">
+      <h4>自动化</h4>
+      <ul>
+        <li><b>Core 回归</b>（<code>Tests~/Core</code>，.NET 8）：每个里程碑都要跑，必须保持 19/19 通过。</li>
+        <li><b>EditMode 测试</b>（新增 <code>Tests~/Editor</code>，Unity Test Framework）：命令与 Undo 往返、PortRules、校验规则（每条规则一正一反两个用例）、适配器片段枚举、SkillAssetFactory 深拷贝与互转、LayoutStore 读写。</li>
+        <li><b>PlayMode 测试</b>：各 Backend 的播放、拉伸、Stop 恢复；M5 新轨道的重入；零分配断言。</li>
+        <li><b>CI 批量校验</b>：<code>Unity -batchmode -executeMethod ZFramework.GAS.Editor.BatchValidate.Run</code>。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>人工与可用性</h4>
+      <ul>
+        <li>每个里程碑结束时按 §04 的三个场景完整走一遍，并录屏存档。</li>
+        <li>M3 做正式可用性测试：记录完成时间、出错次数、求助次数。目标是场景 A 中位用时 ≤ 5 分钟、求助 0 次。</li>
+        <li>回归清单：旧资产能打开、Undo 跨面板一致、窗口关闭后重开状态正确、域重载（Domain Reload）后能恢复。</li>
+        <li>README 里的「已验证的事实」只记录<b>实际跑过</b>的项，沿用现有的如实标注惯例。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="risks">
+  <h2><span class="n">16</span>风险与对策</h2>
+  <table>
+    <tr><th style="width:240px">风险</th><th style="width:70px" class="c">影响</th><th>对策</th></tr>
+    <tr><td>GraphView 是 Experimental API，Unity 后续可能弃用</td><td class="c">中</td><td>封装在 GraphPanel 内部，节点和端口规则不依赖 GraphView 类型；关注 Graph Toolkit 的进展，等它稳定后单独评估迁移。</td></tr>
+    <tr><td>子资产在 VCS 里冲突更集中（一个技能一个文件）</td><td class="c">中</td><td>内嵌是默认选项而不是强制；共享效果仍然外置；YAML 合并配置 UnityYAMLMerge；提供「外置」转换作为退路。</td></tr>
+    <tr><td>Animator 的 BlendTree、子状态机、同步层等情况多</td><td class="c">中</td><td>适配器只承诺「状态名、时长、单 Motion 采样」；复杂状态降级处理并给出明确提示，不静默出错。</td></tr>
+    <tr><td>Spine 版本 API 有差异（3.8 / 4.0 / 4.1 / 4.2）</td><td class="c">中</td><td>只支持 4.0 及以上，在 versionDefines 里写明；适配代码只用 <code>AnimationState</code>、<code>TrackEntry</code>、<code>SkeletonData</code> 这些稳定 API。</td></tr>
+    <tr><td>PreviewRenderUtility 预览和真实场景的光照、后处理不同</td><td class="c">低</td><td>预览只用来对时机，不保证画面效果；另外提供「在场景中预览」按钮，在 Play Mode 下用真实 Cue 播放一次。</td></tr>
+    <tr><td>M5 修改 <code>AnimationTask</code>，可能破坏零分配和重入保证</td><td class="c">高</td><td>新数组在构造时预分配；新增重入断言；GC 对照测试纳入验收；M5 单独发版。</td></tr>
+    <tr><td>工期偏乐观</td><td class="c">中</td><td>M0～M3 是 MVP，可以独立交付；M4、M5 分别发版；M6 是可选项。每个里程碑都能停下来，交付的都是可用状态。</td></tr>
+    <tr><td>Samples/BasicCombat 目前不在仓库里，M3 的验收依赖它</td><td class="c">中</td><td>M0 开始前先补回范例（或重建），作为整个重构的基准测试场景。</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="decisions">
+  <h2><span class="n">17</span>待决策事项</h2>
+  <p>下面每一项都给出了推荐方案，计划正文默认按推荐方案编写。如有不同意见，确认后调整对应章节。</p>
+  <table>
+    <tr><th style="width:34px">#</th><th style="width:240px">问题</th><th>推荐</th><th style="width:260px">备选</th></tr>
+    <tr><td>1</td><td>技能的效果默认存为子资产还是独立文件？</td><td><b>默认内嵌为子资产</b>，共享效果外置；两者可以互转</td><td>保持全部独立文件，只改编辑器（VCS 冲突最少，但 Project 面板依然杂乱）</td></tr>
+    <tr><td>2</td><td>本次是否扩展运行期（M4 后端策略、M5 新轨道）？</td><td><b>M4 做</b>（策略模式的核心诉求）；<b>M5 做</b>（「配合动作」需要霸体和连招窗口）；两者都单独验收</td><td>只做编辑器（M0～M3），运行期留到下个版本</td></tr>
+    <tr><td>3</td><td>图框架选择</td><td><b>继续用 GraphView 并加一层封装</b></td><td>直接上 Graph Toolkit（Experimental，API 还在变）；或者自研画布（成本高）</td></tr>
+    <tr><td>4</td><td>预览视口做到什么程度？</td><td><b>姿态采样 + Cue 文字提示 + 可选 ICuePreview 钩子</b></td><td>只做时间轴，不做视口（M3 能省约 1 周，但「对着动作找命中帧」的核心体验会打折）</td></tr>
+    <tr><td>5</td><td>属性词表的来源</td><td><b>AttributeCatalogAsset 资产，加「从代码常量生成」菜单</b></td><td>纯代码特性扫描（不需要资产，但策划不能自己加属性）</td></tr>
+    <tr><td>6</td><td>是否支持一个技能多段动画（连招三段在同一个技能里）？</td><td><b>本次不支持</b>：连招用「连招窗口标签 + 3 个技能」实现，与 UE 的常见做法一致</td><td>动画轨支持多片段顺序拼接（要改 <code>SkillAnimationDefinition</code> 的数据结构，影响面大）</td></tr>
+  </table>
+</section>
+
+<p class="muted" style="margin-top:48px; border-top:1px solid var(--line); padding-top:12px">本计划基于仓库 <code>086a86e</code> 的代码现状编写。涉及的文件：<code>Editor/*.cs</code>（4 个）、<code>Runtime/Unity/SkillAnimation*.cs</code>、<code>Runtime/Unity/AnimationDriver(s).cs</code>、<code>Runtime/Unity/AnimationTask.cs</code>、<code>Runtime/Unity/Gameplay*Asset.cs</code>。</p>
+
+</main>
+<script>
+(function drawWires() {
+  const svg = document.getElementById('mock-wires');
+  if (!svg) return;
+  const draw = () => {
+    const box = svg.getBoundingClientRect();
+    svg.setAttribute('viewBox', `0 0 ${box.width} ${box.height}`);
+    svg.innerHTML = '';
+    document.querySelectorAll('.mock .pin[data-wire]').forEach(pin => {
+      const head = document.getElementById(pin.dataset.wire);
+      if (!head) return;
+      const a = pin.getBoundingClientRect(), b = head.getBoundingClientRect();
+      const x1 = a.right - box.left, y1 = a.top + a.height / 2 - box.top;
+      const x2 = b.left - box.left, y2 = b.top + b.height / 2 - box.top;
+      const dx = Math.max(30, (x2 - x1) / 2);
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', `M${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`);
+      path.setAttribute('stroke', pin.dataset.color);
+      path.setAttribute('stroke-width', '2');
+      path.setAttribute('fill', 'none');
+      if (pin.dataset.dash) path.setAttribute('stroke-dasharray', '4 3');
+      svg.appendChild(path);
+    });
+  };
+  draw();
+  addEventListener('resize', draw);
+})();
+</script>
+</body>
+</html>

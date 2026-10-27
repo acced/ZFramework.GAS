@@ -9,6 +9,8 @@ namespace ZFramework.GAS.Unity
     [Serializable]
     public sealed class AnimationMarkerAsset
     {
+        [SerializeField, HideInInspector] private string id;
+        public string Id => id;
         [Tooltip("相对授权时长的秒数")]
         [SerializeField] private float time;
         [Tooltip("回调据此分辨是哪一下，可留空")]
@@ -24,6 +26,8 @@ namespace ZFramework.GAS.Unity
     [Serializable]
     public sealed class AnimationCueRegionAsset
     {
+        [SerializeField, HideInInspector] private string id;
+        public string Id => id;
         [SerializeField] private float start;
         [Tooltip("负数表示随动画结束")]
         [SerializeField] private float end = -1f;
@@ -48,8 +52,7 @@ namespace ZFramework.GAS.Unity
     ///
     /// 与另外两个授权资产同构，<see cref="Definition"/> 缓存并复用同一实例。
     ///
-    /// <b>授权数组不按时间排序</b>：时间轴上拖动只改 <c>time</c>，下标保持稳定，
-    /// 图上的端口才不会在拖动时错位。排序在 <see cref="SkillAnimationDefinition"/> 构造时做一次。
+    /// 编辑器按元素稳定 ID 绑定端口，数组可以安全排序；运行期在定义构造时排序一次。
     /// </summary>
     [CreateAssetMenu(menuName = "ZFramework GAS/Skill Animation", fileName = "NewSkillAnimation")]
     public sealed class SkillAnimationAsset : ScriptableObject
@@ -67,6 +70,8 @@ namespace ZFramework.GAS.Unity
         [Header("时间轴")]
         [SerializeField] private AnimationMarkerAsset[] markers = Array.Empty<AnimationMarkerAsset>();
         [SerializeField] private AnimationCueRegionAsset[] cueRegions = Array.Empty<AnimationCueRegionAsset>();
+        [SerializeField] private AnimationTagWindowAsset[] tagWindows = Array.Empty<AnimationTagWindowAsset>();
+        [SerializeField] private AnimationTaskEventAsset[] taskEvents = Array.Empty<AnimationTaskEventAsset>();
 
         [NonSerialized] private SkillAnimationDefinition _definition;
 
@@ -75,6 +80,8 @@ namespace ZFramework.GAS.Unity
 
         /// <summary>时间轴显示用的帧率；运行期不使用。</summary>
         public float FrameRate => frameRate;
+        public string ClipName => clipName;
+        public bool Loop => loop;
 
         /// <summary>构建（并缓存）运行期定义。同一资产始终返回同一实例。</summary>
         public SkillAnimationDefinition Definition => _definition ??= Build();
@@ -95,10 +102,15 @@ namespace ZFramework.GAS.Unity
                     builtRegions.Add(region.Value);
             }
 
-            return new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray());
+            var builtWindows = new AnimationTagWindow[tagWindows.Length];
+            for (int i = 0; i < tagWindows.Length; i++) builtWindows[i] = tagWindows[i].Build();
+            var builtTasks = new AnimationTaskEvent[taskEvents.Length];
+            for (int i = 0; i < taskEvents.Length; i++) builtTasks[i] = taskEvents[i].Build();
+            return new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray(), builtWindows, builtTasks);
         }
 
         /// <summary>编辑期修改后清掉缓存，避免继续用旧定义。</summary>
-        private void OnValidate() => _definition = null;
+        public void InvalidateDefinition() => _definition = null;
+        private void OnValidate() => InvalidateDefinition();
     }
 }

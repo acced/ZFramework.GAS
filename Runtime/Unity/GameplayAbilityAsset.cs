@@ -32,6 +32,9 @@ namespace ZFramework.GAS.Unity
         [Tooltip("技能动画与其时间轴；由宿主在施法时配上一个 IAnimationDriver 起 AnimationTask")]
         [SerializeField] private SkillAnimationAsset animation;
 
+        [Header("调用方参数（声明，不自动注入运行期）")]
+        [SerializeField] private CallerParameter[] callerParameters = Array.Empty<CallerParameter>();
+
         [NonSerialized] private GameplayAbilityDefinition _definition;
 
         /// <summary>
@@ -50,6 +53,7 @@ namespace ZFramework.GAS.Unity
             cost != null ? cost.Definition : null,
             cooldown != null ? cooldown.Definition : null);
 
-        private void OnValidate() => _definition = null;
+        public void InvalidateDefinition() => _definition = null;
+        private void OnValidate() => InvalidateDefinition();
     }
 }

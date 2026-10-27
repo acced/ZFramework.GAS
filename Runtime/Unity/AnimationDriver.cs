@@ -40,6 +40,8 @@ namespace ZFramework.GAS.Unity
     {
         private readonly Animation _animation;
         private string _playing;
+        private float _restoreSpeed, _restoreTime;
+        private WrapMode _restoreWrap;
 
         public LegacyAnimationDriver(Animation animation)
             => _animation = animation != null ? animation : throw new ArgumentNullException(nameof(animation));
@@ -50,6 +52,14 @@ namespace ZFramework.GAS.Unity
             if (state == null)
             {
                 return 0f;
+            }
+
+            if (_playing != clipName)
+            {
+                Stop();
+                _restoreSpeed = state.speed;
+                _restoreTime = state.time;
+                _restoreWrap = state.wrapMode;
             }
 
             // 先停再配再播：Animation.Play 对已在播放的片段不会回到起点，
@@ -82,6 +92,8 @@ namespace ZFramework.GAS.Unity
             if (_animation != null)
             {
                 _animation.Stop(_playing);
+                var state = _animation[_playing];
+                if (state != null) { state.speed = _restoreSpeed; state.time = _restoreTime; state.wrapMode = _restoreWrap; }
             }
 
             _playing = null;

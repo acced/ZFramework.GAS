@@ -15,9 +15,9 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private MagnitudeKind kind = MagnitudeKind.Fixed;
         [SerializeField] private float constant;
         [SerializeField] private float coefficient = 1f;
-        [SerializeField] private int captureAttributeId;
+        [SerializeField, AttributeIdField] private int captureAttributeId;
         [SerializeField] private MagnitudeCapture captureFrom = MagnitudeCapture.Source;
-        [SerializeField] private string callerKey;
+        [SerializeField, CallerKey] private string callerKey;
 
         public EffectMagnitude Build() => kind switch
         {
@@ -32,7 +32,7 @@ namespace ZFramework.GAS.Unity
     [Serializable]
     public sealed class ModifierAsset
     {
-        [SerializeField] private int targetAttributeId;
+        [SerializeField, AttributeIdField] private int targetAttributeId;
         [SerializeField] private ModifierOperation operation = ModifierOperation.Add;
         [SerializeField] private MagnitudeAsset magnitude = new();
 
@@ -72,12 +72,12 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private EffectDurationPolicy durationPolicy = EffectDurationPolicy.Instant;
         [SerializeField] private float duration;
         [Tooltip("大于 0 时改从来源的该属性读取时长，覆盖上面的固定值")]
-        [SerializeField] private int durationAttributeId = -1;
+        [SerializeField, AttributeIdField] private int durationAttributeId = -1;
 
         [Header("周期")]
         [SerializeField] private float period;
         [Tooltip("大于等于 0 时改从来源的该属性读取周期，覆盖上面的固定值")]
-        [SerializeField] private int periodAttributeId = -1;
+        [SerializeField, AttributeIdField] private int periodAttributeId = -1;
         [SerializeField] private bool executePeriodicOnApplication;
 
         [Header("修改器与标签")]
@@ -131,7 +131,8 @@ namespace ZFramework.GAS.Unity
         }
 
         /// <summary>编辑期修改后清掉缓存，避免继续用旧定义。</summary>
-        private void OnValidate() => _definition = null;
+        public void InvalidateDefinition() => _definition = null;
+        private void OnValidate() => InvalidateDefinition();
     }
 
     [Serializable]

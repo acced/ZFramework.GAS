@@ -291,110 +291,79 @@ asc.StartTask(spec, new AnimationTask(swing, driver, target, castTime,
   此时 `Stop()` 仍会照常调用一次，因此驱动必须自己分辨播没播过，不能无条件复位共享状态
 - `onFinished` 只报告，不代为结束能力——收招后还有后摇的技能不该被替它结束掉
 
-### 接一个 Spine 适配器
+### 通过 SkillAnimator 接入动画后端
 
-Spine 未安装在本项目里，**库内不留未经编译验证的代码**。装上 `spine-unity` 后照抄这一份：
+角色挂载 `SkillAnimator`，在 Backend 下拉选择 Animator、Legacy Animation 或序列帧。驱动按需创建并缓存；已有手动创建 `IAnimationDriver` 的宿主仍可继续使用。
 
 ```csharp
-using Spine.Unity;
-using ZFramework.GAS.Unity;
-
-public sealed class SpineAnimationDriver : IAnimationDriver
-{
-    private const int Track = 0;
-    private readonly SkeletonAnimation _skeleton;
-
-    public SpineAnimationDriver(SkeletonAnimation skeleton) => _skeleton = skeleton;
-
-    public float Play(string clipName, float duration, bool loop)
-    {
-        Spine.Animation clip = _skeleton.Skeleton.Data.FindAnimation(clipName);
-        if (clip == null)
-        {
-            return 0f;                                  // 与其余驱动一致：找不到片段返回 0
-        }
-
-        Spine.TrackEntry entry = _skeleton.AnimationState.SetAnimation(Track, clip, loop);
-        bool stretch = duration > 0f && clip.Duration > 0f;
-        entry.TimeScale = stretch ? clip.Duration / duration : 1f;   // 拉伸到下达的时长
-        entry.TrackTime = 0f;
-        return stretch ? duration : clip.Duration;
-    }
-
-    public void Advance(float normalizedTime)
-    {
-        // Spine 自行推进，与 Animator / 旧版 Animation 同理。
-    }
-
-    public void Stop()
-    {
-        if (_skeleton != null)
-        {
-            _skeleton.AnimationState.SetEmptyAnimation(Track, mixDuration: 0.1f);
-        }
-    }
-}
+var driver = character.GetComponent<SkillAnimator>().Driver;
+var task = new AnimationTask(abilityAsset.Animation.Definition, driver,
+    target: targetAsc);
+owner.StartTask(spec, task);
 ```
 
-## 编辑器：技能结构图
+`AnimationTask` 完成时只报告完成；宿主按技能生命周期决定是否结束能力。任务事件需要向构造函数的 `taskContext` 传入 `TimelineTaskContext`，提供 Origin、Searcher、目标和视觉对象池回调。内置 ProjectileSpawner / AreaEffectSpawner 会创建任务对象，这部分不承诺零分配。
 
-`Window/ZFramework GAS/技能结构图`，或直接双击一个 `GameplayAbilityAsset`。
+`tagWindows` 在区间内计数授予标签，离开、打断和取消时回滚自己持有的计数；`taskEvents` 在指定时间调用可扩展的 `TaskSpawner`。同一帧跨过多个时间点时按边界顺序处理，命中回调能观察到该时刻的标签状态。
 
-图**不是新的数据格式**：节点就是资产，连线就是资产之间已有的引用（消耗 / 冷却 / 子效果）。
-因此没有「图数据」与「运行期数据」两份来源，也不存在编译或导出步骤——
-在图上改完，就是改完了资产本身。
+### Spine（可选包）
 
-| 操作 | 效果 |
+`Runtime.Spine` 和 `Editor.Spine` 通过官方 `com.esotericsoftware.spine.spine-unity` 包的 4.x 版本定义开启。未安装时不参与编译；已有 Spine 3.8 不会启用此适配器。角色选择 `SpineBackend` 后，编辑器自动枚举动画并支持姿态采样。
+
+本次在独立 Unity 6000.3.14f1 工程中使用官方 spine-unity 4.2.120 / spine-csharp 4.2.37 实际编译并通过 PlayMode 测试。没有升级使用方项目中的 Spine 3.8。4.0/4.1 的包版本尚未实测。
+
+## 编辑器：技能工作台
+
+入口：`Window → ZFramework GAS → 技能编辑器`，或双击 `GameplayAbilityAsset`。旧的“技能结构图”菜单和 `SkillGraphWindow.Open().Show(asset)` 调用重定向到新窗口。
+
+窗口采用与设计网页接近的深色三栏：左侧技能库和大纲，中间结构图／能力设置及多轨时间轴，右侧角色预览和 Details。分隔条记忆尺寸；窄窗口的预览和 Details 改为页签。
+
+资产仍是唯一运行期数据源。`SkillDocument` 共享序列化对象、选择和播放状态；命令负责 Undo 分组。节点增量同步保留节点实例和视口。位置、注释、预览角色及游离引用写入主资产 importer userData，不增加运行期图解释器。
+
+| 操作 | 行为 |
 |---|---|
-| 从端口拖出连线接到另一个节点 | 写回对应引用 |
-| 从 Project 面板把效果资产拖到端口上 | 同上，省去先建资产再回 Inspector 引用的往返；多选拖拽会逐个挂载 |
-| 从 Project 面板把能力资产拖到空白处 | 切换根节点 |
-| 选中连线按 Delete | 清除该引用（消耗 / 冷却置空，子效果移出数组） |
-| 双击节点 | 在 Project 面板中定位并选中该资产 |
-| 右键 → 新建效果资产 | 在根能力所在文件夹创建并选中，随后拖到端口上挂载 |
+| 新建技能 | 近战、投射物、Buff、引导、召唤骨架五种模板 |
+| Space／右键／端口拖到空白 | 创建内嵌资产或引用项目资产，并连接类型兼容的端口 |
+| 双击节点 | 在 Project 中定位来源资产 |
+| 删除连线 | 只清除该引用 |
+| 删除内嵌节点 | 解除当前技能引用并删除子资产；其他文件仍引用时阻止删除 |
+| 删除外部节点 | 解除当前技能引用，保留共享资产文件 |
+| Ctrl+C/V/D | 复制粘贴／复制节点；内嵌子图深拷贝，外部资产保留引用 |
+| C、F、A | 注释框、聚焦选中、显示全部；工具栏可自动整理 |
+| Details | 编辑所选资产或时间轴元素，并支持内嵌／外置转换 |
+| 能力设置 | 标签门禁、调用方参数与门禁模拟器 |
+| Ctrl+S、Ctrl+N、Ctrl+F | 保存、新建、搜索；Alt+左右键切换访问历史 |
 
-端口是**有类型的**：能力的「消耗」「冷却」只收效果资产，「动画」只收动画资产，
-拖不出没有意义的连线，也就不会出现「连上了却被静默丢弃」。
-动画节点上每个标记点各一个输出端口（含没挂效果的——空端口正是「把效果拖到这一下」的落点），
-端口名里的下标是标记点在图上的稳定标识，名字只是给人看的，可空可重复。
+消耗必须 Instant，冷却必须授予标签，子效果禁止自引用、重复挂载、循环和超过八层的链路。不兼容端口在拖线时不可连接，并提供原因提示。动画事件端口按稳定 ID 绑定，数组重排不改变身份。Cue 节点只读，显示来源效果或时间区间。
 
-**节点本身不可删除**。节点即资产，删节点没有对应的数据语义；
-若放任删除，GraphView 会把该节点的所有连边一并交给变更回调，
-于是「从视图上移掉一个框」会静默清空这个资产的进出引用——删根节点更是直接抹掉能力的消耗与冷却。
-图上唯一有意义的删除是删一条连线。
+属性词表用 `AttributeCatalogAsset` 配置；没有词表时保留整数输入。带 `[AttributeCatalogSource]` 的代码常量可从菜单生成词表。Magnitude、修改器、SetByCaller 和 SerializeReference 后端／任务策略提供专用编辑控件。
 
-所有写入都走 `SerializedObject.ApplyModifiedProperties()`，因此 Ctrl+Z 与 Inspector 编辑同源。
-每次写回后整图按数据重建——视图始终是数据的投影，不持有独立状态。
+### 多轨时间轴与预览
 
-四条约束在**授权期**就拦截，并弹窗说明原因，不必等到运行期才发现配错：
+支持动画、事件、Cue 区间、标签窗口和任务事件轨道。片段下拉从预览角色解析，选择片段时同步长度、帧率，并等比调整已有时间点。Animator 使用配置的层，递归子状态机，支持 Override Controller；BlendTree 使用第一个子片段作近似预览并提示。
 
-- 消耗必须是 `Instant` 效果
-- 冷却效果必须至少授予一个标签（那个标签就是「在冷却中」的标志）
-- 效果不能把自己挂为子效果
-- 同一子效果不能在同一触发时机重复挂载（会在运行期施加两遍）；换个触发时机则允许
-
-多处引用同一效果时复用同一个节点，连线自然汇聚；成环也因此不会让展开死循环。
-
-**没有的功能**：节点位置不持久化（每次按引用结构重新布局）。
-保存位置需要引入一份图专属数据，那就回到了「两份来源」，与上面的设计相斥。
-
-### 底部的动画时间轴
-
-根能力挂了动画资产时，窗口底部展开一条时间轴。它只管一件事：**时间**。
-标记点的名字与效果、Cue 标签、作用目标都是普通字段，Inspector 的列表编辑已经够用；
-唯有「这一下落在动画的哪个位置」必须看着刻度拖。
-
-| 操作 | 效果 |
+| 操作 | 行为 |
 |---|---|
-| 拖动标记点头 | 改时间点。按帧吸附（用资产上的 `frameRate`），按住 Alt 走自由值 |
-| 拖动区间左右手柄 | 改起止；终点为负的区间没有右手柄——它的右端由动画时长决定，不是一个可拖的时间 |
-| 拖动区间中段 | 整体平移，长度不变 |
-| 右键空白 | 在光标处新增标记点 / 新增区间 |
-| 右键标记点或区间 | 删除；区间还可把终点改为「随动画结束」 |
+| 拖刻度／播放头，Space | 定位姿态，播放／暂停 |
+| 滚轮，中键拖动 | 缩放、平移 |
+| 拖事件或区间，拖区间两端 | 修改时间、整体移动、调整起止 |
+| Ctrl／Shift 选中，空白处拖框 | 多选；拖动选中组整体移动 |
+| Alt+拖动 | 关闭吸附；默认吸附到帧、相邻元素或播放头 |
+| 双击轨道／右键 | 添加元素；从大纲拖效果到事件轨道也可添加 |
+| M、R | 在播放头添加事件；两次 R 标记 Cue 区间起止 |
+| 逗号／句号、Home／End | 前后逐帧、首尾定位 |
+| Ctrl+C/V、Delete | 复制、粘贴到播放头、删除选择 |
 
-**拖拽期间不写序列化数据**，只改临时字段；抬手时一次性 `ApplyModifiedProperties()`——
-因此一次拖拽正好一步撤销，也不会触发「写回 → 整图重建 → 把正在拖的东西换掉」。
-超出动画时长的标记点画成红色：它永远不会触发，是配置错误而非「暂时禁用」。
+拖动过程只更新视觉位置，抬手一次写回并形成一步 Undo。稳定 ID 在打开旧资产时补齐，也可使用 `Tools → ZFramework GAS → 迁移 → 为时间轴元素补 ID`；原有字段名和数组顺序不变。
+
+预览使用隔离的 PreviewRenderUtility 场景，不驱动战斗规则。拖动旋转、滚轮缩放、双击聚焦；Cue 默认显示文字，项目可实现 `ICuePreview` 扩展表现。顶部后端菜单切换预览角色上已有 SkillAnimator 的策略。
+
+### 校验与示例
+
+消息页提供 GAS001–004、010–013、020–022、030–032 检查、定位和适用的自动修复。需用户选择的配置仍在 Details 中处理，不会猜测标签或资产。菜单 `Tools → ZFramework GAS → 校验所有技能` 可批量检查；CI 可调用 `ZFramework.GAS.Editor.BatchValidate.Run`，存在错误时退出码非零。批量校验不会为资产补 ID。
+
+`Tools → ZFramework GAS → 创建 BasicCombat 示例` 生成五种技能、属性词表、剑士预制体和 0.8 秒 Animator 动作。普攻包含刀光 Cue、霸体和连招窗口。生成器不会覆盖已有技能；标签注册与宿主接入见 `Samples/BasicCombat/README.md`。
+
 
 ## 需要知道的几条语义
 
@@ -425,26 +394,18 @@ public sealed class SpineAnimationDriver : IAnimationDriver
 
 ## 完整范例
 
-`Samples/BasicCombat/`（518 行，独立 asmdef）用本库搭出四个代表性技能，
-**没有为跑通它们给库加任何代码**：
+`Samples/BasicCombat/README.md` 说明本次重建的示例。运行菜单 `Tools → ZFramework GAS → 创建 BasicCombat 示例` 后，在项目 Assets 下生成五种技能和预览角色。
 
-| 技能 | 用到的机制 |
+| 技能 | 内容 |
 |---|---|
-| 普攻 | Instant 效果 + 消耗 + 冷却 + 标签门禁 + Cue |
-| 普攻（带动画） | 同上，外加动画时间轴：伤害落在第 0.35s 的标记点，剑光由 Cue 区间起止，播完即结束能力 |
-| 狂暴 Buff | Duration + 授予标签 + 按来源堆叠 + 子效果链 + 周期回复 |
-| 投射物 | AbilityTask + 物理查询 + 命中效果，能力保持激活直到命中 |
-| 召唤 | 派生 AbilityTask（96 行），打断即回收 |
+| 普攻_剑士 | 体力消耗、冷却、命中伤害、刀光 Cue、霸体及连招窗口 |
+| 投射物 | 发射任务与命中效果；需补视觉预制体和宿主查询／对象池服务 |
+| 狂暴 Buff | 持续攻击加成和冷却 |
+| 引导 | 周期效果和动画事件 |
+| 召唤骨架 | 宿主回调事件；单位生成仍由项目实现 |
 
-带动画的普攻与瞬发版本**共用同一个能力定义**：门禁、消耗、冷却都不变，
-变的只是「什么时候结算」从「立刻」变成「挥到那一下」。
+这是可编辑的资产与动画样例，不包含完整战斗场景。此前 README 提及的 CombatArena / CombatUnit 演示源码不在当前仓库中；旧验证记录保留为历史，不视为本次样例的端到端验收。
 
-除带动画的普攻外，其余四条路径均已在真实播放模式下验证过
-（动画那条的现状见下方「已验证的事实」）。
-
-范例同时演示了两件宿主该做的事：`GameplayCueRouter` 由 `CombatArena` 持有并在构造 ASC 时传入
-（一场战斗一个，不是单例）；`CombatUnit` 在 `FixedUpdate` 里用 `Time.fixedDeltaTime` 推进
-（固定步长，战斗逻辑确定可复现）。
 
 ## 重入保证
 
@@ -468,6 +429,9 @@ public sealed class SpineAnimationDriver : IAnimationDriver
 | 投射物命中目标时，效果连锁取消了发射者的能力 | 当场停手，后续目标不再受击 |
 | 区域施加光环时，效果连锁取消了所属能力 | 当场停手；已入区者由 `OnEnd` 回滚，后续单位不会被拉进已结束的区域 |
 | 子效果链成环 | 深度超过 8 层抛异常；容器状态不受影响，后续调用正常 |
+| 标签窗口开启回调取消能力 | 回滚本窗口已授予的计数，不移除其他来源的标签 |
+| 单帧跨过完整标签窗口和命中事件 | 按时间边界依次开窗、命中、关窗；命中观察到正确标签状态 |
+| 关闭窗口期间标签回调抛异常 | 继续清理其余窗口，再报告首个异常 |
 
 > 效果持有来源的 `AttributeSet` 引用（用于按来源缩放数值）。
 > 来源单位被回收时，该引用会让其属性集存活到效果被移除为止——这是有意的，
@@ -505,13 +469,16 @@ Unity 6000.3 批处理编译和集成检查通过：Core 实际程序集不引�
   其中 `AnimationTask.OnTick` 在**每圈都走到标记点与区间**的 1000 帧里零分配，
   同批次阳性对照可检出分配；断言集本身经变异测试反证（故意破坏循环重置后确实报错）
 
-### 动画时间轴尚未验证的部分
-- **三个驱动适配器**（Animator / 旧版 Animation / 序列帧）需要真实组件，未在播放模式下跑过
-- **带动画的普攻**的端到端（真实播放模式下断言伤害落在预期帧、Cue 起止各一次）未跑
-- **编辑器断言**（动画端口与标记点端口的连线 / 断开 / 撤销、时间轴拖拽写回与一步撤销）未跑
-- GC 数字来自 .NET 6 上的同一份 IL，**未在 Unity 的 Mono 下复测**
+### 本次编辑器重构验证（2026-10-26）
 
-上述四项都需要 Unity 编辑器在位；本轮环境没有，因此如实标为未验证，而非按「应该没问题」记为通过。
+- Unity 6000.3.14f1 EditMode：**45/45**，覆盖命令及多节点分组 Undo/Redo、连接规则、链深度、子资产创建／删除／转换、深拷贝、稳定 ID、选择同步、真实指针拖拽写回与一步撤销、模板、校验和窗口节点保留。
+- Unity PlayMode：Animator、Legacy、Sprite、官方 Spine 4.2 的播放／拉伸／Stop 恢复及标记时序；结果见 `Docs~/EditorRefactorStatus.md`。
+- Core .NET 8：**19/19**。100,000 次预热激活／结束测得 **0 字节托管分配**。
+- Unity Mono：时间轴每圈经过标签窗口及无分配测试生成器的任务事件，1,000 圈测得 **0 字节**；序列帧驱动预热 Play/Advance/Stop 测得 0 字节。该结果不覆盖内置 ProjectileSpawner / AreaEffectSpawner 创建新任务的分配。
+- Runtime + Editor 对实际 Unity API 的额外编译检查：0 错误、0 警告。第三方 Tags / Spine Editor 在 Unity 6 存在弃用提示。
+
+尚未执行两名新策划的正式可用性测试、五个样例的完整战斗端到端验收和 IL2CPP 构建。历史 46 项图编辑断言没有现成测试源可逐条迁移；本次可重复执行的测试源码在 `Tests~/Editor`、`Tests~/PlayMode`、`Tests~/Spine`。细节差异与未完成验收见 `Docs~/EditorRefactorStatus.md`。
+
 
 ### 测量的边界
 - GC 测量在 **Editor + Mono** 下进行，**IL2CPP 未验证**——
@@ -538,6 +505,4 @@ Unity 6000.3 批处理编译和集成检查通过：Core 实际程序集不引�
 - **召唤的具体实现**——涉及单位表、生成根节点、路径系统等游戏专属概念，
   派生 `GameplayAbilityTask` 即可，库不做只转发的壳
 - **对象池**——视觉体与任务对象的生命周期归使用方
-- **Spine 适配器**——Spine 未安装在本项目，库内不留未经编译验证的代码；
-  上面「接一个 Spine 适配器」给了完整可抄的实现
-- **动画预览与 scrub**——时间轴只编辑时间，不渲染动画预览
+- **Live Link、Playable 与通用自定义事件轨道**——属于计划 M6 可选扩展。

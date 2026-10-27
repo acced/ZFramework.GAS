@@ -1,0 +1,6 @@
+{
+  "name": "ZFramework.GAS.Editor.Tests",
+  "references": ["ZFramework.GAS", "ZFramework.GAS.Unity", "ZFramework.GAS.Editor", "ZFramework.GameplayTags"],
+  "includePlatforms": ["Editor"],
+  "optionalUnityReferences": ["TestAssemblies"]
+}
