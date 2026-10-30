@@ -1,3 +1,18 @@
+### 通过技能资产统一施放
+
+每个角色持有一个 `SkillRunner`，复用该角色的 ASC 与动画驱动。训练场、AI 或输入层只传入技能资产：
+
+```csharp
+var runner = new SkillRunner(owner, () => skillAnimator.Driver);
+runner.Grant(abilityAsset); // 可预先授予；TryCast 首次使用也会自动授予
+runner.MarkerReached += (asset, marker) => HandleSkillEvent(asset, marker);
+var result = runner.TryCast(abilityAsset, targetAsc, taskContext);
+```
+
+`Grant` 按资产去重，各角色拥有独立 Spec。`TryCast` 返回 Core 的激活结果；成功后内部创建 `AnimationTask`。无动画技能立即结束，非循环动画结束时结束技能，循环技能由 `Cancel(asset)` 或 ASC 的取消逻辑终止。`Revoke(asset)` 撤销授予。HUD 使用 `IsActive(asset)`、`CooldownRemaining(asset)` 和 `CooldownDuration(asset)` 查询状态。
+
+宿主仍负责推进 `owner.Tick(dt)`，提供目标及 `TimelineTaskContext`，实现召唤等业务回调。当前入口采用“动画结束即技能结束”的生命周期策略；需要后摇或其他完成条件时仍可直接使用底层 `AnimationTask`。运行期状态不写回共享资产。驱动启动异常会结束激活状态，已提交的消耗和冷却不自动退款。
+
 ### 通过 SkillAnimator 接入动画后端
 
 角色挂载 `SkillAnimator`，在 Backend 下拉选择 Animator、Legacy Animation 或序列帧。驱动按需创建并缓存；已有手动创建 `IAnimationDriver` 的宿主仍可继续使用。
@@ -61,13 +76,17 @@ owner.StartTask(spec, task);
 | 逗号／句号、Home／End | 前后逐帧、首尾定位 |
 | Ctrl+C/V、Delete | 复制、粘贴到播放头、删除选择 |
 
-拖动过程只更新视觉位置，抬手一次写回并形成一步 Undo。稳定 ID 在打开旧资产时补齐，也可使用 `Tools → ZFramework GAS → 迁移 → 为时间轴元素补 ID`；原有字段名和数组顺序不变。
+拖动过程只更新视觉位置，抬手一次写回并形成一步 Undo。时间轴元素的稳定 ID 由编辑器自动维护，用于保持数组重排后的端口和选择对应关系。
 
-预览使用隔离的 PreviewRenderUtility 场景，不驱动战斗规则。拖动旋转、滚轮缩放、双击聚焦；Cue 默认显示文字，项目可实现 `ICuePreview` 扩展表现。顶部后端菜单切换预览角色上已有 SkillAnimator 的策略。
+预览使用隔离的 PreviewRenderUtility 场景，不驱动战斗规则。拖动旋转、滚轮缩放、双击聚焦。预览角色上的 `CueVfxPlayer` 引用 `CueVfxLibrary`，运行时与编辑器读取同一份 Cue → 特效 Prefab／挂点／跟随／停止方式映射。普通粒子无需自定义脚本；自定义网格可继承 `CueVfxBehaviour`。`ICuePreview` 仍可用于其他项目扩展。顶部后端菜单切换预览角色上已有 SkillAnimator 的策略。
+
+通过 Create → ZFramework GAS → Cue VFX Library 创建映射资产，再赋给角色的 Cue VFX Player。挂点为相对该组件的 Transform 路径，留空表示根节点；不跟随时保留区间开始那一刻的挂点世界变换（不自动贴地或射线投射）。运行时在创建 ASC 后调用 `player.Bind(asc)`，组件自动注册 Cue 并在 LateUpdate 推进表现；禁用、销毁和重新绑定会清理所有实例与监听。映射使用精确标签匹配，只处理 OnActive／Removed 区间事件。相同标签重叠区间共用一组实例，计数归零时停止。
+
+立即移除会在区间结束／技能打断时清理；停止发射模式保留剩余粒子，直到粒子死亡或超过尾迹最长时间。预览可任意前后拖动，粒子使用固定随机种子从零模拟，并展示停止后的尾迹。固定在世界的特效从区间开始姿势定位。内置支持 ParticleSystem 和显式采样的 CueVfxBehaviour；自定义 MonoBehaviour、VFX Graph、音频与特效内部 Animator 不会自动获得时间轴预览。
 
 ### 校验与示例
 
 消息页提供 GAS001–004、010–013、020–022、030–032 检查、定位和适用的自动修复。需用户选择的配置仍在 Details 中处理，不会猜测标签或资产。菜单 `Tools → ZFramework GAS → 校验所有技能` 可批量检查；CI 可调用 `ZFramework.GAS.Editor.BatchValidate.Run`，存在错误时退出码非零。批量校验不会为资产补 ID。
 
-`Tools → ZFramework GAS → 创建 BasicCombat 示例` 生成五种技能、属性词表、剑士预制体和 0.8 秒 Animator 动作。普攻包含刀光 Cue、霸体和连招窗口。生成器不会覆盖已有技能；标签注册与宿主接入见 `Samples/BasicCombat/README.md`。
+`Tools → ZFramework GAS → 创建 BasicCombat 示例` 一次生成五种技能、属性词表、骑士预制体、Animator 动作、独立特效 Prefab 及 Cue 特效映射库，并自动接好角色和技能预览，全部位于 `Assets/GAS Samples/BasicCombat`。斩击包含刀光 Cue、霸体和连招窗口；战吼包含独立地面粒子法阵。已有示例目录会在确认后重新生成；已打开的示例场景会重新载入生成结果。标签注册与宿主接入见 `Samples/BasicCombat/README.md`。
 

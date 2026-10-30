@@ -22,8 +22,7 @@ namespace ZFramework.GAS.Editor.Tests
         [OneTimeSetUp]
         public void InitializeTags()
         {
-            GameplayTagManager.Initialize(new GameplayTagRegistration("Test.Cooldown"), new GameplayTagRegistration("Test.Window"),
-                new GameplayTagRegistration("Test.Other"), new GameplayTagRegistration("Test.Cue"));
+            TestTags.Initialize();
         }
         [SetUp]
         public void SetUp()
@@ -109,7 +108,7 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.IsNull(TimelineCommands.Find(so, "markers", second).FindPropertyRelative("effect").objectReferenceValue); Assert.AreNotEqual(first, second);
         }
         [Test]
-        public void StableIdMigrationIsIdempotent()
+        public void StableIdAssignmentIsIdempotent()
         {
             var animation = Animation(); Edit(animation, so => so.FindProperty("markers").arraySize = 2);
             Assert.IsTrue(TimelineCommands.EnsureIds(animation)); string first = Snapshot(animation);
@@ -228,7 +227,7 @@ namespace ZFramework.GAS.Editor.Tests
             Undo.PerformRedo(); Assert.IsFalse(TimelineCommands.EnsureIds(animation));
         }
         [Test]
-        public void ValidationOnlyDocumentDoesNotMigrateIds()
+        public void ValidationOnlyDocumentDoesNotAssignIds()
         {
             var animation = Animation(); Edit(animation, so => so.FindProperty("markers").arraySize = 1);
             string before = Snapshot(animation);

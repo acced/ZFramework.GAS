@@ -8,7 +8,8 @@
     "name": "acced"
   },
   "dependencies": {
-    "com.acced.zframework.gameplaytags": "1.0.0"
+    "com.acced.zframework.gameplaytags": "1.0.0",
+    "com.unity.modules.particlesystem": "1.0.0"
   },
   "license": "MIT"
 }

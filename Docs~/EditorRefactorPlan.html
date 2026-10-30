@@ -247,7 +247,7 @@
   <a href="#details"><span class="n">09</span>Details 与字段编辑</a>
   <a href="#preview"><span class="n">10</span>预览视口</a>
   <a href="#validation"><span class="n">11</span>校验系统</a>
-  <a href="#data"><span class="n">12</span>数据模型与迁移</a>
+  <a href="#data"><span class="n">12</span>数据模型</a>
   <a href="#interaction"><span class="n">13</span>交互规范</a>
   <a href="#milestones"><span class="n">14</span>分阶段计划</a>
   <a href="#testing"><span class="n">15</span>测试与验收</a>
@@ -991,8 +991,8 @@ Object Source      <span class="cm">// 用于 Ping</span></div></div>
 
 <!-- ============================================================ -->
 <section id="data">
-  <h2><span class="n">12</span>数据模型变更与迁移</h2>
-  <p>所有变更都是<b>增量、向后兼容</b>的：不改已有字段名，不改 Core，旧资产不经迁移也能直接打开。</p>
+  <h2><span class="n">12</span>数据模型变更</h2>
+  <p>不改已有字段名，不改 Core。当前没有旧版本使用方，不提供旧版本迁移工具；稳定 ID 由编辑器内部维护。</p>
   <table>
     <tr><th style="width:220px">变更</th><th>说明</th><th style="width:120px">位置</th><th style="width:130px">兼容性</th></tr>
     <tr><td>技能子资产</td><td>效果、动画可以作为能力主资产的子资产（<code>AssetDatabase.AddObjectToAsset</code>），Project 里折叠在技能下面。提供「内嵌 ⇄ 外置」双向转换。</td><td>编辑器（SkillAssetFactory）</td><td>✔ 引用方式不变，运行期无感知</td></tr>
@@ -1004,11 +1004,6 @@ Object Source      <span class="cm">// 用于 Ping</span></div></div>
     <tr><td>布局</td><td>节点坐标存到 importer 的 <code>userData</code>（JSON），只在编辑器内存在。</td><td>Editor</td><td>✔</td></tr>
     <tr><td>删除旧编辑器</td><td><code>SkillGraphWindow</code> / <code>SkillGraphView</code> / <code>AssetNode</code> / <code>AnimationTimelinePanel</code> 在 M3 验收后删除；保留同一个菜单入口，并重定向到新窗口。</td><td>Editor</td><td>⚠ 引用了 <code>SkillGraphWindow.Show</code> 的测试需要改到新入口</td></tr>
   </table>
-  <h4>迁移工具</h4>
-  <ul>
-    <li><code>Tools/ZFramework GAS/迁移/为时间轴元素补 ID</code>：批量处理，幂等。</li>
-    <li><code>Tools/ZFramework GAS/迁移/把仅被单个技能引用的效果内嵌</code>：先 dry-run 列出清单，确认后执行。保留 GUID 引用关系的做法是「先复制内容为子资产，再改写引用」；这一步不可逆，执行前提示先提交 VCS。</li>
-  </ul>
 </section>
 
 <!-- ============================================================ -->
@@ -1111,7 +1106,7 @@ Object Source      <span class="cm">// 用于 Ping</span></div></div>
           <li><code>SelectionModel</code>、<code>PlaybackModel</code>、<code>LayoutStore</code>（importer userData 读写）。</li>
           <li><code>SkillEditorWindow</code> 的 UXML 和 USS 三栏骨架，分隔条持久化，ShortcutManager 作用域。</li>
           <li><code>PortId</code> 类型化端口身份与 <code>PortRules</code>（从现有 <code>TryAttach</code> 平移过来，原有断言全部保留）。</li>
-          <li>为时间轴元素补稳定 <code>id</code>（数据加迁移菜单）。</li>
+          <li>时间轴元素使用稳定 <code>id</code>，由编辑器自动生成并维护唯一性。</li>
         </ul>
       </div>
       <div>

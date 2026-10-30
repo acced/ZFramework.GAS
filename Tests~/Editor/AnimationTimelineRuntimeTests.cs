@@ -27,8 +27,7 @@ namespace ZFramework.GAS.Editor.Tests
         [SetUp]
         public void SetUp()
         {
-            GameplayTagManager.Initialize(new GameplayTagRegistration("Test.Cooldown"), new GameplayTagRegistration("Test.Window"),
-                new GameplayTagRegistration("Test.Other"), new GameplayTagRegistration("Test.Cue"));
+            TestTags.Initialize();
             _window = GameplayTagManager.RequestTag("Test.Window"); _other = GameplayTagManager.RequestTag("Test.Other"); _cue = GameplayTagManager.RequestTag("Test.Cue");
         }
         private static GameplayAbilitySpec Activate(AbilitySystemComponent owner)

@@ -29,7 +29,7 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private GameplayEffectAsset cooldown;
 
         [Header("动画")]
-        [Tooltip("技能动画与其时间轴；由宿主在施法时配上一个 IAnimationDriver 起 AnimationTask")]
+        [Tooltip("技能动画与其时间轴；通过 SkillRunner 统一施放，也可由宿主直接创建 AnimationTask")]
         [SerializeField] private SkillAnimationAsset animation;
 
         [Header("调用方参数（声明，不自动注入运行期）")]

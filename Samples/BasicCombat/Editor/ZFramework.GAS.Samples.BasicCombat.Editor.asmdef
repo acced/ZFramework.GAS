@@ -1,0 +1,14 @@
+{
+  "name": "ZFramework.GAS.Samples.BasicCombat.Editor",
+  "rootNamespace": "ZFramework.GAS.Samples.BasicCombat.Editor",
+  "references": [
+    "ZFramework.GAS",
+    "ZFramework.GAS.Unity",
+    "ZFramework.GAS.Editor",
+    "ZFramework.GAS.Samples.BasicCombat",
+    "ZFramework.GameplayTags",
+    "ZFramework.GameplayTags.Editor"
+  ],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true
+}

@@ -5,6 +5,8 @@ using GameplayTags;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
+using ZFramework.GAS.Samples.BasicCombat;
+using ZFramework.GAS.Samples.BasicCombat.Editor;
 
 namespace ZFramework.GAS.Editor.Tests
 {
@@ -29,12 +31,10 @@ namespace ZFramework.GAS.Editor.Tests
         public static void Run()
         {
             _stage = 0;
-            GameplayTagManager.Initialize(new GameplayTagRegistration("Cooldown.普攻_剑士"), new GameplayTagRegistration("Cooldown.投射物"),
-                new GameplayTagRegistration("Cooldown.狂暴 Buff"), new GameplayTagRegistration("State.SuperArmor"),
-                new GameplayTagRegistration("Window.Combo"), new GameplayTagRegistration("Cue.Sword.Trail"));
+            GameplayTagManager.Initialize(SampleTags.All.Select(name => new GameplayTagRegistration(name)).ToArray());
             var ability = BasicCombatSample.Create();
             _window = SkillEditorWindow.Open(); _window.position = new Rect(0, 28, 1000, 660); _window.Show(ability);
-            _window.Document.Playback.Seek(.35f, .8f);
+            _window.Document.Playback.Seek(.37f, .9f);
             _window.Document.Selection.Select(ability.Animation, "markers",
                 _window.Document.Serialized(ability.Animation).FindProperty("markers").GetArrayElementAtIndex(0).FindPropertyRelative("id").stringValue);
             _captureAt = EditorApplication.timeSinceStartup + 5;
@@ -46,7 +46,7 @@ namespace ZFramework.GAS.Editor.Tests
             if (_stage == 0)
             {
                 var ability = _window.Document.Root;
-                _window.Document.Playback.Seek(.35f, .8f);
+                _window.Document.Playback.Seek(.37f, .9f);
                 _window.Document.Selection.Select(ability.Animation, "markers",
                     _window.Document.Serialized(ability.Animation).FindProperty("markers").GetArrayElementAtIndex(0).FindPropertyRelative("id").stringValue);
                 _window.rootVisualElement.Q<SkillGraphView>().AutoArrange();

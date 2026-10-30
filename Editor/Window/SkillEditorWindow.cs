@@ -163,6 +163,7 @@ namespace ZFramework.GAS.Editor
         }
         private void ValidationChanged()
         {
+            if (_doc == null || _counts == null || _status == null) return;
             int errors = _validation.Issues.Count(i => i.Severity == IssueSeverity.Error), warnings = _validation.Issues.Count(i => i.Severity == IssueSeverity.Warning);
             _counts.text = $"✕ {errors}   ! {warnings}"; _counts.EnableInClassList("has-errors", errors > 0);
             _graph.ApplyIssues(_validation.Issues); UpdateStatus();
@@ -208,6 +209,7 @@ namespace ZFramework.GAS.Editor
         private void OnDisable() { EditorApplication.update -= Tick; Cleanup(); }
         private void Cleanup()
         {
+            if (_validation != null) _validation.Changed -= ValidationChanged;
             _preview?.Dispose(); _timeline?.Dispose(); _graph?.Dispose(); _details?.Dispose(); _library?.Dispose(); _messages?.Dispose(); _validation?.Dispose();
             _doc?.Dispose(); _doc = null;
         }

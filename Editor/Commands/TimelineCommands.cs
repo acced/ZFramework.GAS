@@ -64,16 +64,5 @@ namespace ZFramework.GAS.Editor
             }, true, track);
             doc.Selection.Select(doc.Root.Animation);
         }
-        [MenuItem("Tools/ZFramework GAS/迁移/为时间轴元素补 ID")]
-        public static void MigrateIds()
-        {
-            var paths = new HashSet<string>(); int count = 0;
-            foreach (string guid in AssetDatabase.FindAssets("t:SkillAnimationAsset")) paths.Add(AssetDatabase.GUIDToAssetPath(guid));
-            foreach (string guid in AssetDatabase.FindAssets("t:GameplayAbilityAsset")) paths.Add(AssetDatabase.GUIDToAssetPath(guid));
-            foreach (string path in paths)
-                foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(path))
-                    if (asset is SkillAnimationAsset animation && EnsureIds(animation)) { AssetDatabase.SaveAssetIfDirty(animation); count++; }
-            Debug.Log($"GAS：已为 {count} 个动画补齐稳定 ID。");
-        }
     }
 }

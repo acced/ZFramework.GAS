@@ -1,10 +1,12 @@
 # 技能编辑器重构交付记录
 
-日期：2026-10-26。依据 `EditorRefactorPlan.html`，本次实现 M0–M5 主线，M6 可选扩展未实施。原计划文档未修改。
+日期：2026-10-26。依据 `EditorRefactorPlan.html`，本次实现 M0–M5 主线，M6 可选扩展未实施。
+
+2026-10-27 更新：目前没有旧版本使用方，已移除迁移菜单和批量迁移代码，并同步调整计划。稳定时间轴 ID 继续由编辑器内部维护。
 
 ## 已落地
 
-- M0：共享 SkillDocument、序列化对象池、ChangeSet、SelectionModel、PlaybackModel、命令分组、稳定时间轴 ID 和迁移菜单；UXML/USS 三栏工作台。
+- M0：共享 SkillDocument、序列化对象池、ChangeSet、SelectionModel、PlaybackModel、命令分组、稳定时间轴 ID；UXML/USS 三栏工作台。
 - M1：增量结构图、类型化端口规则、搜索创建、内嵌资产、深拷贝、删除、内嵌／外置转换、只读 Cue 节点、布局与注释、小地图、Details 和能力门禁模拟器。
 - M2：UI Toolkit 多轨时间轴、片段选择、姿态定位、播放、变速虚影、缩放平移、帧吸附、框选与多选移动、复制粘贴、区间手柄、稳定 ID 选中联动。
 - M3：隔离预览场景、旋转缩放、Cue 文字与 ICuePreview；校验消息、定位及适用的修复；技能库、五种模板和 BasicCombat 资产生成器；旧入口兼容重定向。

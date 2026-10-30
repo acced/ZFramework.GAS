@@ -291,6 +291,21 @@ asc.StartTask(spec, new AnimationTask(swing, driver, target, castTime,
   此时 `Stop()` 仍会照常调用一次，因此驱动必须自己分辨播没播过，不能无条件复位共享状态
 - `onFinished` 只报告，不代为结束能力——收招后还有后摇的技能不该被替它结束掉
 
+### 通过技能资产统一施放
+
+每个角色持有一个 `SkillRunner`，复用该角色的 ASC 与动画驱动。训练场、AI 或输入层只传入技能资产：
+
+```csharp
+var runner = new SkillRunner(owner, () => skillAnimator.Driver);
+runner.Grant(abilityAsset); // 可预先授予；TryCast 首次使用也会自动授予
+runner.MarkerReached += (asset, marker) => HandleSkillEvent(asset, marker);
+var result = runner.TryCast(abilityAsset, targetAsc, taskContext);
+```
+
+`Grant` 按资产去重，各角色拥有独立 Spec。`TryCast` 返回 Core 的激活结果；成功后内部创建 `AnimationTask`。无动画技能立即结束，非循环动画结束时结束技能，循环技能由 `Cancel(asset)` 或 ASC 的取消逻辑终止。`Revoke(asset)` 撤销授予。HUD 使用 `IsActive(asset)`、`CooldownRemaining(asset)` 和 `CooldownDuration(asset)` 查询状态。
+
+宿主仍负责推进 `owner.Tick(dt)`，提供目标及 `TimelineTaskContext`，实现召唤等业务回调。当前入口采用“动画结束即技能结束”的生命周期策略；需要后摇或其他完成条件时仍可直接使用底层 `AnimationTask`。运行期状态不写回共享资产。驱动启动异常会结束激活状态，已提交的消耗和冷却不自动退款。
+
 ### 通过 SkillAnimator 接入动画后端
 
 角色挂载 `SkillAnimator`，在 Backend 下拉选择 Animator、Legacy Animation 或序列帧。驱动按需创建并缓存；已有手动创建 `IAnimationDriver` 的宿主仍可继续使用。
@@ -354,15 +369,15 @@ owner.StartTask(spec, task);
 | 逗号／句号、Home／End | 前后逐帧、首尾定位 |
 | Ctrl+C/V、Delete | 复制、粘贴到播放头、删除选择 |
 
-拖动过程只更新视觉位置，抬手一次写回并形成一步 Undo。稳定 ID 在打开旧资产时补齐，也可使用 `Tools → ZFramework GAS → 迁移 → 为时间轴元素补 ID`；原有字段名和数组顺序不变。
+拖动过程只更新视觉位置，抬手一次写回并形成一步 Undo。时间轴元素的稳定 ID 由编辑器自动维护，用于保持数组重排后的端口和选择对应关系。
 
-预览使用隔离的 PreviewRenderUtility 场景，不驱动战斗规则。拖动旋转、滚轮缩放、双击聚焦；Cue 默认显示文字，项目可实现 `ICuePreview` 扩展表现。顶部后端菜单切换预览角色上已有 SkillAnimator 的策略。
+预览使用隔离的 PreviewRenderUtility 场景，不驱动战斗规则。拖动旋转、滚轮缩放、双击聚焦。角色的 `CueVfxPlayer` 引用 `CueVfxLibrary`，运行时与预览共用 Cue 标签 → 特效 Prefab、挂点路径、是否跟随、停止方式的映射。普通 ParticleSystem 支持拖动采样与尾迹，无需每标签处理器；自定义网格实现 `CueVfxBehaviour`，其他预览扩展仍可实现 `ICuePreview`。顶部后端菜单切换预览角色上已有 SkillAnimator 的策略。
 
 ### 校验与示例
 
 消息页提供 GAS001–004、010–013、020–022、030–032 检查、定位和适用的自动修复。需用户选择的配置仍在 Details 中处理，不会猜测标签或资产。菜单 `Tools → ZFramework GAS → 校验所有技能` 可批量检查；CI 可调用 `ZFramework.GAS.Editor.BatchValidate.Run`，存在错误时退出码非零。批量校验不会为资产补 ID。
 
-`Tools → ZFramework GAS → 创建 BasicCombat 示例` 生成五种技能、属性词表、剑士预制体和 0.8 秒 Animator 动作。普攻包含刀光 Cue、霸体和连招窗口。生成器不会覆盖已有技能；标签注册与宿主接入见 `Samples/BasicCombat/README.md`。
+`Tools → ZFramework GAS → 创建 BasicCombat 示例` 程序化生成骑士与训练假人、六段动作、技能特效、五个技能和可游玩的训练场，并把示例标签写入项目标签配置。重新生成会先确认，再覆盖示例目录；详见 `Samples/BasicCombat/README.md`。
 
 
 ## 需要知道的几条语义
@@ -394,18 +409,19 @@ owner.StartTask(spec, task);
 
 ## 完整范例
 
-`Samples/BasicCombat/README.md` 说明本次重建的示例。运行菜单 `Tools → ZFramework GAS → 创建 BasicCombat 示例` 后，在项目 Assets 下生成五种技能和预览角色。
+运行菜单 `Tools → ZFramework GAS → 创建 BasicCombat 示例`，在 `Assets/GAS Samples/BasicCombat` 生成一套不依赖任何第三方资源的完整示例，详见 `Samples/BasicCombat/README.md`。
 
-| 技能 | 内容 |
+| 技能 | 用到的机制 |
 |---|---|
-| 普攻_剑士 | 体力消耗、冷却、命中伤害、刀光 Cue、霸体及连招窗口 |
-| 投射物 | 发射任务与命中效果；需补视觉预制体和宿主查询／对象池服务 |
-| 狂暴 Buff | 持续攻击加成和冷却 |
-| 引导 | 周期效果和动画事件 |
-| 召唤骨架 | 宿主回调事件；单位生成仍由项目实现 |
+| 斩击 | 体力消耗、冷却、命中伤害（按攻击缩放）、剑光 Cue 区间、霸体与连招窗口 |
+| 能量弹 | 蓄能 Cue、`ProjectileSpawner` 任务事件、追踪投射物与命中效果 |
+| 战吼 | 作用于自身的持续增益、光环 Cue、霸体窗口 |
+| 圣域引导 | 周期治疗、引导标签窗口阻断其他技能、法阵 Cue |
+| 召唤 | 纯回调事件，由宿主生成守护灵 |
 
-这是可编辑的资产与动画样例，不包含完整战斗场景。此前 README 提及的 CombatArena / CombatUnit 演示源码不在当前仓库中；旧验证记录保留为历史，不视为本次样例的端到端验收。
+训练场场景 `BasicCombat.unity` 中的 `TrainingArena` 演示宿主接线：创建 Cue 路由与 ASC、通过 `hero.SkillRunner.TryCast(skill.asset, target, context)` 按资产施放、固定步长推进，以及为投射物提供场景服务。`CombatUnit` 初始化时调用 `CueVfxPlayer.Bind(asc)`，随后时间轴特效由共享配置驱动。训练场不再创建动画任务、持有 Spec 或逐标签管理时间轴特效。
 
+菜单 `Tools → ZFramework GAS → 创建 BasicCombat 示例` 同时生成独立特效、共享映射库并完成角色接线，全部资源保存在 `Assets/GAS Samples/BasicCombat` 内。战吼技能的 `Cue.Ground.Sigil` 在 0.2～0.9 秒显示普通粒子法阵，固定在地面并在结束后保留尾迹。映射位于该目录的 `CueVfxLibrary.asset`，新增特效的步骤见 [BasicCombat 说明](Samples/BasicCombat/README.md)。
 
 ## 重入保证
 
@@ -499,7 +515,7 @@ Unity 6000.3 批处理编译和集成检查通过：Core 实际程序集不引�
 
 ## 不包含的内容
 
-- **具体表现**（粒子 / 音效 / 飘字）——经 Cue 路由由使用方实现
+- **游戏专属表现**（音效、飘字等）——经 Cue 路由由使用方实现；Unity 层已提供配置驱动的粒子 Prefab 播放与预览
 - **运行期图解释器**——效果与能力是数据资产（与 UE 一致），执行不经过图；
   编辑器里的技能结构图只是这些引用的可视化，不参与运行
 - **召唤的具体实现**——涉及单位表、生成根节点、路径系统等游戏专属概念，
