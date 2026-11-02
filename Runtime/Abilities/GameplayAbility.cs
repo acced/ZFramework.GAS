@@ -14,6 +14,8 @@ namespace ZFramework.GAS
         CannotAfford,
         /// <summary>该能力已处于激活状态。</summary>
         AlreadyActive,
+        InvalidConfiguration,
+        ExecutionFailed,
     }
 
     /// <summary>
@@ -90,11 +92,29 @@ namespace ZFramework.GAS
     /// </summary>
     public sealed class GameplayAbilitySpec
     {
-        public GameplayAbilityDefinition Definition { get; }
+        public GameplayAbilityDefinition Definition { get; internal set; }
         public AbilitySystemComponent Owner { get; }
+        public int ActivationVersion { get; internal set; }
+        internal GameplayEffectDefinition CommittedCooldown;
 
-        /// <summary>能力等级，由持有方在授予时给定，库本身不据此缩放数值。</summary>
+        /// <summary>下一次施放的等级；执行中的求值上下文不随此值改变。</summary>
         public int Level { get; set; }
+        private EffectEvaluationContext _levelContext;
+        private static readonly EffectEvaluationContext LevelOne = new EffectEvaluationContext(1);
+        internal EffectEvaluationContext DefaultContext
+        {
+            get
+            {
+                if (Level <= 1) return LevelOne;
+                if (_levelContext == null || _levelContext.Level != Level) _levelContext = new EffectEvaluationContext(Level);
+                return _levelContext;
+            }
+        }
+        public EffectEvaluationContext EvaluationContext { get; internal set; }
+        public AbilityActivationCheck LastActivationCheck { get; internal set; }
+        public AbilityActivationCheck LastExecutionFailure { get; set; }
+        public string LastCleanupError { get; set; }
+        public string LastCleanupActionId { get; set; }
 
         public bool IsActive { get; internal set; }
 
@@ -111,7 +131,8 @@ namespace ZFramework.GAS
             get
             {
                 GameplayEffectDefinition cooldown = Definition.Cooldown;
-                return cooldown != null && cooldown.Tags.Granted.HasAny(Owner.OwnedTags);
+                return cooldown != null && cooldown.Tags.Granted.HasAny(Owner.OwnedTags)
+                    || CommittedCooldown != null && CommittedCooldown.Tags.Granted.HasAny(Owner.OwnedTags);
             }
         }
 
@@ -121,15 +142,26 @@ namespace ZFramework.GAS
             get
             {
                 GameplayEffectDefinition cooldown = Definition.Cooldown;
-                if (cooldown == null)
+                if (cooldown == null && CommittedCooldown == null)
                 {
                     return 0f;
                 }
 
-                ActiveGameplayEffectHandle handle = Owner.Effects.Find(cooldown);
+                ActiveGameplayEffectHandle handle = Owner.Effects.Find(CommittedCooldown ?? cooldown);
                 return Owner.Effects.TryGetRemainingTime(handle, out float remaining)
                     ? Math.Max(0f, remaining)
                     : 0f;
+            }
+        }
+        public float CooldownDuration
+        {
+            get
+            {
+                var definition = CommittedCooldown ?? Definition.Cooldown;
+                if (definition == null) return 0;
+                if (Owner.Effects.TryGetInfo(Owner.Effects.Find(definition), out var info)) return info.Duration;
+                return definition.DurationMagnitude.HasValue && EvaluationContext != null
+                    ? new GameplayEffectSpec(definition, context: EvaluationContext).Resolve(definition.DurationMagnitude.Value, Owner.Attributes) : definition.Duration;
             }
         }
     }

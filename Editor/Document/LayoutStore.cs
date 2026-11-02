@@ -8,8 +8,10 @@ namespace ZFramework.GAS.Editor
 {
     public sealed class LayoutStore
     {
-        [Serializable] public sealed class NodeLayout { public string key; public Vector2 position; }
+        [Serializable] public sealed class NodeLayout { public string key; public Vector2 position; public bool collapsed; }
         [Serializable] public sealed class CommentLayout { public string title; public Rect rect; }
+        [Serializable] public sealed class Bookmark { public string name; public Vector3 position; public Vector3 scale = Vector3.one; }
+        [Serializable] public sealed class Reroute { public string link; public Vector2 position; }
         [Serializable] private sealed class Data
         {
             public string owner = "ZFramework.GAS.Layout.v2";
@@ -18,6 +20,8 @@ namespace ZFramework.GAS.Editor
             public List<NodeLayout> nodes = new();
             public List<CommentLayout> comments = new();
             public List<string> looseAssets = new();
+            public List<Bookmark> bookmarks = new();
+            public List<Reroute> reroutes = new();
         }
         // 每次按资产取路径：技能可能在编辑期间被重命名或移动，缓存的路径会让保存静默落空。
         private readonly GameplayAbilityAsset _root;
@@ -26,6 +30,15 @@ namespace ZFramework.GAS.Editor
         private bool _dirty;
         public List<CommentLayout> Comments => _data.comments;
         public List<string> LooseAssets => _data.looseAssets;
+        public List<Bookmark> Bookmarks => _data.bookmarks ??= new List<Bookmark>();
+        public List<Reroute> Reroutes => _data.reroutes ??= new List<Reroute>();
+        public bool IsCollapsed(UnityEngine.Object asset) => _data.nodes.Find(n => n.key == AssetReferences.Key(asset))?.collapsed ?? false;
+        public void SetCollapsed(UnityEngine.Object asset, bool value)
+        {
+            string key = AssetReferences.Key(asset); var node = _data.nodes.Find(n => n.key == key);
+            if (node == null) { node = new NodeLayout { key = key }; _data.nodes.Add(node); }
+            node.collapsed = value; _dirty = true;
+        }
         public GameObject PreviewPrefab
         {
             get => AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(_data.previewGuid ?? ""));

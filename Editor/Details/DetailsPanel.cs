@@ -29,7 +29,7 @@ namespace ZFramework.GAS.Editor
             if (asset == null) { _body.Add(new HelpBox("选择节点或时间轴元素以编辑属性。", HelpBoxMessageType.Info)); return; }
             var so = _doc.Serialized(asset);
             string track = _doc.Selection.Track;
-            var element = track != null ? TimelineCommands.Find(so, track, _doc.Selection.ElementId) : null;
+            var element = track == "@field" ? so.FindProperty(_doc.Selection.ElementId) : track != null ? TimelineCommands.Find(so, track, _doc.Selection.ElementId) : null;
             if (element != null)
             {
                 var field = new PropertyField(element, TrackTypeRegistry.Get(track)?.DisplayName ?? "事件"); _body.Add(field); field.BindProperty(element);
@@ -39,7 +39,7 @@ namespace ZFramework.GAS.Editor
                     var heading = new Label(effect.name + " · 效果设置"); heading.AddToClassList("panel-heading"); _body.Add(heading);
                     AddInspector(_doc.Serialized(effect));
                 }
-                field.RegisterCallback<SerializedPropertyChangeEvent>(e => schedule.Execute(() => _doc.Notify(new ChangeSet(asset, false, track))));
+                field.RegisterCallback<SerializedPropertyChangeEvent>(e => { string path = e.changedProperty.propertyPath; schedule.Execute(() => _doc.Notify(new ChangeSet(asset, false, path))); });
             }
             else
             {
@@ -89,6 +89,11 @@ namespace ZFramework.GAS.Editor
         {
             this.Unbind(); Clear(); if (_doc.Root == null) return;
             var so = _doc.Serialized(_doc.Root);
+            foreach (string path in new[] { "displayName", "description", "icon", "parameterSet", "parameters", "parameterOverrides", "activationActions" })
+            {
+                var field = new PropertyField(so.FindProperty(path)); Add(field); field.BindProperty(so.FindProperty(path));
+                field.RegisterCallback<SerializedPropertyChangeEvent>(e => _doc.Notify(new ChangeSet(_doc.Root, false, e.changedProperty.propertyPath)));
+            }
             foreach (var pair in new[] { ("abilityTags", "能力标识"), ("activationRequiredTags", "激活需要"), ("activationBlockedTags", "激活阻断"), ("activationOwnedTags", "激活期间授予"), ("cancelAbilitiesWithTags", "激活时取消"), ("callerParameters", "调用方参数声明") })
             {
                 var field = new PropertyField(so.FindProperty(pair.Item1), pair.Item2); Add(field); field.BindProperty(so.FindProperty(pair.Item1));

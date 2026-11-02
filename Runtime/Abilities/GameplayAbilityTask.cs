@@ -9,13 +9,14 @@ namespace ZFramework.GAS
     /// 库只提供生命周期，具体动作（投射物飞行、召唤生成、瞄准等待…）由使用方派生实现——
     /// 它们通常需要引擎能力，不属于纯规则层。
     ///
-    /// **生命周期约定**：任务的存活期是所属能力存活期的子集。
-    /// 投射物这类「发射后仍在飞行」的动作，应当让能力保持激活直到命中，
-    /// 而不是先结束能力再指望任务活下去——那会留下无主的跨帧状态。
+    /// ASC 调度的任务随能力结束；由 GameplayTaskHost 调度的独立任务由该宿主负责清理。
+    /// Ability 在独立任务中只记录来源，不控制其寿命。
     /// </summary>
     public abstract class GameplayAbilityTask
     {
         public GameplayAbilitySpec Ability { get; private set; }
+        public int ActivationVersion { get; private set; }
+        internal long RunVersion { get; private set; }
 
         public bool IsActive { get; private set; }
 
@@ -24,6 +25,7 @@ namespace ZFramework.GAS
 
         /// <summary>每帧推进，dt 由宿主经 <see cref="AbilitySystemComponent.Tick"/> 传入。</summary>
         protected abstract void OnTick(float deltaTime);
+        protected virtual void OnBegin() { }
 
         /// <summary>结束时回调，<paramref name="cancelled"/> 区分「被取消」与「自行完成」。</summary>
         protected virtual void OnEnd(bool cancelled)
@@ -41,9 +43,13 @@ namespace ZFramework.GAS
 
         internal void Begin(GameplayAbilitySpec ability)
         {
+            if (IsActive) throw new InvalidOperationException("Task is already running.");
             Ability = ability;
+            RunVersion++;
+            ActivationVersion = ability?.ActivationVersion ?? 0;
             IsActive = true;
             WasCancelled = false;
+            OnBegin();
         }
 
         internal void Advance(float deltaTime)

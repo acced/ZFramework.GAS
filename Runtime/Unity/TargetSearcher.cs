@@ -28,6 +28,58 @@ namespace ZFramework.GAS.Unity
     /// </summary>
     public sealed class TargetSearcher
     {
+        /// <summary>Unified query. Each nesting level leases its own buffer; order is nearest first.</summary>
+        public int Query(TargetQueryDefinition query, SkillExecutionContext context, TargetQueryBuffer buffer,
+            Vector3? centerOverride = null, bool applyLimit = true)
+        {
+            buffer.Clear();
+            var source = context.Source;
+            var center = centerOverride ?? (query.Kind == TargetQueryKind.TargetPoint ? context.Services.RequireTargetPosition() : context.Position);
+            if (query.Kind == TargetQueryKind.Self || query.Kind == TargetQueryKind.FixedTarget)
+            {
+                var unit = query.Kind == TargetQueryKind.Self ? source : context.Target;
+                if (context.Allows(query, unit))
+                { buffer.Units[0] = unit; buffer.Transforms[0] = query.Kind == TargetQueryKind.Self ? context.Services.Origin : context.Services.Target; buffer.Count = 1; }
+                return buffer.Count;
+            }
+            float radius = query.Radius.Resolve(context.Values);
+            var forward = context.Forward;
+            int hits = query.Kind == TargetQueryKind.Line
+                ? Physics.OverlapBoxNonAlloc(center + forward * radius * .5f,
+                    new Vector3(query.Width.Resolve(context.Values) * .5f, query.Height.Resolve(context.Values) * .5f, radius * .5f),
+                    buffer.Colliders, Quaternion.LookRotation(forward), query.LayerMask, QueryTriggerInteraction.Collide)
+                : Physics.OverlapSphereNonAlloc(center, radius, buffer.Colliders, query.LayerMask, QueryTriggerInteraction.Collide);
+            buffer.Saturated = hits == buffer.Colliders.Length;
+            float cos = Mathf.Cos(query.Angle.Resolve(context.Values) * .5f * Mathf.Deg2Rad);
+            var flatForward = new Vector2(forward.x, forward.z).normalized;
+            for (int i = 0; i < hits; i++)
+            {
+                var collider = buffer.Colliders[i];
+                var provider = collider.GetComponentInParent<IAbilitySystemProvider>();
+                var unit = provider?.AbilitySystem;
+                if (!context.Allows(query, unit) || Contains(buffer.Units, buffer.Count, unit)) continue;
+                var transform = provider is Component component ? component.transform : collider.transform;
+                var delta = transform.position - center;
+                if (query.Kind == TargetQueryKind.Sector)
+                {
+                    var flat = new Vector2(delta.x, delta.z);
+                    if (flat.sqrMagnitude > 1e-8f && Vector2.Dot(flat.normalized, flatForward) < cos) continue;
+                }
+                float distance = delta.sqrMagnitude;
+                int index = buffer.Count;
+                while (index > 0 && buffer.Distances[index - 1] > distance)
+                {
+                    buffer.Units[index] = buffer.Units[index - 1]; buffer.Transforms[index] = buffer.Transforms[index - 1];
+                    buffer.Distances[index] = buffer.Distances[index - 1]; index--;
+                }
+                buffer.Units[index] = unit; buffer.Transforms[index] = transform; buffer.Distances[index] = distance; buffer.Count++;
+            }
+            int count = applyLimit ? Mathf.Min(buffer.Count, query.MaxTargets) : buffer.Count;
+            for (int i = count; i < buffer.Count; i++) { buffer.Units[i] = null; buffer.Transforms[i] = null; }
+            buffer.Count = count;
+            return count;
+        }
+
         private readonly Collider[] _candidates;
 
         public TargetSearcher(int maxCandidates = 64)

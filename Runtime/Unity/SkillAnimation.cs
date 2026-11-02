@@ -28,6 +28,9 @@ namespace ZFramework.GAS.Unity
         /// 用名字而非下标：时间轴上拖动会改变先后顺序，下标不稳定。可为空。
         /// </summary>
         public readonly string Key;
+        public readonly string Id;
+        internal readonly SkillActionDefinition LegacyAction;
+        public readonly System.Collections.Generic.IReadOnlyList<SkillActionDefinition> Actions;
 
         /// <summary>到点施加的效果；可为 null。</summary>
         public readonly GameplayEffectDefinition Effect;
@@ -35,7 +38,8 @@ namespace ZFramework.GAS.Unity
         public readonly AnimationMarkerTarget Target;
 
         public AnimationMarker(float time, string key = null, GameplayEffectDefinition effect = null,
-            AnimationMarkerTarget target = AnimationMarkerTarget.Target)
+            AnimationMarkerTarget target = AnimationMarkerTarget.Target, string id = null,
+            SkillActionDefinition[] actions = null)
         {
             if (time < 0f || float.IsNaN(time))
             {
@@ -46,6 +50,9 @@ namespace ZFramework.GAS.Unity
             Key = string.IsNullOrEmpty(key) ? null : key;
             Effect = effect;
             Target = target;
+            Id = id;
+            LegacyAction = effect != null ? ApplyEffectAction.Marker(id, effect, target == AnimationMarkerTarget.Self) : null;
+            Actions = Array.AsReadOnly(actions == null ? Array.Empty<SkillActionDefinition>() : (SkillActionDefinition[])actions.Clone());
         }
     }
 
@@ -117,6 +124,8 @@ namespace ZFramework.GAS.Unity
         public AnimationCueRegion[] CueRegions { get; }
         public AnimationTagWindow[] TagWindows { get; }
         public AnimationTaskEvent[] TaskEvents { get; }
+        public System.Collections.Generic.IReadOnlyList<AnimationSectionDefinition> Sections { get; }
+        public System.Collections.Generic.IReadOnlyList<RuntimeTrackDefinition> RuntimeTracks { get; }
 
         /// <summary>
         /// 混入时长：从施放前的动画过渡到本动画所用的秒数（时间轴时间，与标记点一样随实际时长缩放）。
@@ -139,7 +148,7 @@ namespace ZFramework.GAS.Unity
             AnimationTagWindow[] tagWindows = null,
             AnimationTaskEvent[] taskEvents = null,
             float blendIn = 0f,
-            float blendOut = 0f)
+            float blendOut = 0f, AnimationSectionDefinition[] sections = null, RuntimeTrackDefinition[] runtimeTracks = null)
         {
             if (string.IsNullOrEmpty(clipName))
             {
@@ -166,6 +175,19 @@ namespace ZFramework.GAS.Unity
             Loop = loop;
             BlendIn = blendIn;
             BlendOut = blendOut;
+            var sectionCopy = sections == null ? Array.Empty<AnimationSectionDefinition>() : (AnimationSectionDefinition[])sections.Clone();
+            var trackCopy = runtimeTracks == null ? Array.Empty<RuntimeTrackDefinition>() : (RuntimeTrackDefinition[])runtimeTracks.Clone();
+            var ids = new System.Collections.Generic.HashSet<string>();
+            foreach (var section in sectionCopy)
+                if (section == null || string.IsNullOrEmpty(section.Id) || !ids.Add(section.Id) ||
+                    !(section.Start >= 0 && section.End > section.Start && section.End <= duration) ||
+                    section.InputStart < section.Start || section.InputEnd > section.End || section.InputEnd < section.InputStart)
+                    throw new ArgumentException("Section ID、时间范围或输入缓冲窗口无效。", nameof(sections));
+            foreach (var section in sectionCopy)
+                if (!string.IsNullOrEmpty(section.Next) && !ids.Contains(section.Next)) throw new ArgumentException("Section 下一段引用不存在: " + section.Next);
+            foreach (var track in trackCopy)
+                if (track == null || !(track.Start >= 0 && track.End > track.Start && track.End <= duration)) throw new ArgumentException("运行期轨道时间范围无效。");
+            Sections = Array.AsReadOnly(sectionCopy); RuntimeTracks = Array.AsReadOnly(trackCopy);
 
             Markers = markers == null || markers.Length == 0 ? NoMarkers : (AnimationMarker[])markers.Clone();
             CueRegions = cueRegions == null || cueRegions.Length == 0 ? NoRegions : (AnimationCueRegion[])cueRegions.Clone();

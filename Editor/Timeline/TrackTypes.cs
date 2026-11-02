@@ -32,6 +32,7 @@ namespace ZFramework.GAS.Editor
             : (e.FindPropertyRelative("start").floatValue, e.FindPropertyRelative("end").floatValue);
         public virtual void WriteSpan(SerializedProperty e, float start, float end)
         {
+            if (!float.IsFinite(start) || !float.IsFinite(end)) throw new ArgumentOutOfRangeException(nameof(start), "时间必须为有限数。");
             e.FindPropertyRelative(Shape == TrackElementShape.Point ? "time" : "start").floatValue = start;
             if (Shape == TrackElementShape.Range) e.FindPropertyRelative("end").floatValue = end;
         }
@@ -92,6 +93,33 @@ namespace ZFramework.GAS.Editor
         public override string Label(SerializedProperty e) => e.FindPropertyRelative("spawner").managedReferenceValue?.GetType().Name ?? "选择任务类型";
         public override void InitializeNew(SerializedProperty e, float time, Object dropped)
         { base.InitializeNew(e, time, dropped); e.FindPropertyRelative("spawner").managedReferenceValue = new ProjectileSpawner(); }
+    }
+    public sealed class SectionTrack : TrackType
+    {
+        public override string DisplayName => "动画段";
+        public override Color Color => SkillColors.Animation;
+        public override string PropertyPath => "sections";
+        public override TrackElementShape Shape => TrackElementShape.Range;
+        public override string Label(SerializedProperty e) => e.FindPropertyRelative("displayName").stringValue;
+        public override void InitializeNew(SerializedProperty e, float time, Object dropped)
+        {
+            base.InitializeNew(e, time, dropped);
+            e.FindPropertyRelative("displayName").stringValue = "新动画段";
+            e.FindPropertyRelative("end").floatValue = time + .5f;
+            e.FindPropertyRelative("nextSectionId").stringValue = "";
+            e.FindPropertyRelative("inputBufferStart").floatValue = time;
+            e.FindPropertyRelative("inputBufferEnd").floatValue = time + .5f;
+        }
+    }
+    public sealed class RuntimeTrack : TrackType
+    {
+        public override string DisplayName => "曲线 / 扩展轨道";
+        public override Color Color => SkillColors.Task;
+        public override string PropertyPath => "runtimeTracks";
+        public override TrackElementShape Shape => TrackElementShape.Range;
+        public override string Label(SerializedProperty element) => element.managedReferenceValue is CurveSkillTrack curve ? curve.channelId : element.managedReferenceValue?.GetType().Name ?? "未配置";
+        public override void InitializeNew(SerializedProperty element, float time, Object dropped)
+        { element.managedReferenceValue = new CurveSkillTrack { start = time, end = time + .25f }; base.InitializeNew(element, time, dropped); element.FindPropertyRelative("end").floatValue = time + .25f; }
     }
     public static class TrackTypeRegistry
     {

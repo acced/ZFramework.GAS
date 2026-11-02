@@ -37,6 +37,9 @@ namespace ZFramework.GAS
         AttributeScaled,
         /// <summary>由施加方在 Spec 上按键名提供。</summary>
         SetByCaller,
+        Parameter,
+        LevelTable,
+        Calculation,
     }
 
     public enum MagnitudeCapture
@@ -59,10 +62,13 @@ namespace ZFramework.GAS
         public readonly AttributeId CaptureAttribute;
         public readonly MagnitudeCapture CaptureFrom;
         public readonly string CallerKey;
+        internal readonly float[] Levels;
+        internal readonly IEffectCalculation Calculation;
 
         private EffectMagnitude(
             MagnitudeKind kind, float constant, float coefficient,
-            AttributeId captureAttribute, MagnitudeCapture captureFrom, string callerKey)
+            AttributeId captureAttribute, MagnitudeCapture captureFrom, string callerKey,
+            float[] levels = null, IEffectCalculation calculation = null)
         {
             Kind = kind;
             Constant = constant;
@@ -70,6 +76,8 @@ namespace ZFramework.GAS
             CaptureAttribute = captureAttribute;
             CaptureFrom = captureFrom;
             CallerKey = callerKey;
+            Levels = levels;
+            Calculation = calculation;
         }
 
         public static EffectMagnitude Fixed(float value)
@@ -82,6 +90,16 @@ namespace ZFramework.GAS
         public static EffectMagnitude FromCaller(string key)
             => new(MagnitudeKind.SetByCaller, 0f, 0f, default, default,
                 key ?? throw new ArgumentNullException(nameof(key)));
+
+        public static EffectMagnitude FromParameter(string id, float coefficient = 1, float constant = 0)
+            => new(MagnitudeKind.Parameter, constant, coefficient, default, default,
+                id ?? throw new ArgumentNullException(nameof(id)));
+        public static EffectMagnitude ByLevel(params float[] values)
+            => new(MagnitudeKind.LevelTable, 0, 0, default, default, null,
+                values != null && values.Length > 0 ? (float[])values.Clone() : throw new ArgumentException("Empty level table."));
+        public static EffectMagnitude FromCalculation(IEffectCalculation calculation)
+            => new(MagnitudeKind.Calculation, 0, 0, default, default, null, null,
+                calculation ?? throw new ArgumentNullException(nameof(calculation)));
     }
 
     public readonly struct EffectModifier
@@ -185,6 +203,8 @@ namespace ZFramework.GAS
         public EffectDurationPolicy DurationPolicy { get; }
         /// <summary>仅 <see cref="EffectDurationPolicy.Duration"/> 有效，单位秒。</summary>
         public float Duration { get; }
+        public EffectMagnitude? DurationMagnitude { get; }
+        public EffectMagnitude? PeriodMagnitude { get; }
         /// <summary>设置后时长改从来源的该属性读取，覆盖 <see cref="Duration"/>（如冷却时长取攻击间隔）。</summary>
         public AttributeId? DurationAttribute { get; }
         /// <summary>周期间隔秒；<c>&lt;= 0</c> 表示非周期效果。</summary>
@@ -210,7 +230,7 @@ namespace ZFramework.GAS
         /// <summary>在本效果的特定时机施加到同一目标的子效果。</summary>
         public ConditionalEffect[] ConditionalEffects { get; }
 
-        public bool IsPeriodic => Period > 0f || PeriodAttribute.HasValue;
+        public bool IsPeriodic => Period > 0f || PeriodAttribute.HasValue || PeriodMagnitude.HasValue;
 
         public GameplayEffectDefinition(
             EffectDurationPolicy durationPolicy,
@@ -223,10 +243,14 @@ namespace ZFramework.GAS
             bool executePeriodicOnApplication = false,
             GameplayTagSet cueTags = default,
             AttributeId? durationAttribute = null,
-            ConditionalEffect[] conditionalEffects = null)
+            ConditionalEffect[] conditionalEffects = null,
+            EffectMagnitude? durationMagnitude = null,
+            EffectMagnitude? periodMagnitude = null)
         {
             DurationPolicy = durationPolicy;
             Duration = duration;
+            DurationMagnitude = durationMagnitude;
+            PeriodMagnitude = periodMagnitude;
             DurationAttribute = durationAttribute;
             Modifiers = modifiers ?? NoModifiers;
             Tags = tags;

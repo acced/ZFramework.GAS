@@ -1,5 +1,6 @@
 using GameplayTags;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.ExceptionServices;
 using System.Threading;
@@ -99,7 +100,7 @@ namespace ZFramework.GAS
         }
 
         private EffectApplicationResult ApplyCore(
-            in GameplayEffectSpec spec, out ActiveGameplayEffectHandle handle)
+            GameplayEffectSpec spec, out ActiveGameplayEffectHandle handle)
         {
             handle = default;
             GameplayEffectDefinition definition = spec.Definition;
@@ -110,15 +111,21 @@ namespace ZFramework.GAS
                 return EffectApplicationResult.Blocked;
             }
 
+            // Only retained effects/chains need a caller snapshot. Blocked and simple instant hits
+            // keep their allocation-free path; descendants share one frozen dictionary/comparer.
+            if (definition.DurationPolicy != EffectDurationPolicy.Instant || definition.ConditionalEffects.Length != 0)
+                spec = spec.Snapshot();
+
             if (definition.DurationPolicy == EffectDurationPolicy.Instant)
             {
                 ApplyInstant(spec, stackCount: 1);
                 RemoveEffectsWithAnyTag(tags.RemoveEffectsWith);
                 DispatchCues(definition, GameplayCueEvent.Executed, spec.Source, 1);
-                ApplyConditional(definition, EffectTrigger.Applied, spec.SourceAttributes, spec.Source);
+                ApplyConditional(spec, EffectTrigger.Applied);
                 return EffectApplicationResult.Completed;
             }
 
+            float period = ResolvePeriod(spec), duration = ResolveDuration(spec);
             ActiveGameplayEffect existing = FindStackable(spec);
             if (existing != null)
             {
@@ -144,7 +151,8 @@ namespace ZFramework.GAS
             }
 
             ActiveGameplayEffect active = RentEffect(
-                definition, spec.Source, spec.SourceAttributes, ResolvePeriod(spec), ResolveDuration(spec));
+                definition, spec.Source, spec.SourceAttributes, period, duration);
+            active.Spec = spec;
             handle = active.Handle;
 
             // Prepare：先解析全部数值。此时 active 尚未发布到 _active，也没有修改属性或标签；
@@ -226,7 +234,7 @@ namespace ZFramework.GAS
 
             // 回调可立即删除 active；operation scope 保证它在本调用退出前不会被复用。
             DispatchCues(definition, GameplayCueEvent.OnActive, spec.Source, active.StackCount);
-            ApplyConditional(definition, EffectTrigger.Applied, spec.SourceAttributes, spec.Source);
+            ApplyConditional(spec, EffectTrigger.Applied);
 
             if (definition.ExecutePeriodicOnApplication && active.ResolvedPeriod > 0f && !active.PendingRemove)
             {
@@ -603,7 +611,7 @@ namespace ZFramework.GAS
 
             try
             {
-                ApplyConditional(effect.Definition, EffectTrigger.Removed, effect.SourceAttributes, effect.Source);
+                ApplyConditional(effect.Spec, EffectTrigger.Removed);
             }
             catch (Exception error)
             {
@@ -681,9 +689,9 @@ namespace ZFramework.GAS
         }
 
         private void ApplyConditional(
-            GameplayEffectDefinition definition, EffectTrigger trigger, AttributeSet sourceAttributes, object source)
+            in GameplayEffectSpec spec, EffectTrigger trigger)
         {
-            ConditionalEffect[] children = definition.ConditionalEffects;
+            ConditionalEffect[] children = spec.Definition.ConditionalEffects;
             if (children.Length == 0)
             {
                 return;
@@ -703,7 +711,7 @@ namespace ZFramework.GAS
                     ref readonly ConditionalEffect child = ref children[i];
                     if (child.Trigger == trigger)
                     {
-                        Apply(new GameplayEffectSpec(child.Effect, sourceAttributes, source));
+                        Apply(spec.ForChild(child.Effect));
                     }
                 }
             }
@@ -756,32 +764,8 @@ namespace ZFramework.GAS
             effect.PeriodTimer = 0f;
         }
 
-        private float ResolvePeriod(in GameplayEffectSpec spec)
-        {
-            GameplayEffectDefinition definition = spec.Definition;
-            if (definition.PeriodAttribute.HasValue)
-            {
-                float fromAttribute = spec.SourceAttributes?.GetCurrent(definition.PeriodAttribute.Value) ?? 0f;
-                return fromAttribute > 0f ? fromAttribute : 0f;
-            }
-
-            return definition.Period > 0f ? definition.Period : 0f;
-        }
-
-        private static float ResolveDuration(in GameplayEffectSpec spec)
-        {
-            GameplayEffectDefinition definition = spec.Definition;
-            if (definition.DurationAttribute.HasValue)
-            {
-                float fromAttribute = spec.SourceAttributes?.GetCurrent(definition.DurationAttribute.Value) ?? 0f;
-                if (fromAttribute > 0f)
-                {
-                    return fromAttribute;
-                }
-            }
-
-            return definition.Duration;
-        }
+        private float ResolvePeriod(in GameplayEffectSpec spec) => spec.ResolvePeriod(_attributes);
+        private float ResolveDuration(in GameplayEffectSpec spec) => spec.ResolveDuration(_attributes);
 
         private void PrepareModifierAttributes(ActiveGameplayEffect effect, EffectModifier[] modifiers)
         {
@@ -833,22 +817,28 @@ namespace ZFramework.GAS
             }
 
             DispatchCues(effect.Definition, GameplayCueEvent.Executed, effect.Source, effect.StackCount);
-            ApplyConditional(effect.Definition, EffectTrigger.Periodic, effect.SourceAttributes, effect.Source);
+            ApplyConditional(effect.Spec, EffectTrigger.Periodic);
         }
 
         private void ApplyInstant(in GameplayEffectSpec spec, int stackCount)
         {
             EffectModifier[] modifiers = spec.Definition.Modifiers;
-            for (int i = 0; i < modifiers.Length; i++)
+            float[] rented = null;
+            Span<float> resolved = modifiers.Length <= 128 ? stackalloc float[modifiers.Length]
+                : (rented = ArrayPool<float>.Shared.Rent(modifiers.Length));
+            try
             {
-                ref readonly EffectModifier modifier = ref modifiers[i];
-                if (!_attributes.TryGet(modifier.Target, out GameplayAttribute attribute))
+                // Each nested application owns its buffer. Resolve against the pre-effect state
+                // before the first write/notification, just like a persistent effect's prepare phase.
+                for (int i = 0; i < modifiers.Length; i++) resolved[i] = spec.Resolve(modifiers[i].Magnitude, _attributes);
+                for (int i = 0; i < modifiers.Length; i++)
                 {
-                    continue;
+                    ref readonly EffectModifier modifier = ref modifiers[i];
+                    if (_attributes.TryGet(modifier.Target, out GameplayAttribute attribute))
+                        ApplyToBase(attribute, modifier.Operation, resolved[i], stackCount);
                 }
-
-                ApplyToBase(attribute, modifier.Operation, spec.Resolve(modifier.Magnitude, _attributes), stackCount);
             }
+            finally { if (rented != null) ArrayPool<float>.Shared.Return(rented); }
         }
 
         private static void ApplyToBase(

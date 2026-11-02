@@ -62,6 +62,8 @@ namespace ZFramework.GAS.Unity
         private readonly AttributeSet _sourceAttributes;
         private readonly object _source;
         private readonly AbilitySystemComponent _caster;
+        private readonly int _casterGeneration;
+        private EffectEvaluationContext _values;
         private readonly Action<ProjectileTask> _onFinished;
         private readonly AbilitySystemComponent[] _hitBuffer;
         private readonly List<AbilitySystemComponent> _alreadyHit;
@@ -81,7 +83,7 @@ namespace ZFramework.GAS.Unity
             TargetSearcher searcher,
             AttributeSet sourceAttributes,
             object source,
-            Action<ProjectileTask> onFinished = null)
+            Action<ProjectileTask> onFinished = null, EffectEvaluationContext context = null)
         {
             if (config.Visual == null)
             {
@@ -104,9 +106,11 @@ namespace ZFramework.GAS.Unity
             _config = config;
             _searcher = searcher ?? throw new ArgumentNullException(nameof(searcher));
             _sourceAttributes = sourceAttributes;
-            _source = source;
+            _source = source is AbilitySystemComponent owner ? owner.SourceIdentity : source;
+            _values = context;
             // 发射点通常与发射者重合，不排除自己就会在第一次碰撞检测时打中自己。
-            _caster = source as AbilitySystemComponent;
+            _caster = source as AbilitySystemComponent ?? (source as AbilitySourceIdentity)?.Owner;
+            _casterGeneration = _caster?.Generation ?? 0;
             _onFinished = onFinished;
 
             _hitBuffer = new AbilitySystemComponent[config.Piercing ? 16 : 1];
@@ -120,6 +124,7 @@ namespace ZFramework.GAS.Unity
 
         /// <summary>视觉体，供调用方在结束回调里回收。</summary>
         public Transform Visual => _config.Visual;
+        protected override void OnBegin() => _values = (_values ?? Ability.EvaluationContext ?? new EffectEvaluationContext(Ability.Level)).CaptureSource(_sourceAttributes);
 
         protected override void OnTick(float deltaTime)
         {
@@ -195,7 +200,8 @@ namespace ZFramework.GAS.Unity
                 return false;
             }
 
-            int found = _searcher.Circle(_position, _config.CollisionRadius, _config.CollisionMask, _hitBuffer, _caster);
+            int found = _searcher.Circle(_position, _config.CollisionRadius, _config.CollisionMask, _hitBuffer,
+                _caster != null && _caster.Generation == _casterGeneration ? _caster : null);
             for (int i = 0; i < found; i++)
             {
                 AbilitySystemComponent target = _hitBuffer[i];
@@ -204,7 +210,7 @@ namespace ZFramework.GAS.Unity
                     continue;
                 }
 
-                target.Effects.Apply(new GameplayEffectSpec(_config.ImpactEffect, _sourceAttributes, _source));
+                target.Effects.Apply(new GameplayEffectSpec(_config.ImpactEffect, _sourceAttributes, _source, context: _values));
                 HitCount++;
 
                 // 施加效果可能连锁取消发射者的能力（击杀触发的打断等），本任务随之结束。

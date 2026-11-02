@@ -252,9 +252,20 @@ namespace ZFramework.GAS.Editor.Tests
                 var magnitude = array.GetArrayElementAtIndex(0).FindPropertyRelative("magnitude");
                 magnitude.FindPropertyRelative("kind").enumValueIndex = 0;
                 magnitude.FindPropertyRelative("captureAttributeId").intValue = 9999;
+                so.FindProperty("useDurationMagnitude").boolValue = true;
+                so.FindProperty("usePeriodMagnitude").boolValue = true;
+                so.FindProperty("durationMagnitude.targetAttributeId").intValue = 9999;
+                so.FindProperty("periodMagnitude.targetAttributeId").intValue = 9999;
             });
             using var validation = new ValidationService(_doc); validation.ValidateNow(true);
             Assert.IsFalse(validation.Issues.Any(i => i.Id == "GAS022" || i.Id == "GAS021"));
+            Edit(effect, so =>
+            {
+                so.FindProperty("durationMagnitude.kind").enumValueIndex = (int)MagnitudeKind.Calculation;
+                so.FindProperty("durationMagnitude.captureAttributeId").intValue = 99;
+            });
+            validation.ValidateNow(true);
+            Assert.IsTrue(validation.Issues.Any(i => i.Id == "GAS021" && i.PropertyPath == "durationMagnitude.targetAttributeId"));
         }
         [Test]
         public void ExternalizeUndoRedoRetainsExternalPath()
@@ -294,6 +305,11 @@ namespace ZFramework.GAS.Editor.Tests
             var animation = Animation(); string id = TimelineCommands.Add(_doc, new EventTrack(), .2f);
             var window = SkillEditorWindow.Open(); window.Show(_ability); yield return null; yield return null;
             var timeline = window.rootVisualElement.Q<TimelinePanel>(); timeline.Fit(); yield return null;
+            double layoutDeadline = EditorApplication.timeSinceStartup + 8;
+            bool LaidOut() => timeline.Q<Label>(className: "animation-clip")?.layout.width > 0
+                && float.IsFinite(timeline.Q<VisualElement>(className: "timeline-event").worldBound.x);
+            while (!LaidOut() && EditorApplication.timeSinceStartup < layoutDeadline) { window.Repaint(); yield return null; }
+            Assert.IsTrue(LaidOut(), "时间轴必须先完成真实布局再模拟指针输入。");
             var view = timeline.Q<VisualElement>(className: "timeline-event");
             float pixelsPerSecond = timeline.Q<Label>(className: "animation-clip").layout.width / animation.Duration;
             Vector2 start = view.worldBound.position + new Vector2(8, 10), end = start + new Vector2(pixelsPerSecond * .2f, 0);
@@ -415,7 +431,8 @@ namespace ZFramework.GAS.Editor.Tests
         {
             double until = EditorApplication.timeSinceStartup + 8;
             while (!done() && EditorApplication.timeSinceStartup < until) { window.Repaint(); yield return null; }
-            Assert.IsTrue(done(), "结构图没有在有效尺寸计算完成后排好布局");
+            Assert.IsTrue(done(), "结构图没有在有效尺寸计算完成后排好布局。窗口=" + window.position +
+                " 根=" + window.rootVisualElement.layout + " 状态=" + window.rootVisualElement.Q<SkillGraphView>().LayoutDiagnostics + " 节点=" + string.Join("; ", window.rootVisualElement.Q<SkillGraphView>().nodes.Select(n => n.title + ":" + n.layout + "/" + n.GetPosition())));
             yield return null; yield return null;
         }
         [UnityTest]

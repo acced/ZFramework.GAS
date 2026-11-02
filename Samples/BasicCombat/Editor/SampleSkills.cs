@@ -15,10 +15,37 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
     {
         public const int Health = 1, MaxHealth = 2, Attack = 3, Stamina = 4;
 
-        public static GameplayAbilityAsset[] Create(string folder, GameObject projectileVisual)
+        public static GameplayAbilityAsset[] Create(string folder, GameObject projectileVisual, GameObject guardianPrefab)
         {
             SampleArt.EnsureFolder(folder);
-            return new[] { Slash(folder), Bolt(folder, projectileVisual), Warcry(folder), Sanctuary(folder), Summon(folder) };
+            var skills = new[] { Slash(folder), Bolt(folder, projectileVisual), Warcry(folder), Sanctuary(folder), Summon(folder, guardianPrefab) };
+            ShareSlashModule(folder, skills[0]);
+            return skills;
+        }
+
+        private static void ShareSlashModule(string folder, GameplayAbilityAsset slash)
+        {
+            string sharedFolder = folder + "/Shared"; SampleArt.EnsureFolder(sharedFolder);
+            var parameters = ScriptableObject.CreateInstance<SkillParameterSetAsset>(); parameters.parameters = slash.parameters;
+            AssetDatabase.CreateAsset(parameters, sharedFolder + "/斩击参数.asset");
+            slash.parameters = Array.Empty<SkillParameter>(); slash.parameterSet = parameters;
+            var module = ScriptableObject.CreateInstance<SkillActionModuleAsset>(); module.parameters = parameters;
+            using (var so = new SerializedObject(slash.Animation))
+            {
+                var actions = so.FindProperty("markers.Array.data[0].actions");
+                module.actions = new SkillAction[actions.arraySize];
+                for (int i = 0; i < actions.arraySize; i++) module.actions[i] = (SkillAction)actions.GetArrayElementAtIndex(i).managedReferenceValue;
+                AssetDatabase.CreateAsset(module, sharedFolder + "/扇形斩击动作.asset");
+                var bindings = Array.ConvertAll(parameters.parameters, p => new ModuleParameterBinding { moduleParameterId = p.Id, callerParameterId = p.Id });
+                actions.arraySize = 1; actions.GetArrayElementAtIndex(0).managedReferenceValue = new CallModuleAction { module = module, bindings = bindings };
+                so.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var variant = UnityEngine.Object.Instantiate(slash); variant.displayName = "重斩（共享模块变体）";
+            var overrides = new System.Collections.Generic.List<SkillParameterOverride>();
+            foreach (var parameter in parameters.parameters)
+                if (parameter.displayName == "伤害系数") overrides.Add(new SkillParameterOverride { parameterId = parameter.Id, value = parameter.defaultValue * 1.5f });
+            variant.parameterOverrides = overrides.ToArray();
+            AssetDatabase.CreateAsset(variant, sharedFolder + "/重斩变体.asset"); EditorUtility.SetDirty(slash);
         }
 
         private static GameplayAbilityAsset Slash(string folder)
@@ -26,10 +53,16 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var ability = Ability(folder, "斩击", SampleTags.AbilitySlash);
             var cost = Effect(ability, "消耗 · 体力", EffectDurationPolicy.Instant, 0, so => Modifier(so, Stamina, -10));
             var cooldown = Cooldown(ability, .6f, SampleTags.CooldownSlash);
-            var damage = Effect(ability, "伤害 · 斩击", EffectDurationPolicy.Instant, 0, so => Modifier(so, Health, 0, Attack, -1.2f), SampleTags.CueHit);
+            var damage = Effect(ability, "伤害 · 斩击", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 1.2f), SampleTags.CueHit);
+            var empowered = Effect(ability, "伤害 · 强化斩击", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 2), SampleTags.CueHit);
             var animation = Animation(ability, "动画 · 斩击", "Slash", T.SlashLength, so =>
             {
-                Marker(so, T.SlashHit, "命中", damage, AnimationMarkerTarget.Target);
+                Actions(so, T.SlashHit, "命中", new ConditionalAction {
+                    requiredTags = new[] { new GameplayTags.GameplayTag { m_Name = SampleTags.Empowered } },
+                    whenTrue = new SkillAction[] { new ApplyEffectAction { effect = empowered, targets = new TargetQuery {
+                        kind = TargetQueryKind.Sector, radius = Number(ability, "范围", 3), angle = new SkillNumber(110) } } },
+                    whenFalse = new SkillAction[] { new ApplyEffectAction { effect = damage, targets = new TargetQuery { kind = TargetQueryKind.Sector, radius = Number(ability, "基础范围", 2.5f), angle = new SkillNumber(90) } } }
+                });
                 Region(so, T.SlashTrailStart, T.SlashTrailEnd, SampleTags.CueSwordTrail);
                 Window(so, .12f, .4f, SampleTags.SuperArmor);
                 Window(so, .55f, .85f, SampleTags.ComboWindow);
@@ -42,17 +75,15 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var ability = Ability(folder, "能量弹", SampleTags.AbilityBolt);
             var cost = Effect(ability, "消耗 · 体力", EffectDurationPolicy.Instant, 0, so => Modifier(so, Stamina, -15));
             var cooldown = Cooldown(ability, 1.5f, SampleTags.CooldownBolt);
-            var damage = Effect(ability, "伤害 · 能量弹", EffectDurationPolicy.Instant, 0, so => Modifier(so, Health, -6, Attack, -1.6f), SampleTags.CueHit);
+            var damage = Effect(ability, "伤害 · 能量弹", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 1.6f), SampleTags.CueHit);
             var animation = Animation(ability, "动画 · 能量弹", "Bolt", T.BoltLength, so =>
             {
                 Region(so, T.BoltChargeStart, T.BoltRelease, SampleTags.CueBoltCharge);
-                var tasks = so.FindProperty("taskEvents"); tasks.arraySize = 1;
-                var task = tasks.GetArrayElementAtIndex(0);
-                task.FindPropertyRelative("time").floatValue = T.BoltRelease;
-                task.FindPropertyRelative("spawner").managedReferenceValue = new ProjectileSpawner
-                {
-                    visualPrefab = visual, impactEffect = damage, speed = 13, radius = .3f, curveHeight = .25f, maxDistance = 18,
-                };
+                Actions(so, T.BoltRelease, "发射", new LaunchProjectileAction {
+                    prefab = visual, speed = Number(ability, "速度", 1.2f), radius = .3f, arcHeight = .25f,
+                    lifetime = Number(ability, "寿命", 6),
+                    onHit = new SkillAction[] { new ApplyEffectAction { effect = damage } }
+                });
             }, .12f, .22f);
             return Bind(ability, cost, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
@@ -61,10 +92,10 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         {
             var ability = Ability(folder, "战吼", SampleTags.AbilityWarcry);
             var cooldown = Cooldown(ability, 8, SampleTags.CooldownWarcry);
-            var buff = Effect(ability, "增益 · 战意", EffectDurationPolicy.Duration, 6, so => Modifier(so, Attack, 10));
+            var buff = Effect(ability, "增益 · 战意", EffectDurationPolicy.Duration, 6, so => { Modifier(so, Attack, 10); Tags(so.FindProperty("tags.granted"), SampleTags.Empowered); });
             var animation = Animation(ability, "动画 · 战吼", "Warcry", T.WarcryLength, so =>
             {
-                Marker(so, T.WarcryShout, "怒吼", buff, AnimationMarkerTarget.Self);
+                Actions(so, T.WarcryShout, "怒吼", new ApplyEffectAction { effect = buff, targets = new TargetQuery { kind = TargetQueryKind.Self } });
                 Region(so, T.WarcryAuraStart, T.WarcryLength, SampleTags.CueWarcryAura);
                 Region(so, .2f, .9f, SampleTags.CueGroundTest);
                 Window(so, .2f, .9f, SampleTags.SuperArmor);
@@ -84,21 +115,29 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             });
             var animation = Animation(ability, "动画 · 圣域引导", "Sanctuary", T.SanctuaryLength, so =>
             {
-                Marker(so, T.SanctuaryBegin, "开始引导", heal, AnimationMarkerTarget.Self);
+                Actions(so, T.SanctuaryBegin, "开始引导", new CreateAreaAction {
+                    targets = new TargetQuery { kind = TargetQueryKind.Circle, excludeSelf = false, radius = Number(ability, "范围", 3) },
+                    duration = Number(ability, "引导时长", T.SanctuaryEnd - T.SanctuaryBegin), enterEffect = heal,
+                    removeOnExit = true, ownership = SkillTaskOwnership.Ability
+                });
                 Region(so, T.SanctuaryBegin, T.SanctuaryEnd, SampleTags.CueSanctuary);
                 Window(so, T.SanctuaryBegin, T.SanctuaryEnd, SampleTags.Channeling);
             }, .2f, .35f);
             return Bind(ability, null, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
 
-        private static GameplayAbilityAsset Summon(string folder)
+        private static GameplayAbilityAsset Summon(string folder, GameObject guardianPrefab)
         {
             var ability = Ability(folder, "召唤", SampleTags.AbilitySummon);
             var cooldown = Cooldown(ability, 12, SampleTags.CooldownSummon);
+            var pulse = Effect(ability, "伤害 · 召唤领域", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, .4f), SampleTags.CueHit);
             var animation = Animation(ability, "动画 · 召唤", "Summon", T.SummonLength, so =>
             {
-                // 纯回调事件：召唤什么、召唤到哪由宿主决定。
-                Marker(so, T.SummonStrike, "召唤", null, AnimationMarkerTarget.Target);
+                Actions(so, T.SummonStrike, "召唤", new SpawnPrefabAction {
+                    prefab = guardianPrefab, offset = T.SummonPoint, lifetime = Number(ability, "召唤寿命", 5), count = Number(ability, "召唤数量", 1), spacing = Vector3.right
+                }, new CreateAreaAction { targets = new TargetQuery { kind = TargetQueryKind.TargetPoint, radius = Number(ability, "领域范围", 2) },
+                    duration = Number(ability, "领域寿命", 5), period = Number(ability, "领域周期", 1), ownership = SkillTaskOwnership.Scene,
+                    onPeriod = new SkillAction[] { new ApplyEffectAction { effect = pulse } } });
                 Region(so, T.SummonCircleStart, T.SummonCircleEnd, SampleTags.CueSummon);
             }, .15f, .28f);
             return Bind(ability, null, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
@@ -110,6 +149,8 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         {
             var ability = ScriptableObject.CreateInstance<GameplayAbilityAsset>();
             AssetDatabase.CreateAsset(ability, folder + "/" + name + ".asset");
+            ability.displayName = name;
+            ability.description = "由动作、参数和时间轴配置的技能；修改标记显示名不会改变行为。";
             Edit(ability, so => Tags(so.FindProperty("abilityTags"), abilityTag));
             return ability;
         }
@@ -129,7 +170,43 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         }
 
         private static GameplayEffectAsset Cooldown(GameplayAbilityAsset owner, float seconds, string tag)
-            => Effect(owner, $"冷却 · {seconds:0.#}s", EffectDurationPolicy.Duration, seconds, so => Tags(so.FindProperty("tags.granted"), tag));
+        {
+            var number = Number(owner, "冷却", seconds);
+            return Effect(owner, "冷却", EffectDurationPolicy.Duration, seconds, so => {
+                Tags(so.FindProperty("tags.granted"), tag);
+                so.FindProperty("useDurationMagnitude").boolValue = true;
+                so.FindProperty("durationMagnitude.kind").enumValueIndex = (int)MagnitudeKind.Parameter;
+                so.FindProperty("durationMagnitude.parameterId").stringValue = number.parameterId;
+            });
+        }
+        private static SkillNumber Number(GameplayAbilityAsset owner, string name, float value)
+        {
+            var parameter = new SkillParameter { displayName = name, defaultValue = value };
+            if (name == "伤害系数") parameter.levels = new[] { value, value * 1.25f, value * 1.5f };
+            var list = new System.Collections.Generic.List<SkillParameter>(owner.parameters) { parameter };
+            owner.parameters = list.ToArray(); EditorUtility.SetDirty(owner);
+            return new SkillNumber(value) { parameterId = parameter.Id };
+        }
+        private static void Actions(SerializedObject so, float time, string name, params SkillAction[] actions)
+        {
+            Marker(so, time, name, null, AnimationMarkerTarget.Self);
+            var list = so.FindProperty("markers"); var item = list.GetArrayElementAtIndex(list.arraySize - 1).FindPropertyRelative("actions");
+            item.arraySize = actions.Length;
+            for (int i = 0; i < actions.Length; i++) item.GetArrayElementAtIndex(i).managedReferenceValue = actions[i];
+        }
+
+        private static void Damage(SerializedObject so, GameplayAbilityAsset ability, float scale)
+        {
+            var number = Number(ability, "伤害系数", scale);
+            Modifier(so, Health, 0, Attack, 1);
+            var magnitude = so.FindProperty("modifiers").GetArrayElementAtIndex(0).FindPropertyRelative("magnitude");
+            magnitude.FindPropertyRelative("kind").enumValueIndex = (int)MagnitudeKind.Calculation;
+            magnitude.FindPropertyRelative("parameterId").stringValue = number.parameterId;
+            magnitude.FindPropertyRelative("targetAttributeId").intValue = 5;
+            magnitude.FindPropertyRelative("minimum").floatValue = 0;
+            magnitude.FindPropertyRelative("maximum").floatValue = 99999;
+            magnitude.FindPropertyRelative("resultScale").floatValue = -1;
+        }
 
         /// <summary>追加一条修改器；<paramref name="captureAttribute"/> 不小于 0 时按来源属性缩放。</summary>
         private static void Modifier(SerializedObject so, int attribute, float constant, int captureAttribute = -1, float coefficient = 1)

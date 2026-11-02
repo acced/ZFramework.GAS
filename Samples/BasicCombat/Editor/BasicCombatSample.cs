@@ -18,6 +18,8 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
     public static class BasicCombatSample
     {
         public const string Folder = "Assets/GAS Samples/BasicCombat";
+        /// <summary>CI entry point: Unity -executeMethod ZFramework.GAS.Samples.BasicCombat.Editor.BasicCombatSample.RegenerateForValidation.</summary>
+        public static void RegenerateForValidation() => Create(true);
 
         [MenuItem("Tools/ZFramework GAS/创建 BasicCombat 示例")]
         private static void CreateFromMenu()
@@ -80,10 +82,19 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var dummyPrefab = SavePrefab(dummy, folder + "/Prefabs/TrainingDummy.prefab");
 
             var bolt = SavePrefab(SampleVfx.BuildProjectile(art), folder + "/Prefabs/ArcaneBolt.prefab");
-            var skills = SampleSkills.Create(folder + "/Skills", bolt);
+            var ghost = Object.Instantiate(knightPrefab); ghost.name = "Guardian";
+            foreach (var visual in ghost.GetComponentsInChildren<CueVisual>(true)) visual.gameObject.SetActive(false);
+            foreach (var behaviour in ghost.GetComponentsInChildren<MonoBehaviour>(true)) Object.DestroyImmediate(behaviour);
+            var ghostMaterial = art.Additive("Vfx_Guardian", null, "#9e61ff");
+            foreach (var renderer in ghost.GetComponentsInChildren<MeshRenderer>()) renderer.sharedMaterial = ghostMaterial;
+            var guardian = SavePrefab(ghost, folder + "/Prefabs/Guardian.prefab");
+            var skills = SampleSkills.Create(folder + "/Skills", bolt, guardian);
+            var abilitySet = ScriptableObject.CreateInstance<AbilitySetAsset>();
+            abilitySet.abilities = skills.Select(skill => new AbilitySetAsset.Entry { skill = skill }).ToArray();
+            AssetDatabase.CreateAsset(abilitySet, folder + "/BasicCombatAbilities.asset");
             AssetDatabase.SaveAssets();
             // 建场景可能卸载未被引用的资产，写布局又会重新导入技能：此后一律按路径重新加载。
-            var paths = skills.Select(AssetDatabase.GetAssetPath).ToArray();
+            var paths = skills.Select(AssetDatabase.GetAssetPath).Concat(new[] { folder + "/Skills/Shared/重斩变体.asset" }).ToArray();
             string knightPath = AssetDatabase.GetAssetPath(knightPrefab);
             SceneBuilder.Build(scenePath, art, palette, knightPrefab, dummyPrefab, skills, replacementScene);
             knightPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(knightPath);
@@ -121,6 +132,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 new AttributeCatalogEntry { id = SampleSkills.MaxHealth, displayName = "最大生命", category = "示例" },
                 new AttributeCatalogEntry { id = SampleSkills.Attack, displayName = "攻击", category = "示例" },
                 new AttributeCatalogEntry { id = SampleSkills.Stamina, displayName = "体力", category = "示例" },
+                new AttributeCatalogEntry { id = 5, displayName = "护甲", category = "示例" },
             };
             AssetDatabase.CreateAsset(catalog, folder + "/Attributes.asset");
             AttributeCatalog.Invalidate();

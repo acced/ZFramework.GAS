@@ -23,18 +23,26 @@ namespace ZFramework.GAS.Unity
         private readonly Action<AnimationTask> _onFinished;
         private readonly bool[] _regionOpen;
         private readonly int[] _windowTagsAdded;
-        private readonly TimelineTaskContext _taskContext;
+        private TimelineTaskContext _taskContext;
+        private EffectEvaluationContext _effectValues;
         private readonly Boundary[] _boundaries;
         private int _nextBoundary;
         private readonly struct Boundary
         {
             /// <summary>构造完成后是本次播放的实际秒数（已缩放并夹到 <see cref="Duration"/>）。</summary>
             public readonly float Time;
+            public readonly float AuthoredTime;
             public readonly int Kind, Index;
-            public Boundary(float time, int kind, int index) { Time = time; Kind = kind; Index = index; }
+            public Boundary(float time, int kind, int index, float? authoredTime = null) { Time = time; AuthoredTime = authoredTime ?? time; Kind = kind; Index = index; }
         }
 
         private float _cycleTime;
+        private int _section = -1, _jumpVersion;
+        private string _queuedSection;
+        private readonly IRuntimeTrackHandler[] _trackHandlers;
+        private readonly bool[] _trackOpen;
+        private readonly bool[] _trackDone;
+        public string SectionId => _section >= 0 ? _definition.Sections[_section].Id : null;
 
 
 
@@ -81,11 +89,14 @@ namespace ZFramework.GAS.Unity
             _onFinished = onFinished;
             _regionOpen = definition.CueRegions.Length > 0 ? new bool[definition.CueRegions.Length] : NoRegions;
             _windowTagsAdded = new int[definition.TagWindows.Length];
-            _taskContext = taskContext;
+            _taskContext = taskContext?.Snapshot();
+            _trackHandlers = new IRuntimeTrackHandler[definition.RuntimeTracks.Count]; _trackOpen = new bool[_trackHandlers.Length]; _trackDone = new bool[_trackHandlers.Length];
             if (definition.TaskEvents.Length > 0 && taskContext == null)
                 throw new ArgumentNullException(nameof(taskContext), "Task events require host scene services.");
-            _boundaries = new Boundary[definition.Markers.Length + definition.CueRegions.Length * 2 + definition.TagWindows.Length * 2 + definition.TaskEvents.Length];
+            _boundaries = new Boundary[definition.Markers.Length + definition.CueRegions.Length * 2 + definition.TagWindows.Length * 2 + definition.TaskEvents.Length + _trackHandlers.Length * 2];
             int b = 0;
+            for (int i = 0; i < _trackHandlers.Length; i++)
+            { _boundaries[b++] = new Boundary(definition.RuntimeTracks[i].Start, 6, i); _boundaries[b++] = new Boundary(definition.RuntimeTracks[i].End, 7, i); }
             for (int i = 0; i < definition.TagWindows.Length; i++)
             {
                 var w = definition.TagWindows[i];
@@ -123,7 +134,7 @@ namespace ZFramework.GAS.Unity
             for (int i = 0; i < _boundaries.Length; i++)
             {
                 Boundary authored = _boundaries[i];
-                _boundaries[i] = new Boundary(Math.Min(authored.Time * scale, Duration), authored.Kind, authored.Index);
+                _boundaries[i] = new Boundary(ToActual(authored.Time), authored.Kind, authored.Index, authored.Time);
             }
         }
 
@@ -135,9 +146,76 @@ namespace ZFramework.GAS.Unity
 
         /// <summary>当前这一圈的归一化进度（0~1）。</summary>
         public float NormalizedTime => _cycleTime / Duration;
+        private float ToActual(float authored) => Math.Min(authored * (Duration / _definition.Duration), Duration);
+
+        protected override void OnBegin()
+        {
+            _effectValues = (_taskContext?.Execution?.Values ?? Ability.EvaluationContext ?? new EffectEvaluationContext(Ability.Level)).CaptureSource(Ability.Owner.Attributes);
+            bool configured = _trackHandlers.Length > 0 || _definition.TaskEvents.Length > 0;
+            foreach (var marker in _definition.Markers) configured |= marker.Actions.Count > 0;
+            if (configured && _taskContext?.Execution == null)
+            {
+                var execution = new SkillExecutionContext(DefinitionSource.Of(Ability.Definition) as GameplayAbilityAsset, Ability, _target, _effectValues, _taskContext);
+                _taskContext = execution.Services;
+            }
+            for (int i = 0; i < _trackHandlers.Length; i++) _trackHandlers[i] = _definition.RuntimeTracks[i].Create(_taskContext.Execution);
+            if (_definition.Sections.Count > 0) JumpToSection(_definition.Sections[0].Id);
+        }
+
+        public bool QueueSection(string id)
+        {
+            if (!IsActive || _section < 0 || FindSection(id) < 0) return false;
+            var section = _definition.Sections[_section];
+            if (_cycleTime < ToActual(section.InputStart) || _cycleTime > ToActual(section.InputEnd)) return false;
+            _queuedSection = id; return true;
+        }
+        private int FindSection(string id)
+        { for (int i = 0; i < _definition.Sections.Count; i++) if (_definition.Sections[i].Id == id) return i; return -1; }
+        public bool JumpToSection(string id)
+        {
+            int index = FindSection(id); if (!IsActive || index < 0) return false;
+            float destination = ToActual(_definition.Sections[index].Start);
+            int consumed = destination == _cycleTime ? _nextBoundary : 0;
+            CloseTimelineState(true);
+            if (!IsActive) return false;
+            _section = index; _queuedSection = null; _jumpVersion++;
+            float time = _definition.Sections[index].Start;
+            for (int i = 0; i < _trackDone.Length; i++) _trackDone[i] = _definition.RuntimeTracks[i].End <= time;
+            _cycleTime = destination;
+            _nextBoundary = 0;
+            while (_nextBoundary < _boundaries.Length && _boundaries[_nextBoundary].Time < _cycleTime) _nextBoundary++;
+            _nextBoundary = Math.Max(_nextBoundary, consumed);
+            // Restore only windows covering the destination. Never execute skipped markers.
+            for (int i = 0; i < _definition.TagWindows.Length; i++)
+            {
+                var window = _definition.TagWindows[i];
+                if ((window.Start < time || WasConsumed(0, i)) && (window.End < 0 || window.End > time))
+                    for (int j = 0; j < window.Tags.Count && IsActive; j++) { _windowTagsAdded[i]++; Ability.Owner.OwnedTags.AddTag(window.Tags[j]); }
+            }
+            for (int i = 0; i < _definition.CueRegions.Length && IsActive; i++)
+            {
+                var region = _definition.CueRegions[i];
+                if ((region.Start < time || WasConsumed(1, i)) && (region.End < 0 || region.End > time)) { _regionOpen[i] = true; DispatchCue(region.CueTag, GameplayCueEvent.OnActive); }
+            }
+            if (_driver is ISeekableAnimationDriver seekable) seekable.Seek(NormalizedTime);
+            else _driver.Advance(NormalizedTime);
+            SampleTracks(time);
+            return IsActive;
+            bool WasConsumed(int kind, int item)
+            {
+                for (int b = 0; b < consumed; b++) if (_boundaries[b].Kind == kind && _boundaries[b].Index == item) return true;
+                return false;
+            }
+        }
 
         protected override void OnTick(float deltaTime)
         {
+            try { Tick(deltaTime); }
+            catch (Exception exception) { _taskContext?.Execution?.Fail(exception, _taskContext.Execution.CurrentActionId); throw; }
+        }
+        private void Tick(float deltaTime)
+        {
+            if (_section >= 0) { TickSections(deltaTime); return; }
             _cycleTime += deltaTime;
 
             while (true)
@@ -153,6 +231,7 @@ namespace ZFramework.GAS.Unity
                 }
 
                 _driver.Advance(head / Duration);
+                SampleTracks(head / Duration * _definition.Duration);
                 if (!IsActive) return;
 
                 if (_cycleTime < Duration)
@@ -168,15 +247,72 @@ namespace ZFramework.GAS.Unity
 
                 // 循环动画不自行结束，由能力结束它。每圈重新触发标记点与区间。
                 _cycleTime -= Duration;
-
-
+                Array.Clear(_trackDone, 0, _trackDone.Length);
                 _nextBoundary = 0;
             }
+        }
+
+        private void TickSections(float deltaTime)
+        {
+            int transitions = 0;
+            while (IsActive)
+            {
+                if (++transitions > 1024) throw new InvalidOperationException("单帧 Section 切换超过 1024 次。");
+                var section = _definition.Sections[_section]; float end = ToActual(section.End);
+                float remaining = Math.Max(0, end - _cycleTime);
+                float step = Math.Min(deltaTime, remaining); _cycleTime = deltaTime >= remaining ? end : _cycleTime + step; deltaTime -= step;
+                bool atEnd = _cycleTime == end;
+                // Sections own [start, end). Decide the successor before admitting shared-end
+                // events or entering tracks there (a loop must never hit the next section).
+                if (!ProcessBoundaries(_cycleTime, inclusive: !atEnd)) return;
+                _driver.Advance(NormalizedTime);
+                SampleTracks(atEnd ? section.End : NormalizedTime * _definition.Duration, includeStarts: !atEnd);
+                if (!IsActive || _cycleTime < end) return;
+                string next = _queuedSection ?? section.Next;
+                if (string.IsNullOrEmpty(next)) { Complete(); return; }
+                int nextIndex = FindSection(next);
+                if (nextIndex >= 0 && _definition.Sections[nextIndex].Start == section.End)
+                {
+                    _section = nextIndex; _queuedSection = null;
+                    if (!ProcessBoundaries(end)) return;
+                    SampleTracks(section.End);
+                }
+                else if (!JumpToSection(next)) return;
+                if (deltaTime <= 0) return;
+            }
+        }
+        private void SampleTracks(float time, bool includeStarts = true)
+        {
+            for (int i = 0; i < _trackHandlers.Length && IsActive; i++)
+            {
+                var definition = _definition.RuntimeTracks[i];
+                if (!_trackOpen[i] && !_trackDone[i] && (time > definition.Start || includeStarts && time == definition.Start))
+                { _trackOpen[i] = true; _trackHandlers[i].Enter(); }
+                if (!_trackOpen[i] || !IsActive) continue;
+                _trackHandlers[i].Sample(Math.Min(definition.End - definition.Start, Math.Max(0, time - definition.Start)), UnityEngine.Mathf.InverseLerp(definition.Start, definition.End, time));
+                if (time >= definition.End) { _trackOpen[i] = false; _trackDone[i] = true; _trackHandlers[i].Exit(); }
+            }
+        }
+        private void CloseTimelineState(bool cancelled)
+        {
+            Exception error = null;
+            for (int i = 0; i < _windowTagsAdded.Length; i++)
+                while (_windowTagsAdded[i] > 0)
+                { int tag = --_windowTagsAdded[i]; try { Ability.Owner.OwnedTags.RemoveTag(_definition.TagWindows[i].Tags[tag]); } catch (Exception ex) { error ??= ex; } }
+            for (int i = 0; i < _regionOpen.Length; i++) if (_regionOpen[i])
+            { _regionOpen[i] = false; try { DispatchCue(_definition.CueRegions[i].CueTag, GameplayCueEvent.Removed); } catch (Exception ex) { error ??= ex; } }
+            for (int i = 0; i < _trackHandlers.Length; i++) if (_trackOpen[i])
+            {
+                _trackOpen[i] = false;
+                try { if (cancelled) _trackHandlers[i].Cancel(); else _trackHandlers[i].Exit(); } catch (Exception ex) { error ??= ex; }
+            }
+            if (error != null) throw error;
         }
 
         protected override void OnEnd(bool cancelled)
         {
             Exception error = null;
+            try { CloseTimelineState(cancelled); } catch (Exception ex) { error = ex; }
             for (int i = 0; i < _windowTagsAdded.Length; i++)
             {
                 while (_windowTagsAdded[i] > 0)
@@ -211,11 +347,14 @@ namespace ZFramework.GAS.Unity
 
         // Merge boundaries once at construction. Large ticks still observe the correct window state
         // at every marker; same-time opens precede events and closes follow events.
-        private bool ProcessBoundaries(float head)
+        private bool ProcessBoundaries(float head, bool inclusive = true)
         {
-            while (_nextBoundary < _boundaries.Length && _boundaries[_nextBoundary].Time <= head)
+            int version = _jumpVersion;
+            while (_nextBoundary < _boundaries.Length && (_boundaries[_nextBoundary].Time < head || inclusive && _boundaries[_nextBoundary].Time == head))
             {
                 Boundary b = _boundaries[_nextBoundary++];
+                SampleTracks(b.AuthoredTime);
+                if (!IsActive || version != _jumpVersion) return false;
                 switch (b.Kind)
                 {
                     case 0:
@@ -225,7 +364,7 @@ namespace ZFramework.GAS.Unity
                             // Commit ownership before notification: cancellation can reenter OnEnd.
                             _windowTagsAdded[b.Index] = i + 1;
                             Ability.Owner.OwnedTags.AddTag(tags[i]);
-                            if (!IsActive) return false;
+                            if (!IsActive || version != _jumpVersion) return false;
                         }
                         break;
                     case 1:
@@ -238,13 +377,25 @@ namespace ZFramework.GAS.Unity
                         {
                             var owner = Ability.Owner;
                             var receiver = marker.Target == AnimationMarkerTarget.Self ? owner : _target;
-                            receiver.Effects.Apply(new GameplayEffectSpec(marker.Effect, owner.Attributes, owner));
+                            if (_taskContext?.Execution != null) _taskContext.Execution.ExecuteAction(marker.LegacyAction);
+                            else receiver.Effects.Apply(new GameplayEffectSpec(marker.Effect, owner.Attributes, owner.SourceIdentity, context: _effectValues));
+                            if (!IsActive) return false;
+                        }
+                        if (marker.Actions != null && marker.Actions.Count > 0)
+                        {
+                            var execution = _taskContext?.Execution ?? throw new InvalidOperationException("Configured actions require SkillRunner execution context.");
+                            execution.Execute(marker.Actions);
                             if (!IsActive) return false;
                         }
                         _onMarker?.Invoke(this, marker);
                         break;
                     case 3:
-                        _definition.TaskEvents[b.Index].Spawner.Spawn(Ability, _taskContext);
+                        var taskEvent = _definition.TaskEvents[b.Index];
+                        if (taskEvent.Action != null && _taskContext?.Execution != null)
+                        {
+                            _taskContext.Execution.ExecuteAction(taskEvent.Action);
+                        }
+                        else taskEvent.Spawner.Spawn(Ability, _taskContext);
                         break;
                     case 4:
                         while (_windowTagsAdded[b.Index] > 0)
@@ -255,11 +406,14 @@ namespace ZFramework.GAS.Unity
                         }
                         break;
                     case 5:
-                        _regionOpen[b.Index] = false;
-                        DispatchCue(_definition.CueRegions[b.Index].CueTag, GameplayCueEvent.Removed);
+                        if (_regionOpen[b.Index])
+                        {
+                            _regionOpen[b.Index] = false;
+                            DispatchCue(_definition.CueRegions[b.Index].CueTag, GameplayCueEvent.Removed);
+                        }
                         break;
                 }
-                if (!IsActive) return false;
+                if (!IsActive || version != _jumpVersion) return false;
             }
             return true;
         }

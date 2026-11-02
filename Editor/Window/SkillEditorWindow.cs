@@ -58,6 +58,8 @@ namespace ZFramework.GAS.Editor
         }
         private void CreateGUI()
         {
+            // Show may construct the view before Unity dispatches its first CreateGUI callback.
+            if (_doc != null && rootVisualElement.Q<SkillGraphView>() != null) return;
             Cleanup(); rootVisualElement.Clear(); rootVisualElement.AddToClassList("gas-editor");
             string path = "Packages/com.acced.zframework.gas/Editor/Window/";
             var tree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(path + "SkillEditorWindow.uxml");
@@ -84,6 +86,25 @@ namespace ZFramework.GAS.Editor
             _graph.MiniMapVisible = minimap.value;
             minimap.RegisterValueChangedCallback(e => { _graph.MiniMapVisible = e.newValue; EditorPrefs.SetBool("ZFramework.GAS.ShowMiniMap", e.newValue); });
             centerTabs.Add(minimap);
+            var graphTools = new ToolbarMenu { text = "图工具" };
+            graphTools.menu.AppendAction("左对齐", _ => _graph.AlignSelection(true));
+            graphTools.menu.AppendAction("顶对齐", _ => _graph.AlignSelection(false));
+            graphTools.menu.AppendAction("水平等距", _ => _graph.AlignSelection(true, true));
+            graphTools.menu.AppendAction("垂直等距", _ => _graph.AlignSelection(false, true));
+            graphTools.menu.AppendAction("折叠选中", _ => _graph.CollapseSelection(true));
+            graphTools.menu.AppendAction("展开选中", _ => _graph.CollapseSelection(false));
+            graphTools.menu.AppendAction("隐藏未连接端口", _ => _graph.SetHideUnusedPorts(true));
+            graphTools.menu.AppendAction("显示全部端口", _ => _graph.SetHideUnusedPorts(false));
+            graphTools.menu.AppendAction("保存当前视图书签", _ => _graph.AddBookmark());
+            centerTabs.Add(graphTools);
+            var bookmarks = new ToolbarMenu { text = "书签" };
+            bookmarks.RegisterCallback<MouseDownEvent>(_ =>
+            {
+                bookmarks.menu.MenuItems().Clear();
+                foreach (var bookmark in _doc.Layout.Bookmarks) { var saved = bookmark; bookmarks.menu.AppendAction(saved.name, __ => _graph.RestoreBookmark(saved)); }
+            }, TrickleDown.TrickleDown); centerTabs.Add(bookmarks);
+            var graphSearch = new ToolbarSearchField { tooltip = "图内搜索节点名称", style = { width = 120, minWidth = 40 } };
+            graphSearch.RegisterValueChangedCallback(e => _graph.SearchNodes(e.newValue)); centerTabs.Add(graphSearch);
             centerTabs.Add(new ToolbarButton(() => ToggleMessages()) { text = "消息" }); _center.Add(centerTabs);
             var timelineSplit = Split("TimelineHeight", 1, 278, TwoPaneSplitViewOrientation.Vertical); _center.Add(timelineSplit);
             _graphHost = new VisualElement { style = { flexGrow = 1, minHeight = 120 } }; _graphHost.Add(_graph); _graphHost.Add(_settings); _settings.style.display = DisplayStyle.None;
@@ -92,7 +113,7 @@ namespace ZFramework.GAS.Editor
             var right = new VisualElement { style = { flexGrow = 1, minWidth = 220 } }; contentSplit.Add(right);
             _rightTabs = new Toolbar(); _rightTabs.Add(new ToolbarButton(() => { _compactPreview = true; Responsive(); }) { text = "预览" });
             _rightTabs.Add(new ToolbarButton(() => { _compactPreview = false; Responsive(); }) { text = "Details" }); right.Add(_rightTabs);
-            var rightSplit = Split("PreviewHeight", 0, 235, TwoPaneSplitViewOrientation.Vertical); rightSplit.name = "preview-split";
+            var rightSplit = Split("PreviewHeight", 0, 300, TwoPaneSplitViewOrientation.Vertical); rightSplit.name = "preview-split";
             rightSplit.Add(_preview); rightSplit.Add(_details); right.Add(rightSplit); workspace.Add(leftSplit);
             _status = new Label(); _status.AddToClassList("status-label");
             var statusHost = rootVisualElement.Q("status-host") ?? rootVisualElement; statusHost.Add(_status);

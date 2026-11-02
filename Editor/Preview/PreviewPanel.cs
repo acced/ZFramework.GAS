@@ -20,6 +20,10 @@ namespace ZFramework.GAS.Editor
         private GameObject _source, _instance;
         private IPoseSampler _sampler;
         private CueVfxPreview _vfx;
+        private SkillPreviewTools _tools;
+        private bool _ghosts, _trajectory, _ranges, _dummy, _sound;
+        private float _targetDistance = 2;
+        private int _level = 1;
         private readonly List<ICuePreview> _cues = new();
         // 略微俯视：既看得到角色正面，也看得到贴地的法阵与光环。
         private Vector2 _orbit = new(145, 14);
@@ -29,8 +33,24 @@ namespace ZFramework.GAS.Editor
         private readonly Label _caption;
         public PreviewPanel(SkillDocument doc)
         {
-            _doc = doc; AddToClassList("preview-panel");
+            _doc = doc; AddToClassList("preview-panel"); style.minHeight = 280;
             var header = new Label("预览视口"); header.AddToClassList("panel-heading"); Add(header);
+            var options = new VisualElement { style = { flexDirection = FlexDirection.Row, flexWrap = Wrap.Wrap, flexShrink = 0, paddingLeft = 4, paddingRight = 4 } }; Add(options);
+            void Option(string label, Action<bool> changed)
+            {
+                var toggle = new Toggle(label) { style = { width = 68, flexShrink = 0 } };
+                toggle.labelElement.style.minWidth = 0; toggle.labelElement.style.width = StyleKeyword.Auto;
+                toggle.labelElement.style.flexGrow = 1;
+                toggle.RegisterValueChangedCallback(e => { changed(e.newValue); Sample(); }); options.Add(toggle);
+            }
+            Option("范围", value => _ranges = value); Option("假人", value => _dummy = value);
+            Option("前后帧", value => _ghosts = value); Option("根位移", value => _trajectory = value); Option("音效", value => _sound = value);
+            var distance = new FloatField("目标距离") { value = 2, style = { width = 145 } }; options.Add(distance);
+            distance.labelElement.style.minWidth = 56; distance.labelElement.style.width = 56;
+            distance.RegisterValueChangedCallback(e => { _targetDistance = Mathf.Max(0, e.newValue); Sample(); });
+            var level = new IntegerField("等级") { value = 1, style = { width = 100 } }; options.Add(level);
+            level.labelElement.style.minWidth = 30; level.labelElement.style.width = 30;
+            level.RegisterValueChangedCallback(e => { _level = Mathf.Max(1, e.newValue); Sample(); });
             _viewport = new IMGUIContainer(Draw) { style = { flexGrow = 1, minHeight = 150 } }; Add(_viewport);
             _caption = new Label("拖动旋转 · 滚轮缩放 · 双击聚焦"); _caption.AddToClassList("preview-caption"); Add(_caption);
             doc.Playback.Changed += Sample;
@@ -40,6 +60,7 @@ namespace ZFramework.GAS.Editor
         private void ProjectChanged() { if (_source != null) Load(); }
         private void Changed(ChangeSet change)
         {
+            _tools?.Invalidate();
             if (_source != _doc.PreviewPrefab) Load();
             else if (_instance != null) { _vfx?.Dispose(); _vfx = new CueVfxPreview(_instance); }
             Sample();
@@ -60,6 +81,7 @@ namespace ZFramework.GAS.Editor
                 foreach (var animation in _instance.GetComponentsInChildren<Animation>(true)) animation.enabled = false;
                 _sampler = AnimationAdapterRegistry.Resolve(_source).BeginPreview(_instance);
                 _vfx = new CueVfxPreview(_instance);
+                _tools = new SkillPreviewTools();
                 _bounds = new Bounds(_instance.transform.position, Vector3.one);
                 var renderers = _instance.GetComponentsInChildren<Renderer>();
                 if (renderers.Length > 0) { _bounds = renderers[0].bounds; foreach (var r in renderers) _bounds.Encapsulate(r.bounds); }
@@ -83,6 +105,8 @@ namespace ZFramework.GAS.Editor
                     float natural = animation.Duration;
                     foreach (var clip in clips) if (clip.Name == animation.ClipName) { natural = clip.Length; break; }
                     void Pose(float time) => _sampler.Sample(animation.ClipName, time / Mathf.Max(.001f, animation.Duration) * natural);
+                    _tools?.Rebuild(_instance, _doc, Pose, _ghosts, _trajectory, _ranges, _dummy, _targetDistance, _level);
+                    _tools?.Audio(animation, _doc.Playback.Time, _sound && _doc.Playback.Playing, _doc.Playback.SeekVersion, _doc.Playback.Speed);
                     Pose(_doc.Playback.Time);
                     _vfx?.Sample(animation, _doc.Playback.Time, Pose);
                     var so = _doc.Serialized(animation); var regions = so.FindProperty("cueRegions");
@@ -134,6 +158,7 @@ namespace ZFramework.GAS.Editor
             }
             if (evt.type != EventType.Repaint) return;
             _preview.BeginPreview(rect, GUIStyle.none);
+            _tools?.Draw(_preview);
             var rotation = Quaternion.Euler(_orbit.y, _orbit.x, 0);
             _preview.camera.transform.position = _bounds.center + rotation * new Vector3(0, 0, -_distance);
             _preview.camera.transform.rotation = rotation;
@@ -154,6 +179,7 @@ namespace ZFramework.GAS.Editor
         }
         private void Cleanup()
         {
+            _tools?.Dispose(); _tools = null;
             _vfx?.Dispose(); _vfx = null;
             foreach (var cue in _cues) { try { cue.Dispose(); } catch (Exception e) { Debug.LogException(e); } } _cues.Clear();
             try { _sampler?.Dispose(); } finally { _sampler = null; _preview?.Cleanup(); _preview = null; _instance = null; }

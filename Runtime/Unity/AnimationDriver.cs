@@ -29,6 +29,11 @@ namespace ZFramework.GAS.Unity
         /// <summary>停止播放。技能结束或被打断时调用。</summary>
         void Stop();
     }
+    public interface ISeekableAnimationDriver : IAnimationDriver
+    {
+        void Seek(float normalizedTime);
+    }
+    public interface IAnimationDriverLifetime { bool IsValid { get; } }
 
     /// <summary>
     /// 能平滑过渡的驱动。<see cref="AnimationTask"/> 检测到驱动实现了本接口时，
@@ -53,9 +58,10 @@ namespace ZFramework.GAS.Unity
     /// 这里把它变成所有动画形式共用的契约。混入、混出用 <see cref="Animation.CrossFade(string, float)"/>，
     /// 混出时淡回施放前权重最高的片段（通常是待机）。
     /// </summary>
-    public sealed class LegacyAnimationDriver : IBlendingAnimationDriver
+    public sealed class LegacyAnimationDriver : IBlendingAnimationDriver, ISeekableAnimationDriver, IAnimationDriverLifetime
     {
         private readonly Animation _animation;
+        public bool IsValid => _animation != null;
         private string _playing, _return;
         private float _restoreSpeed, _restoreTime;
         private WrapMode _restoreWrap;
@@ -107,6 +113,8 @@ namespace ZFramework.GAS.Unity
         public void Advance(float normalizedTime)
         {
         }
+        public void Seek(float normalizedTime)
+        { if (_animation != null && _playing != null && _animation[_playing] is AnimationState state) { state.time = normalizedTime * state.length; _animation.Sample(); } }
 
         public void Stop() => Stop(0f);
 

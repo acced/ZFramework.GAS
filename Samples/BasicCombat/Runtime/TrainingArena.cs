@@ -18,6 +18,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
         {
             public string displayName;
             public GameplayAbilityAsset asset;
+            public string Name => asset != null ? asset.DisplayName : displayName;
             public Color color = Color.white;
         }
 
@@ -27,15 +28,12 @@ namespace ZFramework.GAS.Samples.BasicCombat
         [Tooltip("投射物瞄准点（假人胸口）")]
         [SerializeField] private Transform aimPoint;
         [SerializeField] private Skill[] skills = new Skill[0];
+        [SerializeField] private AbilitySetAsset abilitySet;
         [Tooltip("体力每秒回复")]
         [SerializeField] private float staminaRegen = 16;
         [Header("表现")]
         [SerializeField] private Material burstMaterial;
         [SerializeField] private Mesh burstMesh;
-        [SerializeField] private GameObject guardianPrefab;
-        [SerializeField] private Material guardianMaterial;
-        [Tooltip("召唤点（相对骑士）")]
-        [SerializeField] private Vector3 summonPoint = new(-1.15f, 0, .95f);
 
         private GameplayCueRouter _router;
         private TargetSearcher _searcher;
@@ -65,12 +63,12 @@ namespace ZFramework.GAS.Samples.BasicCombat
             _searcher = new TargetSearcher(16);
             _context = new TimelineTaskContext
             {
-                Origin = castPoint, Target = aimPoint, Searcher = _searcher,
+                Origin = hero.transform, Target = aimPoint, Searcher = _searcher, Scene = gameObject.scene,
                 RentVisual = prefab => Instantiate(prefab, castPoint.position, Quaternion.identity).transform,
                 ReturnVisual = ReturnBolt,
             };
-            foreach (var skill in skills) hero.SkillRunner.Grant(skill.asset);
-            hero.SkillRunner.MarkerReached += OnMarker;
+            if (abilitySet != null) abilitySet.GrantTo(hero.SkillRunner);
+            else foreach (var skill in skills) hero.SkillRunner.Grant(skill.asset);
 
             if (GameplayTagManager.RequestTag(SampleTags.CueHit, out var hitTag)) _router.Register(hitTag, OnHitCue);
 
@@ -148,18 +146,13 @@ namespace ZFramework.GAS.Samples.BasicCombat
             {
                 Toast(result switch
                 {
-                    AbilityActivationResult.OnCooldown => skill.displayName + " 冷却中",
+                    AbilityActivationResult.OnCooldown => skill.Name + " 冷却中",
                     AbilityActivationResult.CannotAfford => "体力不足",
-                    AbilityActivationResult.AlreadyActive => skill.displayName + " 正在施放",
-                    _ => "当前状态无法施放 " + skill.displayName,
+                    AbilityActivationResult.AlreadyActive => skill.Name + " 正在施放",
+                    _ => "当前状态无法施放 " + skill.Name,
                 });
                 return;
             }
-        }
-
-        private void OnMarker(GameplayAbilityAsset asset, AnimationMarker marker)
-        {
-            if (marker.Key == "召唤") SpawnGuardian();
         }
 
         private void ReturnBolt(Transform visual)
@@ -198,20 +191,6 @@ namespace ZFramework.GAS.Samples.BasicCombat
             var renderer = go.AddComponent<MeshRenderer>(); renderer.sharedMaterial = burstMaterial;
             go.transform.rotation = UnityEngine.Random.rotation;
             _effects.Add(new Effect { Transform = go.transform, Renderers = new Renderer[] { renderer }, Life = life, From = from, To = to, Color = color, Fade = true });
-        }
-
-        /// <summary>召唤：在法阵处现出半透明的守护灵，数秒后消散。</summary>
-        private void SpawnGuardian()
-        {
-            if (guardianPrefab == null) return;
-            var position = hero.transform.TransformPoint(summonPoint);
-            var ghost = Instantiate(guardianPrefab, position, hero.transform.rotation);
-            foreach (var behaviour in ghost.GetComponentsInChildren<MonoBehaviour>()) behaviour.enabled = false;
-            foreach (var visual in ghost.GetComponentsInChildren<CueVisual>(true)) visual.gameObject.SetActive(false);
-            var renderers = ghost.GetComponentsInChildren<MeshRenderer>();
-            foreach (var r in renderers) r.sharedMaterial = guardianMaterial;
-            _effects.Add(new Effect { Transform = ghost.transform, Renderers = renderers, Life = 5f, From = .7f, To = 1f, Color = new Color(.62f, .38f, 1f, .32f) });
-            Toast("守护灵响应了召唤");
         }
 
         private void AddPopup(Vector3 position, string text, Color color, float size)
@@ -272,7 +251,8 @@ namespace ZFramework.GAS.Samples.BasicCombat
                 Panel(new Rect(rect.x, rect.y, rect.width, 4), skill.color);
                 if (GUI.Button(rect, GUIContent.none, GUIStyle.none)) Cast(i);
                 GUI.Label(new Rect(rect.x + 6, rect.y + 8, 30, 20), (i + 1).ToString(), _keyStyle);
-                GUI.Label(new Rect(rect.x, rect.y + 46, rect.width, 22), skill.displayName, _labelStyle);
+                if (skill.asset.icon != null) GUI.DrawTexture(new Rect(rect.x + 25, rect.y + 10, 30, 30), skill.asset.icon.texture, ScaleMode.ScaleToFit);
+                GUI.Label(new Rect(rect.x, rect.y + 46, rect.width, 22), new GUIContent(skill.Name, skill.asset.description), _labelStyle);
                 float remaining = hero.SkillRunner.CooldownRemaining(skill.asset), total = hero.SkillRunner.CooldownDuration(skill.asset);
                 if (remaining > 0 && total > 0)
                 {
@@ -309,7 +289,8 @@ namespace ZFramework.GAS.Samples.BasicCombat
 
         private void OnDestroy()
         {
-            if (hero != null && hero.SkillRunner != null) hero.SkillRunner.MarkerReached -= OnMarker;
+            if (hero != null) { hero.HealthChanged -= OnHealthChanged; hero.AbilitySystem?.Clear(); }
+            if (dummy != null) dummy.HealthChanged -= OnHealthChanged;
         }
 
         private void WorldBar(Camera camera, CombatUnit unit, float scale)

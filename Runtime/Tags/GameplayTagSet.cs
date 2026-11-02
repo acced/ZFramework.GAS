@@ -46,7 +46,7 @@ namespace ZFramework.GAS
         /// <summary>复制指定范围内已解析的标签，不持有输入存储。</summary>
         public GameplayTagSet(ReadOnlySpan<GameplayTag> tags) => _tags = tags.ToArray();
 
-        internal ReadOnlySpan<GameplayTag> AsSpan() => _tags;
+        public ReadOnlySpan<GameplayTag> AsSpan() => _tags;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void AddTo(GameplayTagCountContainer container)

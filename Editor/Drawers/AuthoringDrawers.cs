@@ -80,6 +80,9 @@ namespace ZFramework.GAS.Editor
             if (p == null) return "";
             int kind = p.FindPropertyRelative("kind").enumValueIndex;
             float constant = p.FindPropertyRelative("constant").floatValue;
+            if (kind == 3) return "参数 · " + p.FindPropertyRelative("parameterId").stringValue;
+            if (kind == 4) return "等级表";
+            if (kind == 5) return "伤害公式（来源 × 系数 − 目标，限幅）";
             return kind == 0 ? constant.ToString("0.##") : kind == 2 ? "调用方 · " + p.FindPropertyRelative("callerKey").stringValue :
                 (p.FindPropertyRelative("captureFrom").enumValueIndex == 0 ? "来源 · " : "目标 · ") + AttributeCatalog.Name(p.FindPropertyRelative("captureAttributeId").intValue) +
                 " × " + p.FindPropertyRelative("coefficient").floatValue.ToString("0.##") + (constant != 0 ? " + " + constant.ToString("0.##") : "");
@@ -93,22 +96,28 @@ namespace ZFramework.GAS.Editor
                 fold.Clear(); fold.text = "数值：" + Summary(property);
                 var kind = property.FindPropertyRelative("kind"); var type = new PropertyField(kind, "来源类型"); fold.Add(type); type.BindProperty(kind);
                 int index = kind.enumValueIndex;
-                string[] paths = index == 0 ? new[] { "constant" } : index == 2 ? new[] { "callerKey" } : new[] { "captureFrom", "captureAttributeId", "coefficient", "constant" };
+                string[] paths = Fields(index);
                 foreach (var path in paths) { var field = new PropertyField(property.FindPropertyRelative(path)); fold.Add(field); field.BindProperty(property.FindPropertyRelative(path)); }
                 type.RegisterCallback<SerializedPropertyChangeEvent>(_ => root.schedule.Execute(Build));
             }
             Build(); return root;
         }
+        private static string[] Fields(int kind) => kind switch
+        {
+            0 => new[] { "constant" }, 2 => new[] { "callerKey" }, 3 => new[] { "parameterId", "coefficient", "constant" },
+            4 => new[] { "levels" }, 5 => new[] { "captureAttributeId", "targetAttributeId", "parameterId", "coefficient", "targetCoefficient", "constant", "minimum", "maximum", "resultScale" },
+            _ => new[] { "captureFrom", "captureAttributeId", "coefficient", "constant" }
+        };
         public override float GetPropertyHeight(SerializedProperty p, GUIContent label)
-            => (p.FindPropertyRelative("kind").enumValueIndex == 1 ? 6 : 3) * (EditorGUIUtility.singleLineHeight + 2);
+            => (EditorGUIUtility.singleLineHeight + 2) * 2 + Fields(p.FindPropertyRelative("kind").enumValueIndex).Sum(path => EditorGUI.GetPropertyHeight(p.FindPropertyRelative(path), true) + 2);
         public override void OnGUI(Rect rect, SerializedProperty p, GUIContent label)
         {
             float h = EditorGUIUtility.singleLineHeight; rect.height = h;
             EditorGUI.LabelField(rect, "数值：" + Summary(p)); rect.y += h + 2;
             EditorGUI.PropertyField(rect, p.FindPropertyRelative("kind"), new GUIContent("来源")); rect.y += h + 2;
             int kind = p.FindPropertyRelative("kind").enumValueIndex;
-            foreach (var path in kind == 0 ? new[] { "constant" } : kind == 2 ? new[] { "callerKey" } : new[] { "captureFrom", "captureAttributeId", "coefficient", "constant" })
-            { EditorGUI.PropertyField(rect, p.FindPropertyRelative(path)); rect.y += h + 2; }
+            foreach (var path in Fields(kind))
+            { var child = p.FindPropertyRelative(path); rect.height = EditorGUI.GetPropertyHeight(child, true); EditorGUI.PropertyField(rect, child, true); rect.y += rect.height + 2; }
         }
     }
     [CustomPropertyDrawer(typeof(ModifierAsset))]
@@ -131,17 +140,41 @@ namespace ZFramework.GAS.Editor
             { var child = p.FindPropertyRelative(field); rect.height = EditorGUI.GetPropertyHeight(child); EditorGUI.PropertyField(rect, child, true); rect.y += rect.height + 2; }
         }
     }
-    [CustomPropertyDrawer(typeof(AnimationBackend), true), CustomPropertyDrawer(typeof(TaskSpawner), true)]
+    [CustomPropertyDrawer(typeof(AnimationBackend), true), CustomPropertyDrawer(typeof(TaskSpawner), true), CustomPropertyDrawer(typeof(SkillAction), true), CustomPropertyDrawer(typeof(SkillRuntimeTrack), true)]
     public sealed class StrategyDrawer : PropertyDrawer
     {
         public override VisualElement CreatePropertyGUI(SerializedProperty property)
         {
             var root = new VisualElement();
             var baseType = fieldInfo.FieldType;
+            if (baseType.IsArray) baseType = baseType.GetElementType();
             var types = TypeCache.GetTypesDerivedFrom(baseType).Where(t => !t.IsAbstract && t.GetConstructor(Type.EmptyTypes) != null).OrderBy(t => t.Name).ToArray();
             var names = new List<string> { "未配置" }; names.AddRange(types.Select(t => t.Name));
             int index = Array.FindIndex(types, t => t == property.managedReferenceValue?.GetType()) + 1;
             var popup = new PopupField<string>(property.displayName, names, index); root.Add(popup);
+            if (typeof(SkillAction).IsAssignableFrom(baseType))
+            {
+                var tools = new VisualElement { style = { flexDirection = FlexDirection.Row } }; root.Add(tools);
+                string path = property.propertyPath; int start = path.LastIndexOf(".Array.data[", StringComparison.Ordinal);
+                if (start >= 0 && int.TryParse(path.Substring(start + 12).TrimEnd(']'), out int itemIndex))
+                {
+                    void Change(Action<SerializedProperty> edit)
+                    { property.serializedObject.Update(); var array = property.serializedObject.FindProperty(path.Substring(0, start)); edit(array); property.serializedObject.ApplyModifiedProperties(); }
+                    tools.Add(new Button(() => Change(a => { if (itemIndex > 0) a.MoveArrayElement(itemIndex, itemIndex - 1); })) { text = "↑" });
+                    tools.Add(new Button(() => Change(a => { if (itemIndex + 1 < a.arraySize) a.MoveArrayElement(itemIndex, itemIndex + 1); })) { text = "↓" });
+                    tools.Add(new Button(() => Change(a =>
+                    {
+                        var value = property.managedReferenceValue; if (value == null) return;
+                        var clone = JsonUtility.FromJson(JsonUtility.ToJson(value), value.GetType());
+                        int index = a.arraySize++; var entry = a.GetArrayElementAtIndex(index); entry.managedReferenceValue = clone;
+                        var cursor = entry.Copy(); var end = entry.GetEndProperty();
+                        while (cursor.Next(true) && !SerializedProperty.EqualContents(cursor, end))
+                            if (cursor.name == "id" && cursor.propertyType == SerializedPropertyType.String) cursor.stringValue = Guid.NewGuid().ToString("N");
+                        a.MoveArrayElement(index, itemIndex + 1);
+                    })) { text = "复制" });
+                    tools.Add(new Button(() => Change(a => a.DeleteArrayElementAtIndex(itemIndex))) { text = "删除" });
+                }
+            }
             var content = new VisualElement(); root.Add(content);
             void Fields()
             {

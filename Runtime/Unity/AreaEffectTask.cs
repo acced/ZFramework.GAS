@@ -42,6 +42,8 @@ namespace ZFramework.GAS.Unity
         private readonly AttributeSet _sourceAttributes;
         private readonly object _source;
         private readonly AbilitySystemComponent _caster;
+        private readonly int _casterGeneration;
+        private EffectEvaluationContext _values;
         private readonly AbilitySystemComponent[] _buffer;
         private readonly List<AbilitySystemComponent> _occupants = new();
         private readonly List<AbilitySystemComponent> _current = new();
@@ -56,7 +58,7 @@ namespace ZFramework.GAS.Unity
             TargetSearcher searcher,
             AttributeSet sourceAttributes,
             object source,
-            int maxOccupants = 32)
+            int maxOccupants = 32, EffectEvaluationContext context = null)
         {
             if (config.Radius <= 0f)
             {
@@ -71,16 +73,20 @@ namespace ZFramework.GAS.Unity
             _config = config;
             _searcher = searcher ?? throw new ArgumentNullException(nameof(searcher));
             _sourceAttributes = sourceAttributes;
-            _source = source;
-            _caster = source as AbilitySystemComponent;
+            _caster = source as AbilitySystemComponent ?? (source as AbilitySourceIdentity)?.Owner;
+            _casterGeneration = _caster?.Generation ?? 0;
+            _source = _caster?.SourceIdentity ?? source;
+            _values = context;
             _buffer = new AbilitySystemComponent[maxOccupants];
         }
+        protected override void OnBegin() => _values = (_values ?? Ability.EvaluationContext ?? new EffectEvaluationContext(Ability.Level)).CaptureSource(_sourceAttributes);
 
         protected override void OnTick(float deltaTime)
         {
             _elapsed += deltaTime;
 
-            int found = _searcher.Circle(_config.Position, _config.Radius, _config.CollisionMask, _buffer, _caster);
+            int found = _searcher.Circle(_config.Position, _config.Radius, _config.CollisionMask, _buffer,
+                _caster != null && _caster.Generation == _casterGeneration ? _caster : null);
 
             _current.Clear();
             for (int i = 0; i < found; i++)
@@ -126,7 +132,7 @@ namespace ZFramework.GAS.Unity
                 }
 
                 _occupants.Add(entrant);
-                entrant.Effects.Apply(new GameplayEffectSpec(_config.EnterEffect, _sourceAttributes, _source));
+                entrant.Effects.Apply(new GameplayEffectSpec(_config.EnterEffect, _sourceAttributes, _source, context: _values));
 
                 // 同上：区域已结束就不能再拉人进来。
                 // 此刻 OnEnd 已经清空过占用者列表，之后加进去的人永远不会被移除光环。

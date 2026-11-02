@@ -36,6 +36,7 @@ internal static class Program
         Run(nameof(RequirementsEquivalence), RequirementsEquivalence);
         Run(nameof(RandomCountMutations), RandomCountMutations);
         Run(nameof(DebugReadback), DebugReadback);
+        SkillExecutionTests.Run();
         HotPath();
     }
 

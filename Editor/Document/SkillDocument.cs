@@ -34,6 +34,7 @@ namespace ZFramework.GAS.Editor
     public sealed class PlaybackModel
     {
         public float Time { get; private set; }
+        public int SeekVersion { get; private set; }
         public bool Playing;
         public bool Loop = true;
         public float Speed = 1;
@@ -45,13 +46,13 @@ namespace ZFramework.GAS.Editor
         }
         public event Action Changed;
         public void Seek(float time, float duration)
-        { Time = Mathf.Clamp(time, 0, Mathf.Max(0, duration)); Changed?.Invoke(); }
+        { SeekVersion++; Time = Mathf.Clamp(time, 0, Mathf.Max(0, duration)); Changed?.Invoke(); }
         public void Tick(float delta, float duration)
         {
             if (Live || !Playing || duration <= 0) return;
             float next = Time + delta * Speed;
-            if (next > duration) { if (Loop) next %= duration; else { next = duration; Playing = false; } }
-            Seek(next, duration);
+            if (next > duration) { if (Loop) { next %= duration; SeekVersion++; } else { next = duration; Playing = false; } }
+            Time = Mathf.Clamp(next, 0, duration); Changed?.Invoke();
         }
     }
 
@@ -61,6 +62,7 @@ namespace ZFramework.GAS.Editor
         private readonly Dictionary<Object, SerializedObject> _serialized = new();
         private readonly List<ScriptableObject> _assets = new();
         private readonly List<ScriptableObject> _loose = new();
+        private readonly Dictionary<ScriptableObject, HashSet<ScriptableObject>> _parents = new();
         public GameplayAbilityAsset Root { get; private set; }
         public IReadOnlyList<ScriptableObject> Assets => _assets;
         public SelectionModel Selection { get; } = new();
@@ -111,17 +113,31 @@ namespace ZFramework.GAS.Editor
         { _loose.Remove(asset); Layout.LooseAssets.Remove(AssetReferences.Key(asset)); Layout.MarkDirty(); Layout.Save(); }
         public void Notify(ChangeSet change)
         {
-            Reload();
-            foreach (var animation in _assets.OfType<SkillAnimationAsset>()) TimelineCommands.EnsureIds(animation, true);
-            // Referencing definitions cache their children. Invalidate the whole reachable definition graph.
-            foreach (var asset in _assets)
+            bool structure = change.Structure || change.Paths.Length == 0;
+            if (!structure && change.Asset != null)
+                foreach (string path in change.Paths)
+                {
+                    var property = Serialized(change.Asset).FindProperty(path);
+                    if (property == null || property.isArray || property.propertyType == SerializedPropertyType.ObjectReference ||
+                        property.propertyType == SerializedPropertyType.ManagedReference || path.EndsWith(".Array.size", StringComparison.Ordinal))
+                    { structure = true; break; }
+                }
+            if (structure) Reload();
+            if (change.Asset is SkillAnimationAsset edited) TimelineCommands.EnsureIds(edited, true);
+            else if (structure) foreach (var animation in _assets.OfType<SkillAnimationAsset>()) TimelineCommands.EnsureIds(animation, true);
+            var invalid = new HashSet<ScriptableObject>();
+            void Invalidate(ScriptableObject asset)
             {
+                if (asset == null || !invalid.Add(asset)) return;
                 if (asset is GameplayAbilityAsset ability) ability.InvalidateDefinition();
                 else if (asset is GameplayEffectAsset effect) effect.InvalidateDefinition();
                 else if (asset is SkillAnimationAsset animation) animation.InvalidateDefinition();
+                if (_parents.TryGetValue(asset, out var parents)) foreach (var parent in parents) Invalidate(parent);
             }
+            if (change.Asset is ScriptableObject changed) Invalidate(changed);
+            if (structure) foreach (var asset in _assets) Invalidate(asset);
             if (Selection.Asset == null) Selection.Select(Root);
-            Changed?.Invoke(change);
+            Changed?.Invoke(new ChangeSet(change.Asset, structure, change.Paths));
         }
         public void Report(string message) => Feedback?.Invoke(message);
         public void Save()
@@ -132,7 +148,7 @@ namespace ZFramework.GAS.Editor
         }
         private void Reload()
         {
-            _assets.Clear();
+            _assets.Clear(); _parents.Clear();
             var visited = new HashSet<ScriptableObject>();
             Visit(Root, visited);
             if (Root != null)
@@ -145,9 +161,13 @@ namespace ZFramework.GAS.Editor
         private void Visit(ScriptableObject asset, HashSet<ScriptableObject> visited)
         {
             if (asset == null || !visited.Add(asset)) return;
-            if (!(asset is GameplayAbilityAsset || asset is GameplayEffectAsset || asset is SkillAnimationAsset)) return;
+            if (!(asset is GameplayAbilityAsset || asset is GameplayEffectAsset || asset is SkillAnimationAsset || asset is SkillActionModuleAsset || asset is SkillParameterSetAsset)) return;
             _assets.Add(asset);
-            foreach (var child in AssetReferences.Children(asset)) Visit(child, visited);
+            foreach (var child in AssetReferences.Children(asset))
+            {
+                if (!_parents.TryGetValue(child, out var parents)) _parents[child] = parents = new HashSet<ScriptableObject>();
+                parents.Add(asset); Visit(child, visited);
+            }
         }
         private void OnUndo()
         {
@@ -182,7 +202,7 @@ namespace ZFramework.GAS.Editor
             var p = so.GetIterator();
             while (p.Next(true))
                 if (p.propertyType == SerializedPropertyType.ObjectReference && p.objectReferenceValue is ScriptableObject child &&
-                    (child is GameplayEffectAsset || child is SkillAnimationAsset)) yield return child;
+                    (child is GameplayEffectAsset || child is SkillAnimationAsset || child is SkillActionModuleAsset || child is SkillParameterSetAsset)) yield return child;
         }
         public static void Replace(SerializedObject so, Object from, Object to)
         {

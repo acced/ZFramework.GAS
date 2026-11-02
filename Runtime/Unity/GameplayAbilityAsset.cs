@@ -1,5 +1,6 @@
 using GameplayTags;
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace ZFramework.GAS.Unity
@@ -13,6 +14,32 @@ namespace ZFramework.GAS.Unity
     [CreateAssetMenu(menuName = "ZFramework GAS/Gameplay Ability", fileName = "NewGameplayAbility")]
     public sealed class GameplayAbilityAsset : ScriptableObject
     {
+        [Header("展示")]
+        public string displayName;
+        [TextArea] public string description;
+        public Sprite icon;
+        public string DisplayName => string.IsNullOrEmpty(displayName) ? name : displayName;
+        [Header("参数")]
+        public SkillParameterSetAsset parameterSet;
+        public SkillParameter[] parameters = Array.Empty<SkillParameter>();
+        public SkillParameterOverride[] parameterOverrides = Array.Empty<SkillParameterOverride>();
+        [Header("激活动作（按顺序执行）")]
+        [SerializeReference] public SkillAction[] activationActions = Array.Empty<SkillAction>();
+        public SkillParameterValues ResolveParameters(int level, SkillParameterOverride[] castOverrides = null)
+        {
+            var values = new Dictionary<string, SkillParameterValue>();
+            parameterSet?.AddTo(values, level);
+            foreach (var parameter in parameters)
+            {
+                if (parameter == null || string.IsNullOrEmpty(parameter.Id)) throw new InvalidOperationException("参数缺少 ID。");
+                if (values.ContainsKey(parameter.Id)) throw new InvalidOperationException("重复参数 ID: " + parameter.Id);
+                values.Add(parameter.Id, parameter.Resolve(level));
+            }
+            SkillParameterSetAsset.Apply(values, parameterOverrides, level);
+            SkillParameterSetAsset.Apply(values, castOverrides, level);
+            return new SkillParameterValues(values);
+        }
+        public SkillActionDefinition[] BuildActions() => new SkillActionBuildContext(this).Build(activationActions);
         [Header("标签")]
         [Tooltip("本能力的标识标签，供「取消带某标签的能力」匹配")]
         [SerializeField] private GameplayTag[] abilityTags = Array.Empty<GameplayTag>();
@@ -48,6 +75,7 @@ namespace ZFramework.GAS.Unity
 
         private GameplayAbilityDefinition Build()
         {
+            DefinitionSource.DependsOn(this, cost); DefinitionSource.DependsOn(this, cooldown); DefinitionSource.DependsOn(this, parameterSet);
             var definition = new GameplayAbilityDefinition(
                 TagAssetUtility.ToSet(abilityTags),
                 TagAssetUtility.ToSet(activationRequiredTags),
@@ -60,7 +88,7 @@ namespace ZFramework.GAS.Unity
             return definition;
         }
 
-        public void InvalidateDefinition() => _definition = null;
+        public void InvalidateDefinition() { _definition = null; DefinitionSource.InvalidateDependents(this); }
         private void OnValidate() => InvalidateDefinition();
     }
 }

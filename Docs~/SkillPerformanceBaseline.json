@@ -1,0 +1,47 @@
+{
+    "utc": "2026-11-02T08:25:27.5336422Z",
+    "unity": "6000.3.14f1",
+    "cpu": "Intel(R) Core(TM) i5-14400F",
+    "os": "Windows 10  (10.0.19045) 64bit",
+    "gpu": "NVIDIA GeForce RTX 5060",
+    "note": "Cold means first index/window access in this editor process. Drag measures position change plus synchronous GUI repaint CPU; OS input latency and GPU presentation are not included.",
+    "nodes": 100,
+    "skills": 500,
+    "metrics": [
+        {
+            "name": "cold search 500",
+            "p95Milliseconds": 194.6665,
+            "allocationCallsPerOperation": 14001
+        },
+        {
+            "name": "warm search 500",
+            "p95Milliseconds": 3.4236,
+            "allocationCallsPerOperation": 2
+        },
+        {
+            "name": "cold window open 100 nodes",
+            "p95Milliseconds": 1010.8605,
+            "allocationCallsPerOperation": 215788
+        },
+        {
+            "name": "warm library search and visible rows 500",
+            "p95Milliseconds": 39.5329,
+            "allocationCallsPerOperation": 8329
+        },
+        {
+            "name": "warm scalar edit 100 nodes",
+            "p95Milliseconds": 2.1819,
+            "allocationCallsPerOperation": 257
+        },
+        {
+            "name": "warm drag update and repaint 100 nodes",
+            "p95Milliseconds": 11.3169,
+            "allocationCallsPerOperation": 1175
+        },
+        {
+            "name": "Undo and Redo 100 nodes",
+            "p95Milliseconds": 437.8226,
+            "allocationCallsPerOperation": 83191
+        }
+    ]
+}

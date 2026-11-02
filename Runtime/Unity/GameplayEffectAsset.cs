@@ -18,6 +18,13 @@ namespace ZFramework.GAS.Unity
         [SerializeField, AttributeIdField] private int captureAttributeId;
         [SerializeField] private MagnitudeCapture captureFrom = MagnitudeCapture.Source;
         [SerializeField, CallerKey] private string callerKey;
+        [SerializeField, SkillParameterReference] private string parameterId;
+        [SerializeField] private float[] levels = new[] { 0f };
+        [SerializeField, AttributeIdField] private int targetAttributeId;
+        [SerializeField] private float targetCoefficient = 1;
+        [SerializeField] private float minimum;
+        [SerializeField] private float maximum = float.MaxValue;
+        [SerializeField] private float resultScale = -1;
 
         public EffectMagnitude Build() => kind switch
         {
@@ -25,6 +32,10 @@ namespace ZFramework.GAS.Unity
             MagnitudeKind.AttributeScaled => EffectMagnitude.FromAttribute(
                 new AttributeId(captureAttributeId), coefficient, captureFrom, constant),
             MagnitudeKind.SetByCaller => EffectMagnitude.FromCaller(callerKey),
+            MagnitudeKind.Parameter => EffectMagnitude.FromParameter(parameterId, coefficient, constant),
+            MagnitudeKind.LevelTable => EffectMagnitude.ByLevel(levels),
+            MagnitudeKind.Calculation => EffectMagnitude.FromCalculation(new AttributeFormula(new AttributeId(captureAttributeId),
+                new AttributeId(targetAttributeId), coefficient, targetCoefficient, constant, parameterId, minimum, maximum, resultScale)),
             _ => throw new InvalidOperationException($"Unhandled magnitude kind {kind}."),
         };
     }
@@ -71,11 +82,15 @@ namespace ZFramework.GAS.Unity
         [Header("时长")]
         [SerializeField] private EffectDurationPolicy durationPolicy = EffectDurationPolicy.Instant;
         [SerializeField] private float duration;
+        [SerializeField] private bool useDurationMagnitude;
+        [SerializeField] private MagnitudeAsset durationMagnitude = new();
         [Tooltip("大于 0 时改从来源的该属性读取时长，覆盖上面的固定值")]
         [SerializeField, AttributeIdField] private int durationAttributeId = -1;
 
         [Header("周期")]
         [SerializeField] private float period;
+        [SerializeField] private bool usePeriodMagnitude;
+        [SerializeField] private MagnitudeAsset periodMagnitude = new();
         [Tooltip("大于等于 0 时改从来源的该属性读取周期，覆盖上面的固定值")]
         [SerializeField, AttributeIdField] private int periodAttributeId = -1;
         [SerializeField] private bool executePeriodicOnApplication;
@@ -96,7 +111,16 @@ namespace ZFramework.GAS.Unity
         [NonSerialized] private GameplayEffectDefinition _definition;
 
         /// <summary>构建（并缓存）运行期定义。同一资产始终返回同一实例。</summary>
-        public GameplayEffectDefinition Definition => _definition ??= Build();
+        private bool _building;
+        public GameplayEffectDefinition Definition
+        {
+            get
+            {
+                if (_definition != null) return _definition;
+                if (_building) throw new InvalidOperationException(name + ": 效果循环引用。");
+                _building = true; try { return _definition = Build(); } finally { _building = false; }
+            }
+        }
 
         private GameplayEffectDefinition Build()
         {
@@ -127,13 +151,15 @@ namespace ZFramework.GAS.Unity
                 executePeriodicOnApplication,
                 TagAssetUtility.ToSet(cueTags),
                 durationAttributeId >= 0 ? new AttributeId(durationAttributeId) : null,
-                children.Count == 0 ? null : children.ToArray());
+                children.Count == 0 ? null : children.ToArray(),
+                useDurationMagnitude ? durationMagnitude.Build() : null,
+                usePeriodMagnitude ? periodMagnitude.Build() : null);
             DefinitionSource.Register(definition, this);
             return definition;
         }
 
         /// <summary>编辑期修改后清掉缓存，避免继续用旧定义。</summary>
-        public void InvalidateDefinition() => _definition = null;
+        public void InvalidateDefinition() { _definition = null; DefinitionSource.InvalidateDependents(this); }
         private void OnValidate() => InvalidateDefinition();
     }
 
@@ -158,6 +184,7 @@ namespace ZFramework.GAS.Unity
                 return null;
             }
 
+            DefinitionSource.DependsOn(owner, effect);
             return new ConditionalEffect(effect.Definition, trigger);
         }
     }

@@ -16,8 +16,9 @@ namespace ZFramework.GAS.Editor
         private static GameplayAbilityAsset[] _abilities;
         private static GameplayEffectAsset[] _effects;
         private static string[] _keys;
+        private static readonly Dictionary<UnityEngine.Object, string> SearchCache = new();
         public static event Action Changed;
-        static SkillIndex() { EditorApplication.projectChanged += Invalidate; }
+        static SkillIndex() { }
         public static IReadOnlyList<GameplayAbilityAsset> Abilities => _abilities ??= Find<GameplayAbilityAsset>();
         public static IReadOnlyList<GameplayEffectAsset> Effects => _effects ??= Find<GameplayEffectAsset>();
         private static T[] Find<T>() where T : UnityEngine.Object
@@ -29,7 +30,49 @@ namespace ZFramework.GAS.Editor
             for (int i = 0; i < array.arraySize; i++) { string key = array.GetArrayElementAtIndex(i).FindPropertyRelative("key").stringValue; if (!string.IsNullOrEmpty(key)) keys.Add(key); }
             return keys;
         }).Distinct().OrderBy(k => k).ToArray();
-        public static void Invalidate() { _abilities = null; _effects = null; _keys = null; AttributeCatalog.Invalidate(); Changed?.Invoke(); }
+        public static string SearchText(UnityEngine.Object asset)
+        {
+            if (SearchCache.TryGetValue(asset, out var text)) return text;
+            var builder = new System.Text.StringBuilder(asset.name).Append(' ').Append(AssetDatabase.GetAssetPath(asset));
+            using var so = new SerializedObject(asset); var property = so.GetIterator();
+            while (property.Next(true)) if (property.propertyType == SerializedPropertyType.String) builder.Append(' ').Append(property.stringValue);
+            return SearchCache[asset] = builder.ToString();
+        }
+        public static void Search(string query, List<GameplayAbilityAsset> results)
+        {
+            results.Clear(); var assets = Abilities;
+            for (int i = 0; i < assets.Count; i++) if (string.IsNullOrEmpty(query) || SearchText(assets[i]).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) results.Add(assets[i]);
+        }
+        internal static void UpdatePaths(string[] imported, string[] deleted, string[] moved, string[] oldPaths)
+        {
+            var touched = new HashSet<string>(imported.Concat(deleted).Concat(moved).Concat(oldPaths).Where(p => p.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)));
+            if (touched.Count == 0) return;
+            foreach (var key in SearchCache.Keys.ToArray()) if (key == null || touched.Contains(AssetDatabase.GetAssetPath(key))) SearchCache.Remove(key);
+            if (_abilities != null || _effects != null)
+            {
+                var assets = imported.Concat(moved).Where(p => touched.Contains(p)).Distinct().SelectMany(AssetDatabase.LoadAllAssetsAtPath).ToArray();
+                if (_abilities != null) _abilities = _abilities.Where(a => a != null && !touched.Contains(AssetDatabase.GetAssetPath(a))).Concat(assets.OfType<GameplayAbilityAsset>()).Distinct().OrderBy(a => a.name, StringComparer.OrdinalIgnoreCase).ToArray();
+                if (_effects != null) _effects = _effects.Where(a => a != null && !touched.Contains(AssetDatabase.GetAssetPath(a))).Concat(assets.OfType<GameplayEffectAsset>()).Distinct().OrderBy(a => a.name, StringComparer.OrdinalIgnoreCase).ToArray();
+            }
+            _keys = null; AttributeCatalog.Invalidate(); Changed?.Invoke();
+        }
+        public static void Invalidate() { _abilities = null; _effects = null; _keys = null; SearchCache.Clear(); AttributeCatalog.Invalidate(); Changed?.Invoke(); }
+    }
+    public sealed class SkillIndexPostprocessor : AssetPostprocessor
+    {
+        private static readonly HashSet<string> Imported = new(), Deleted = new();
+        private static bool _queued;
+        private static void OnPostprocessAllAssets(string[] imported, string[] deleted, string[] moved, string[] oldPaths)
+        {
+            if (AssetDatabase.IsAssetImportWorkerProcess()) return;
+            Imported.UnionWith(imported); Imported.UnionWith(moved); Deleted.UnionWith(deleted); Deleted.UnionWith(oldPaths);
+            if (_queued) return; _queued = true;
+            EditorApplication.delayCall += () =>
+            {
+                _queued = false; var added = Imported.ToArray(); var removed = Deleted.ToArray(); Imported.Clear(); Deleted.Clear();
+                SkillIndex.UpdatePaths(added, removed, Array.Empty<string>(), Array.Empty<string>());
+            };
+        }
     }
     public sealed class LibraryPanel : VisualElement, IDisposable
     {
@@ -37,28 +80,61 @@ namespace ZFramework.GAS.Editor
         private readonly Action<GameplayAbilityAsset> _open;
         private readonly ToolbarSearchField _search;
         private readonly ScrollView _library, _outline;
+        private readonly ListView _largeLibrary;
+        private readonly List<ScriptableObject> _visible = new();
         public LibraryPanel(SkillDocument doc, Action<GameplayAbilityAsset> open)
         {
             _doc = doc; _open = open; AddToClassList("library-panel");
             var heading = new Label("技能库"); heading.AddToClassList("panel-heading"); Add(heading);
             _search = new ToolbarSearchField(); _search.AddToClassList("library-search"); _search.RegisterValueChangedCallback(_ => Refresh()); Add(_search);
             _library = new ScrollView { style = { flexGrow = 1, minHeight = 100 } }; Add(_library);
+            _largeLibrary = new ListView { itemsSource = _visible, fixedItemHeight = 30, selectionType = SelectionType.None,
+                style = { flexGrow = 1, minHeight = 100, display = DisplayStyle.None } }; Add(_largeLibrary);
+            _largeLibrary.makeItem = () =>
+            {
+                var row = new Button(); row.AddToClassList("library-row");
+                row.clicked += () => { if (row.userData is GameplayAbilityAsset ability) _open(ability); else if (row.userData is ScriptableObject asset) { _doc.AddLoose(asset); _doc.Selection.Select(asset); } };
+                row.AddManipulator(new ContextualMenuManipulator(e =>
+                {
+                    e.menu.AppendAction("查找引用", _ => SkillReferenceWindow.Show(row.userData as UnityEngine.Object));
+                    e.menu.AppendAction("在 Project 中定位", _ => EditorGUIUtility.PingObject(row.userData as UnityEngine.Object));
+                }));
+                Vector2 down = default;
+                row.RegisterCallback<PointerDownEvent>(e => down = e.position);
+                row.RegisterCallback<PointerMoveEvent>(e => { if (e.pressedButtons == 1 && Vector2.Distance(down, e.position) > 7 && row.userData is UnityEngine.Object asset)
+                    { DragAndDrop.PrepareStartDrag(); DragAndDrop.objectReferences = new[] { asset }; DragAndDrop.StartDrag(asset.name); e.StopPropagation(); } });
+                return row;
+            };
+            _largeLibrary.bindItem = (element, i) =>
+            {
+                var row = (Button)element; var asset = _visible[i]; row.userData = asset;
+                row.text = (asset is GameplayAbilityAsset ? "◆  " : "↗  ") + asset.name; row.tooltip = AssetDatabase.GetAssetPath(asset);
+                row.EnableInClassList("selected-row", asset == _doc.Selection.Asset);
+            };
             var current = new Label("当前技能"); current.AddToClassList("panel-heading"); Add(current);
             _outline = new ScrollView { style = { flexGrow = 1, minHeight = 150 } }; Add(_outline);
             SkillIndex.Changed += Refresh; doc.Changed += Changed; doc.Selection.Changed += SelectionChanged; Refresh();
         }
         public void FocusSearch() => _search.Focus();
-        private void Changed(ChangeSet change) { RefreshOutline(); if (change.Structure) Refresh(); }
+        public void Search(string query) => _search.value = query;
+        private void Changed(ChangeSet change)
+        { if (change.Structure || change.Paths.Any(p => p == "m_Name" || p.Contains("displayName") || p.Contains("cue"))) RefreshOutline(); }
         private bool Matches(UnityEngine.Object asset)
         {
             string query = _search.value?.Trim(); if (string.IsNullOrEmpty(query)) return true;
-            if (asset.name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 || AssetDatabase.GetAssetPath(asset).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            using var so = new SerializedObject(asset); var p = so.GetIterator();
-            while (p.Next(true)) if (p.propertyType == SerializedPropertyType.String && p.stringValue.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            return false;
+            return SkillIndex.SearchText(asset).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
         }
         public void Refresh()
         {
+            bool large = SkillIndex.Abilities.Count >= 150;
+            _library.style.display = large ? DisplayStyle.None : DisplayStyle.Flex;
+            _largeLibrary.style.display = large ? DisplayStyle.Flex : DisplayStyle.None;
+            if (large)
+            {
+                _visible.Clear(); foreach (var asset in SkillIndex.Abilities) if (Matches(asset)) _visible.Add(asset);
+                foreach (var asset in SkillIndex.Effects) if (!AssetDatabase.IsSubAsset(asset) && Matches(asset)) _visible.Add(asset);
+                _largeLibrary.RefreshItems(); RefreshOutline(); return;
+            }
             _library.Clear();
             var groups = SkillIndex.Abilities.Where(Matches).GroupBy(a => Path.GetDirectoryName(AssetDatabase.GetAssetPath(a))?.Replace('\\', '/'));
             foreach (var group in groups)
@@ -110,7 +186,7 @@ namespace ZFramework.GAS.Editor
                     var row = Row(asset, asset is SkillAnimationAsset ? "▶" : "▪", asset is SkillAnimationAsset ? SkillColors.Animation : SkillColors.Instant, () => _doc.Selection.Select(asset));
                     fold.Add(row);
                     row.AddManipulator(new ContextualMenuManipulator(e => e.menu.AppendAction("查找引用", _ =>
-                    { var references = SkillAssetFactory.FindReferences(asset); _doc.Report(references.Count == 0 ? "没有其他资产引用" : string.Join("\n", references)); })));
+                    { SkillReferenceWindow.Show(asset); })));
                 }
             }
             var parameters = _doc.Serialized(_doc.Root).FindProperty("callerParameters");

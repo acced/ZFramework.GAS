@@ -18,8 +18,12 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private GameplayEffectAsset effect;
         [SerializeField] private AnimationMarkerTarget target = AnimationMarkerTarget.Target;
 
-        public AnimationMarker Build()
-            => new(time, key, effect != null ? effect.Definition : null, target);
+        [SerializeReference] public SkillAction[] actions = Array.Empty<SkillAction>();
+        public AnimationMarker Build(ScriptableObject owner = null)
+        {
+            DefinitionSource.DependsOn(owner, effect);
+            return new(time, key, effect != null ? effect.Definition : null, target, id, new SkillActionBuildContext(owner).Build(actions));
+        }
     }
 
     /// <summary>Cue 区间的可序列化镜像。</summary>
@@ -57,6 +61,8 @@ namespace ZFramework.GAS.Unity
     [CreateAssetMenu(menuName = "ZFramework GAS/Skill Animation", fileName = "NewSkillAnimation")]
     public sealed class SkillAnimationAsset : ScriptableObject
     {
+        public AnimationSection[] sections = Array.Empty<AnimationSection>();
+        [SerializeReference] public SkillRuntimeTrack[] runtimeTracks = Array.Empty<SkillRuntimeTrack>();
         [Header("片段")]
         [Tooltip("交给驱动的片段名：旧版 Animation 的片段名 / Animator 的状态名 / 序列帧的序列名")]
         [SerializeField] private string clipName;
@@ -98,7 +104,7 @@ namespace ZFramework.GAS.Unity
             var builtMarkers = new AnimationMarker[markers.Length];
             for (int i = 0; i < markers.Length; i++)
             {
-                builtMarkers[i] = markers[i].Build();
+                builtMarkers[i] = markers[i].Build(this);
             }
 
             var builtRegions = new List<AnimationCueRegion>(cueRegions.Length);
@@ -114,13 +120,14 @@ namespace ZFramework.GAS.Unity
             var builtTasks = new AnimationTaskEvent[taskEvents.Length];
             for (int i = 0; i < taskEvents.Length; i++) builtTasks[i] = taskEvents[i].Build();
             var definition = new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray(), builtWindows, builtTasks,
-                blendIn, blendOut);
+                blendIn, blendOut, Array.ConvertAll(sections, section => section.Build()),
+                Array.ConvertAll(runtimeTracks, track => track.Build()));
             DefinitionSource.Register(definition, this);
             return definition;
         }
 
         /// <summary>编辑期修改后清掉缓存，避免继续用旧定义。</summary>
-        public void InvalidateDefinition() => _definition = null;
+        public void InvalidateDefinition() { _definition = null; DefinitionSource.InvalidateDependents(this); }
         private void OnValidate() => InvalidateDefinition();
     }
 }

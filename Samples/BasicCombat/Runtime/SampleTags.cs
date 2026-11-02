@@ -14,6 +14,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
         public const string CooldownSanctuary = "Cooldown.Sample.Sanctuary";
         public const string CooldownSummon = "Cooldown.Sample.Summon";
         public const string SuperArmor = "State.SuperArmor";
+        public const string Empowered = "State.Empowered";
         public const string Channeling = "State.Channeling";
         public const string ComboWindow = "Window.Combo";
         public const string CueSwordTrail = "Cue.Sword.Trail";
@@ -28,7 +29,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
         {
             AbilitySlash, AbilityBolt, AbilityWarcry, AbilitySanctuary, AbilitySummon,
             CooldownSlash, CooldownBolt, CooldownWarcry, CooldownSanctuary, CooldownSummon,
-            SuperArmor, Channeling, ComboWindow,
+            SuperArmor, Empowered, Channeling, ComboWindow,
             CueSwordTrail, CueBoltCharge, CueWarcryAura, CueSanctuary, CueSummon, CueHit, CueGroundTest,
         };
     }

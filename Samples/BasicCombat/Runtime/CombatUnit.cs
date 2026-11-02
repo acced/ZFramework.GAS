@@ -11,11 +11,12 @@ namespace ZFramework.GAS.Samples.BasicCombat
     [DisallowMultipleComponent]
     public sealed class CombatUnit : MonoBehaviour, IAbilitySystemProvider
     {
-        public static readonly AttributeId Health = new(1), MaxHealth = new(2), Attack = new(3), Stamina = new(4);
+        public static readonly AttributeId Health = new(1), MaxHealth = new(2), Attack = new(3), Stamina = new(4), Armor = new(5);
 
         [SerializeField] private string displayName = "单位";
         [SerializeField] private float maxHealth = 300;
         [SerializeField] private float attack = 20;
+        [SerializeField] private float armor = 3;
         [SerializeField] private float maxStamina = 100;
         [Tooltip("血条与跳字的挂点")]
         [SerializeField] private Transform hudAnchor;
@@ -31,7 +32,8 @@ namespace ZFramework.GAS.Samples.BasicCombat
 
         public void Initialize(GameplayCueRouter router)
         {
-            AbilitySystem = new AbilitySystemComponent(4, router);
+            AbilitySystem?.Clear();
+            AbilitySystem = new AbilitySystemComponent(5, router);
             GetComponent<CueVfxPlayer>()?.Bind(AbilitySystem);
             SkillRunner = new SkillRunner(AbilitySystem, () =>
             {
@@ -42,6 +44,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
             AbilitySystem.Attributes.Add(MaxHealth, maxHealth);
             AbilitySystem.Attributes.Add(Attack, attack);
             AbilitySystem.Attributes.Add(Stamina, maxStamina);
+            AbilitySystem.Attributes.Add(Armor, armor);
             float reported = maxHealth;
             health.OnCurrentValueChanged += (attribute, before, after) =>
             {
@@ -56,6 +59,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
         }
 
         public float Get(AttributeId id) => AbilitySystem.Attributes.GetCurrent(id);
+        private void OnDestroy() => AbilitySystem?.Clear();
 
         public void SetBase(AttributeId id, float value)
         {

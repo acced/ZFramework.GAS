@@ -70,7 +70,8 @@ namespace ZFramework.GAS.Tests
             try
             {
                 yield return null;
-                Assert.AreEqual(AbilityActivationResult.Activated, hero.SkillRunner.TryCast(slash, dummy.AbilitySystem));
+                Assert.AreEqual(AbilityActivationResult.Activated, hero.SkillRunner.TryCast(slash, dummy.AbilitySystem,
+                    new TimelineTaskContext { Origin = knight.transform, Target = dummy.transform, Scene = knight.scene }));
                 float elapsed = 0;
                 while (elapsed < .4f) { hero.AbilitySystem.Tick(Time.deltaTime); elapsed += Time.deltaTime; yield return null; }
                 var trail = knight.GetComponentInChildren<SwordTrailVisual>();

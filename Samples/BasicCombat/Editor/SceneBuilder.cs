@@ -59,18 +59,15 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 camera.AddComponent<AudioListener>();
 
                 var arena = new GameObject("TrainingArena").AddComponent<TrainingArena>();
-                var guardian = art.Additive("Vfx_Guardian", null, "#ffffff");
                 using (var so = new SerializedObject(arena))
                 {
                     so.FindProperty("hero").objectReferenceValue = heroUnit;
                     so.FindProperty("dummy").objectReferenceValue = dummyUnit;
+                    so.FindProperty("abilitySet").objectReferenceValue = AssetDatabase.LoadAssetAtPath<AbilitySetAsset>(BasicCombatSample.Folder + "/BasicCombatAbilities.asset");
                     so.FindProperty("castPoint").objectReferenceValue = Find(hero.transform, "SwordTip");
                     so.FindProperty("aimPoint").objectReferenceValue = aim;
                     so.FindProperty("burstMaterial").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Material>(art.Folder + "/Vfx_Glow.mat");
                     so.FindProperty("burstMesh").objectReferenceValue = FindMesh(art, "Vfx.GlowCross");
-                    so.FindProperty("guardianPrefab").objectReferenceValue = knightPrefab;
-                    so.FindProperty("guardianMaterial").objectReferenceValue = guardian;
-                    so.FindProperty("summonPoint").vector3Value = KnightAnimations.Timing.SummonPoint;
                     string[] colors = { "#ffb347", "#4fe3ff", "#ff7a45", "#5fe8ff", "#c46bff" };
                     var list = so.FindProperty("skills"); list.arraySize = skills.Length;
                     for (int i = 0; i < skills.Length; i++)

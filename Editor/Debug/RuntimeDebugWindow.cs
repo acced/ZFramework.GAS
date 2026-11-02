@@ -14,8 +14,8 @@ namespace ZFramework.GAS.Editor
         private ToolbarToggle _follow;
         private Label _hint, _unitName;
         private ScrollView _scroll;
-        private readonly List<Row> _abilities = new(), _tasks = new(), _tags = new(), _attributes = new(), _effects = new();
-        private VisualElement _abilityHost, _taskHost, _tagHost, _attributeHost, _effectHost;
+        private readonly List<Row> _abilities = new(), _tasks = new(), _tags = new(), _attributes = new(), _effects = new(), _actions = new();
+        private VisualElement _abilityHost, _taskHost, _tagHost, _attributeHost, _effectHost, _actionHost;
 
         private sealed class Row : VisualElement
         {
@@ -24,14 +24,17 @@ namespace ZFramework.GAS.Editor
             public readonly ProgressBar Bar = new() { lowValue = 0, highValue = 1 };
             public readonly TaskStrip Strip;
             public GameplayAbilityAsset Asset;
+            public string ActionId;
             public Row(bool ability, bool task)
             {
                 AddToClassList("debug-row");
+                this.AddManipulator(new ContextualMenuManipulator(e => e.menu.AppendAction("切换此动作断点", _ => SkillActionDebugger.Toggle(ActionId),
+                    string.IsNullOrEmpty(ActionId) ? DropdownMenuAction.Status.Disabled : DropdownMenuAction.Status.Normal)));
                 var line = new VisualElement(); line.AddToClassList("debug-row-title");
                 Dot.AddToClassList("debug-state-dot"); line.Add(Dot);
                 if (ability)
                 {
-                    var button = new Button(() => { if (Asset != null) SkillEditorWindow.Open().Show(Asset); });
+                    var button = new Button(() => { if (Asset != null) { var window = SkillEditorWindow.Open(); window.Show(Asset); SkillActionNavigation.Select(window.Document, ActionId); } });
                     button.Add(Title); button.AddToClassList("debug-ability-link"); line.Add(button);
                 }
                 else line.Add(Title);
@@ -77,12 +80,15 @@ namespace ZFramework.GAS.Editor
             _follow = new ToolbarToggle { text = "跟随选中", value = RuntimeDebugSession.FollowSelection };
             _follow.RegisterValueChangedCallback(e => RuntimeDebugSession.FollowSelection = e.newValue); toolbar.Add(_follow);
             toolbar.Add(new ToolbarButton(() => { RuntimeDebugSession.RefreshProviders(); RuntimeDebugSession.Refresh(); }) { text = "刷新单位" });
+            toolbar.Add(new ToolbarButton(() => SkillActionDebugger.PauseNext = true) { text = "下个动作暂停" });
+            toolbar.Add(new ToolbarButton(SkillActionDebugger.StepScene) { text = "场景逐帧" });
             rootVisualElement.Add(toolbar);
             _unitName = new Label(); _unitName.AddToClassList("debug-unit-name"); rootVisualElement.Add(_unitName);
             _hint = new Label(); _hint.AddToClassList("debug-guide"); rootVisualElement.Add(_hint);
             _scroll = new ScrollView(); rootVisualElement.Add(_scroll);
             _abilityHost = Section("技能", "debug-abilities"); _taskHost = Section("正在播放", "debug-tasks");
             _tagHost = Section("标签", "debug-tags"); _attributeHost = Section("属性", "debug-attributes"); _effectHost = Section("效果", "debug-effects");
+            _actionHost = Section("动作与独立任务", "debug-actions");
             Render(RuntimeDebugSession.Current);
         }
         private VisualElement Section(string title, string key)
@@ -127,11 +133,29 @@ namespace ZFramework.GAS.Editor
                 string status = value.Active ? "激活中" : value.OnCooldown ? "冷却中" : !value.TagGatePassed ? "标签门禁未通过" : "可尝试施放";
                 if (value.Active && value.OnCooldown) status += " · 冷却中";
                 if ((value.Active || value.OnCooldown) && !value.TagGatePassed) status += " · 标签门禁未通过";
+                row.ActionId = value.Failure.SourceId;
+                if (!string.IsNullOrEmpty(value.CleanupError))
+                { status += "\n取消清理警告：" + value.CleanupError; row.ActionId = value.CleanupActionId; }
+                if (!value.Failure.Succeeded)
+                    status += "\n最近失败：" + value.Failure.Message + (value.Failure.Tag.IsValid ? " · " + value.Failure.Tag.Name : "") +
+                        (value.Failure.Amount > 0 ? " · " + value.Failure.Amount.ToString("0.###") : "");
+                foreach (var parameter in value.Parameters)
+                {
+                    string label = parameter.Key;
+                    foreach (var declared in SkillNumberDrawer.Parameters(value.Asset)) if (declared.Id == parameter.Key) { label = declared.displayName; break; }
+                    status += "\n" + label + " = " + parameter.Value;
+                }
                 row.Fill(value.Name + "  Lv." + value.Level, status,
                     value.Active ? SkillColors.Duration : value.OnCooldown ? SkillColors.Cooldown : !value.TagGatePassed ? SkillColors.Error : SkillColors.Task,
                     value.CooldownDuration > 0 ? value.CooldownRemaining / value.CooldownDuration : -1,
                     value.OnCooldown && value.CooldownRemaining <= 0 ? "冷却标签仍在（无有限计时）" : $"冷却 {value.CooldownRemaining:0.00} / {value.CooldownDuration:0.00}s");
-                row.tooltip = "只读显示激活、标签门禁和冷却；「可尝试」不保证资源足够。";
+                row.tooltip = "最近失败来自实际施放检查；点击定位对应动作。";
+            }
+            Resize(_actions, _actionHost, snapshot.Actions.Count, ability: true);
+            for (int i = 0; i < _actions.Count; i++)
+            {
+                var state = snapshot.Actions[i]; var row = _actions[i]; row.Asset = state.Asset; row.ActionId = state.Id;
+                row.Fill((state.Asset != null ? state.Asset.DisplayName : "技能") + (state.Independent ? " · 场景任务" : " · 技能任务"), state.State, SkillColors.Task);
             }
             Resize(_tasks, _taskHost, snapshot.Tasks.Count, task: true);
             for (int i = 0; i < _tasks.Count; i++)

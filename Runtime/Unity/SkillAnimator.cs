@@ -13,6 +13,7 @@ namespace ZFramework.GAS.Unity
         {
             get
             {
+                if (_driver is IAnimationDriverLifetime lifetime && !lifetime.IsValid) Release();
                 if (_driver != null) return _driver;
                 if (backend == null) throw new InvalidOperationException("SkillAnimator 未设置动画后端。");
                 if (!backend.Validate(gameObject, out string error)) throw new InvalidOperationException(error);
@@ -21,12 +22,16 @@ namespace ZFramework.GAS.Unity
         }
         public void SetBackend(AnimationBackend value)
         {
-            _driver?.Stop();
-            _driver = null;
+            Release();
             backend = value;
         }
-        private void OnDisable() => _driver?.Stop();
-        private void OnDestroy() { _driver?.Stop(); _driver = null; }
-        private void OnValidate() { _driver?.Stop(); _driver = null; }
+        private void Release()
+        {
+            var driver = _driver; _driver = null;
+            try { driver?.Stop(); } finally { if (driver is IDisposable disposable) disposable.Dispose(); }
+        }
+        private void OnDisable() => Release();
+        private void OnDestroy() => Release();
+        private void OnValidate() => Release();
     }
 }

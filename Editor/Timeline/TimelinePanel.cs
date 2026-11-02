@@ -129,10 +129,33 @@ namespace ZFramework.GAS.Editor
         private float TimeAt(float x) => TimelineMath.Time(x, _zoom, _offset);
         private void Seek(float time) { if (!_doc.Playback.Live) _doc.Playback.Seek(time, Duration); }
         public void TogglePlay() { if (_doc.Playback.Live) return; _doc.Playback.Playing = !_doc.Playback.Playing; if (_doc.Playback.Time >= Duration) Seek(0); PlaybackChanged(); }
-        public void Fit() { _zoom = Mathf.Clamp(Mathf.Max(100, resolvedStyle.width - HeaderWidth - 24) / Duration, 30, 4000); _offset = 0; PackRows(); PositionElements(); DrawRuler(); }
+        public void Fit() { _zoom = Mathf.Clamp(Mathf.Max(100, ValidPositive(resolvedStyle.width, 640) - HeaderWidth - 24) / Duration, 30, 4000); _offset = 0; PackRows(); PositionElements(); DrawRuler(); }
         public void Rebuild(ChangeSet change)
         {
             if (_dragging) { _rebuildPending = true; return; }
+            if (!change.Structure && change.Paths.Length > 0 && _animation == _doc.Root?.Animation)
+            {
+                if (change.Asset != _animation) return;
+                bool regroup = change.Paths.Any(path => path.Contains("cueTag") || path.EndsWith(".id", StringComparison.Ordinal));
+                if (!regroup && _animation != null)
+                {
+                    foreach (var element in _elements)
+                    {
+                        var property = TimelineCommands.Find(_doc.Serialized(_animation), element.Track.PropertyPath, element.Id);
+                        if (property == null) { regroup = true; break; }
+                        var span = element.Track.ReadSpan(property); element.Start = span.start; element.End = span.end;
+                        var label = element.View.Q<Label>();
+                        label.text = element.Track.PropertyPath == "cueRegions" ? $"{span.start:0.##}–{(span.end < 0 ? "结束" : span.end.ToString("0.##") + "s")}" : element.Track.Label(property);
+                        element.View.tooltip = element.Track.Label(property) + $" · {span.start:0.###}s";
+                        element.View.EnableInClassList("invalid-element", span.start < 0 || span.start > Duration || span.end > Duration);
+                    }
+                    if (!regroup)
+                    {
+                        if (_clipCaption != null) _clipCaption.text = _animation.ClipName + $" · {_animation.Duration:0.##}s";
+                        _ramps?.MarkDirtyRepaint(); PackRows(); PositionElements(); DrawRuler(); SelectionChanged(); PlaybackChanged(); return;
+                    }
+                }
+            }
             _rebuildPending = false;
             _elements.Clear(); _rows.Clear(); _tracks.Clear(); _clipRow.Clear(); _ramps = null; _clipCaption = null;
             var animation = _doc.Root?.Animation;
@@ -422,7 +445,7 @@ namespace ZFramework.GAS.Editor
             ElementView[] moved = null;
             element.View.RegisterCallback<PointerDownEvent>(e =>
             {
-                if (e.button != 0) return; Focus();
+                if (e.button != 0 || !float.IsFinite(e.position.x)) return; Focus();
                 if (!e.ctrlKey && !e.shiftKey && !_selected.Contains(element.Key)) _selected.Clear();
                 if (e.ctrlKey && _selected.Contains(element.Key))
                 {
@@ -441,7 +464,7 @@ namespace ZFramework.GAS.Editor
             });
             element.View.RegisterCallback<PointerMoveEvent>(e =>
             {
-                if (!dragging || moved.Length == 0) return;
+                if (!dragging || moved.Length == 0 || !float.IsFinite(e.position.x)) return;
                 float anchor = resize == 1 ? (element.End < 0 ? Duration : element.End) : element.Start;
                 float candidate = TimelineMath.Snap(anchor + (e.position.x - origin) / _zoom, Fps, e.altKey);
                 if (!e.altKey)
@@ -462,7 +485,7 @@ namespace ZFramework.GAS.Editor
             element.View.RegisterCallback<PointerUpEvent>(e =>
             {
                 if (!dragging) return; dragging = false; _dragging = false; _dragSpans.Clear(); element.View.ReleasePointer(e.pointerId);
-                if (Mathf.Abs(delta) < .00001f) { FinishDrag(); return; }
+                if (!float.IsFinite(delta) || Mathf.Abs(delta) < .00001f) { FinishDrag(); return; }
                 EditCommand.Run(_doc, "移动时间轴元素", _doc.Root.Animation, so =>
                 {
                     foreach (var item in moved)

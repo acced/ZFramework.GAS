@@ -12,7 +12,9 @@
 | `Animations/` | 待机与五个技能动作（IK 驱动四肢、披风与羽饰弹簧跟随），假人受击 |
 | `Skills/` | 五个技能，效果与动画内嵌为子资产，时间轴已对齐动作关键帧 |
 | `BasicCombat.unity` | 训练场：石台、立柱旗帜、火盆、骑士与假人 |
-| `Attributes.asset` | 属性词表：生命 1、最大生命 2、攻击 3、体力 4 |
+| `Attributes.asset` | 属性词表：生命 1、最大生命 2、攻击 3、体力 4、护甲 5 |
+| `BasicCombatAbilities.asset` | 初始技能套组与授予等级 |
+| `Skills/Shared/` | 斩击动作模块、共享参数集、只覆盖参数的重斩变体 |
 
 生成器还会把示例标签（`SampleTags.All`）加入项目的 Gameplay Tags 配置并重新生成注册表，随后 Unity 会编译一次。重新生成前会弹窗确认，并覆盖整个示例目录。
 
@@ -37,12 +39,12 @@
 | 键 | 技能 | 演示的机制 |
 |---|---|---|
 | 1 | 斩击 | 体力消耗、冷却、命中伤害、剑光、霸体与连招窗口 |
-| 2 | 能量弹 | 蓄能 Cue、`ProjectileSpawner` 任务事件与命中效果 |
-| 3 | 战吼 | 自身增益（攻击 +10，持续 6 秒）、光环 |
+| 2 | 能量弹 | 蓄能 Cue、投射物动作，动画结束后仍能命中 |
+| 3 | 战吼 | 自身增益（攻击 +10，持续 6 秒）、强化标签、光环；随后斩击进入强化分支 |
 | 4 | 圣域引导 | 周期治疗；引导期间的 `State.Channeling` 阻断其他技能 |
-| 5 | 召唤 | 纯回调事件，宿主在法阵处生成守护灵 |
+| 5 | 召唤 | 生成守护灵动作＋独立持续领域；存活时间、数量、周期、范围均由参数配置 |
 
-`CombatUnit` 持有 ASC 和每个角色独立的 `SkillRunner`。`TrainingArena` 通过 `hero.SkillRunner.TryCast(skill.asset, dummy.AbilitySystem, context)` 请求施放，并按资产查询冷却和激活状态，不再持有 Spec 或创建 `AnimationTask`。统一入口负责授予去重、激活、创建动画任务和播完结束技能；`MarkerReached` 把技能资产与时间轴事件交给训练场处理召唤。
+`CombatUnit` 持有 ASC 和每个角色独立的 `SkillRunner`。`TrainingArena` 通过技能套组授予，通过 `hero.SkillRunner.TryCast(skill.asset, dummy.AbilitySystem, context)` 请求施放，并按资产查询冷却和激活状态。召唤由资产里的 `SpawnPrefabAction` 执行，标记名称只用于显示，没有字符串业务分支。
 
 `Runtime/TrainingArena.cs` 负责创建 `GameplayCueRouter`、`FixedUpdate` 推进，以及为投射物提供出手点、目标查询与对象池回调。`CombatUnit.Initialize` 将 ASC 绑定给 `CueVfxPlayer`，通用播放器负责时间轴特效的创建、LateUpdate 更新和清理；训练场仅保留命中反馈等游戏逻辑。HUD 用 IMGUI 绘制，按键也经 IMGUI 事件读取，新旧输入系统下都能运行。
 

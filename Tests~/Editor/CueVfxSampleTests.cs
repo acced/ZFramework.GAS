@@ -28,6 +28,9 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.AreEqual(1, SceneManager.sceneCount);
             var knight = AssetDatabase.LoadAssetAtPath<GameObject>(folder + "/Prefabs/Knight.prefab");
             var library = AssetDatabase.LoadAssetAtPath<CueVfxLibrary>(folder + "/CueVfxLibrary.asset");
+            var module = AssetDatabase.LoadAssetAtPath<SkillActionModuleAsset>(folder + "/Skills/Shared/扇形斩击动作.asset");
+            Assert.IsNotNull(module); Assert.IsNotNull(MonoScript.FromScriptableObject(module), "Shared module must survive a domain reload");
+            Assert.IsNotNull(module.parameters); Assert.IsNotNull(MonoScript.FromScriptableObject(module.parameters));
             Assert.AreEqual(9, library.bindings.Length);
             Assert.AreSame(library, knight.GetComponent<CueVfxPlayer>().Library);
             Assert.IsEmpty(knight.GetComponentsInChildren<CueVisual>(true), "角色只引用共享配置，不预挂特效。");

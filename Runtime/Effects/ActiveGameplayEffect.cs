@@ -73,6 +73,7 @@ namespace ZFramework.GAS
         internal float ResolvedPeriod;
         internal float ResolvedDuration;
         internal AttributeSet SourceAttributes;
+        internal GameplayEffectSpec Spec;
         internal float[] ResolvedMagnitudes;
         internal GameplayAttribute[] ModifierAttributes;
         internal int ModifierAttributeCount;
@@ -113,6 +114,7 @@ namespace ZFramework.GAS
             Definition = null;
             Source = null;
             SourceAttributes = null;
+            Spec = default;
             StackCount = 0;
             ElapsedTime = 0f;
             PeriodTimer = 0f;
@@ -132,6 +134,7 @@ namespace ZFramework.GAS
             Definition = null;
             Source = null;
             SourceAttributes = null;
+            Spec = default;
             if (ModifierAttributes != null && ModifierAttributeCount > 0)
             {
                 Array.Clear(ModifierAttributes, 0, ModifierAttributeCount);

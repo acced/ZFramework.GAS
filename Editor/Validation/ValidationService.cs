@@ -286,10 +286,18 @@ namespace ZFramework.GAS.Editor
             while (p.Next(true))
             {
                 if (p.propertyType != SerializedPropertyType.Integer || !p.name.EndsWith("AttributeId", StringComparison.Ordinal)) continue;
-                if (p.name == "captureAttributeId")
+                if (p.propertyPath.StartsWith("durationMagnitude.", StringComparison.Ordinal) && !p.serializedObject.FindProperty("useDurationMagnitude").boolValue ||
+                    p.propertyPath.StartsWith("periodMagnitude.", StringComparison.Ordinal) && !p.serializedObject.FindProperty("usePeriodMagnitude").boolValue) continue;
+                if (p.name == "captureAttributeId" || p.name == "targetAttributeId")
                 {
                     string parent = p.propertyPath.Substring(0, p.propertyPath.LastIndexOf('.'));
-                    if (p.serializedObject.FindProperty(parent + ".kind").enumValueIndex != 1) continue;
+                    var kindProperty = p.serializedObject.FindProperty(parent + ".kind");
+                    // Modifier targets are always used; magnitude attributes depend on the selected formula.
+                    if (kindProperty != null)
+                    {
+                        var kind = (MagnitudeKind)kindProperty.enumValueIndex;
+                        if (p.name == "captureAttributeId" ? kind != MagnitudeKind.AttributeScaled && kind != MagnitudeKind.Calculation : kind != MagnitudeKind.Calculation) continue;
+                    }
                 }
                 if (p.name == "durationAttributeId" && p.serializedObject.FindProperty("durationPolicy").enumValueIndex != 1) continue;
                 if (p.intValue < 0 && p.name != "targetAttributeId") continue;

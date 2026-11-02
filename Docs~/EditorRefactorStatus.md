@@ -1,10 +1,14 @@
 # 技能编辑器重构交付记录
 
-日期：2026-10-26。依据 `EditorRefactorPlan.html`，本次实现 M0–M5 主线，M6 可选扩展未实施。
+日期：2026-11-02。M0–M5 已有实现；运行时调试与技能编辑器 Live Link 也已实现，不能再将 M6 整体标记为未实施。
+
+本轮新增配置动作、参数与等级求值、共享模块、场景任务宿主、逻辑事件与等待、Section、运行期曲线／音效轨、Playables 后端、预览辅助和生产工具。接入细节见 [可配置技能工作流](ConfigurableSkills.md)，当前测试结果及限制见 [本轮验证记录](SkillImplementationVerification.md)。旧日期的测试数字只代表历史基线。
+
+同日后续审查修复了 Section 边界、取消重入、Playable 混合／根运动、参数快照与套组授予归属。最新修复与回归结果见 [技能边界与生命周期验证](SkillHardeningVerification.md)。
 
 2026-10-27 更新：目前没有旧版本使用方，已移除迁移菜单和批量迁移代码，并同步调整计划。稳定时间轴 ID 继续由编辑器内部维护。
 
-## 已落地
+## 原编辑器重构基线（2026-10-26）
 
 - M0：共享 SkillDocument、序列化对象池、ChangeSet、SelectionModel、PlaybackModel、命令分组、稳定时间轴 ID；UXML/USS 三栏工作台。
 - M1：增量结构图、类型化端口规则、搜索创建、内嵌资产、深拷贝、删除、内嵌／外置转换、只读 Cue 节点、布局与注释、小地图、Details 和能力门禁模拟器。
@@ -15,13 +19,13 @@
 
 核心 Core 语义和既有序列化字段名保留。旧三个编辑器实现已替换，SkillGraphWindow 保留静态兼容入口。没有提交 Git commit。
 
-## 已执行的验证
+## 历史验证（2026-10-26）
 
 | 环境 | 结果 |
 |---|---|
 | Core .NET 8 | 19/19，100,000 次预热激活／结束 0 allocated bytes |
-| Unity 6000.3.14f1 EditMode，最终代码 | 45/45 |
-| Unity PlayMode，最终代码 | 4/4：Animator、Legacy、Sprite、官方 Spine 4.2 |
+| Unity 6000.3.14f1 EditMode，当时版本 | 45/45 |
+| Unity PlayMode，当时版本 | 4/4：Animator、Legacy、Sprite、官方 Spine 4.2 |
 | 无 Spine 条件程序集验证，先前回归轮次 | 36/36；可选程序集被排除 |
 | Runtime + Editor 对实际 Unity API 的额外编译 | 0 errors，0 warnings |
 | Unity Mono 时间轴窗口＋无分配任务生成器 | 1,000 圈 0 bytes；不代表每次创建内置任务都无分配 |
@@ -53,7 +57,9 @@ EditMode 包括真实 PointerDown/Move/Up 时间轴拖拽测试：拖动期间�
 - 示例入口：`Tools → ZFramework GAS → 创建 BasicCombat 示例`；标签注册和宿主配置见 `Samples/BasicCombat/README.md`。
 - 操作与接入说明见 `README.md` 及 `Docs~/EditorGuide.md`。
 
-## 与计划的差异及未完成验收
+## 历史验收记录（2026-10-26）
+
+以下是旧阶段的验收记录，不代表本轮代码的当前能力；2026-11-02 的实施与验证以 `ConfigurableSkills.md` 和 `SkillImplementationVerification.md` 为准。
 
 - 本次是主体功能落地，尚未达到计划全部逐项验收：未组织两名新策划的可用性测试，未录制三个完整工作流，未完成五个示例技能在完整战斗宿主中的端到端比对。
 - 图的双击连线重路由点、折叠状态持久化、完整节点外观注册扩展尚未实现；布局采用有界分层排布，并非完整 Sugiyama 优化算法。

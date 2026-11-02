@@ -7,7 +7,7 @@ using ZFramework.GAS.Unity;
 
 namespace ZFramework.GAS.Editor
 {
-    public enum PortKind { Cost, Cooldown, Animation, Marker, Applied, Periodic, Removed }
+    public enum PortKind { Cost, Cooldown, Animation, Marker, Applied, Periodic, Removed, ActionReference }
     public readonly struct PortId : IEquatable<PortId>
     {
         public readonly PortKind Kind;
@@ -17,7 +17,7 @@ namespace ZFramework.GAS.Editor
         public override bool Equals(object obj) => obj is PortId other && Equals(other);
         public override int GetHashCode() => ((int)Kind * 397) ^ (ElementId?.GetHashCode() ?? 0);
         public string Label => Kind switch { PortKind.Cost => "消耗", PortKind.Cooldown => "冷却", PortKind.Animation => "动画", PortKind.Marker => "事件", PortKind.Applied => "生效时", PortKind.Periodic => "每周期", _ => "移除时" };
-        public Type AcceptedType => Kind == PortKind.Animation ? typeof(SkillAnimationAsset) : typeof(GameplayEffectAsset);
+        public Type AcceptedType => Kind == PortKind.ActionReference ? typeof(ScriptableObject) : Kind == PortKind.Animation ? typeof(SkillAnimationAsset) : typeof(GameplayEffectAsset);
         public bool Single => Kind <= PortKind.Marker;
         public EffectTrigger Trigger => Kind == PortKind.Periodic ? EffectTrigger.Periodic : Kind == PortKind.Removed ? EffectTrigger.Removed : EffectTrigger.Applied;
     }
@@ -62,11 +62,18 @@ namespace ZFramework.GAS.Editor
                     }
                 }
             }
+            var cursor = so.GetIterator();
+            while (cursor.Next(true))
+                if (cursor.propertyType == SerializedPropertyType.ObjectReference && cursor.objectReferenceValue is ScriptableObject child &&
+                    (child is SkillActionModuleAsset || child is SkillParameterSetAsset || child is GameplayEffectAsset &&
+                        (cursor.propertyPath.Contains("actions.") || cursor.propertyPath.Contains("Actions.") || cursor.propertyPath.Contains("onHit.") || cursor.propertyPath.Contains("onPeriod."))))
+                    yield return new AssetLink(asset, new PortId(PortKind.ActionReference, cursor.propertyPath), child);
         }
         public static bool CanAttach(ScriptableObject parent, PortId port, ScriptableObject child, out string error, SkillDocument document = null)
         {
             error = null;
-            if (parent == null || child == null || !port.AcceptedType.IsInstanceOfType(child)) error = "端口类型不匹配";
+            if (port.Kind == PortKind.ActionReference) error = "动作引用请在 Details 中配置";
+            else if (parent == null || child == null || !port.AcceptedType.IsInstanceOfType(child)) error = "端口类型不匹配";
             else if (parent == child) error = "不能引用自身";
             else if (parent is GameplayAbilityAsset && port.Kind > PortKind.Animation || parent is SkillAnimationAsset && port.Kind != PortKind.Marker || parent is GameplayEffectAsset && port.Kind < PortKind.Applied)
                 error = "该资产没有此端口";
@@ -116,7 +123,9 @@ namespace ZFramework.GAS.Editor
         }
         public static void Write(SerializedObject so, PortId port, ScriptableObject child, bool remove = false)
         {
-            if (port.Kind <= PortKind.Animation)
+            if (port.Kind == PortKind.ActionReference)
+            { var property = so.FindProperty(port.ElementId); if (property != null) property.objectReferenceValue = remove ? null : child; }
+            else if (port.Kind <= PortKind.Animation)
                 so.FindProperty(port.Kind == PortKind.Cost ? "cost" : port.Kind == PortKind.Cooldown ? "cooldown" : "animation").objectReferenceValue = remove ? null : child;
             else if (port.Kind == PortKind.Marker)
             {

@@ -16,9 +16,10 @@ namespace ZFramework.GAS.Unity
     /// <b>循环由状态自身的 clip 决定</b>，运行期改不了，因此 <c>loop</c> 参数在此实现中不生效；
     /// 时间轴侧的循环语义（标记点每圈重触发）仍由 <see cref="AnimationTask"/> 保证。
     /// </summary>
-    public sealed class AnimatorAnimationDriver : IBlendingAnimationDriver
+    public sealed class AnimatorAnimationDriver : IBlendingAnimationDriver, ISeekableAnimationDriver, IAnimationDriverLifetime
     {
         private readonly Animator _animator;
+        public bool IsValid => _animator != null;
         private readonly int _layer;
 
         private float _restoreSpeed;
@@ -74,6 +75,8 @@ namespace ZFramework.GAS.Unity
         public void Advance(float normalizedTime)
         {
         }
+        public void Seek(float normalizedTime)
+        { if (_animator != null && _playing) { _animator.Play(_playingState, _layer, normalizedTime); _animator.Update(0); } }
 
         public void Stop() => Stop(0f);
 
