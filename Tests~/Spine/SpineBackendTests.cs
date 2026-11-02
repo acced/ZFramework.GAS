@@ -41,5 +41,32 @@ namespace ZFramework.GAS.Tests
             }
             finally { Object.Destroy(go); Object.Destroy(data); Object.Destroy(json); }
         }
+        [UnityTest]
+        public IEnumerator Spine42BlendScalesWithStretchAndReturnsToPrevious()
+        {
+            var json = new TextAsset("{\"skeleton\":{\"hash\":\"blend\",\"spine\":\"4.2.0\"},\"bones\":[{\"name\":\"root\"}],\"animations\":{" +
+                "\"Idle\":{\"bones\":{\"root\":{\"rotate\":[{\"value\":0},{\"time\":1,\"value\":0}]}}}," +
+                "\"Attack\":{\"bones\":{\"root\":{\"rotate\":[{\"value\":30},{\"time\":0.8,\"value\":30}]}}}}}");
+            var data = SkeletonDataAsset.CreateRuntimeInstance(json, Array.Empty<AtlasAssetBase>(), true, 1);
+            var go = new GameObject("Spine blend test");
+            var skeleton = go.AddComponent<SkeletonAnimation>(); skeleton.skeletonDataAsset = data; skeleton.Initialize(true);
+            skeleton.AnimationState.SetAnimation(0, "Idle", true);
+            var animator = go.AddComponent<SkillAnimator>(); animator.SetBackend(new SpineBackend());
+            try
+            {
+                yield return null;
+                var driver = (IBlendingAnimationDriver)animator.Driver;
+                driver.Play("Attack", .4f, false, .2f);
+                var entry = skeleton.AnimationState.GetCurrent(0);
+                // 拉伸 2 倍，时间轴上的 0.2 秒混入在实际时间里只有 0.1 秒。
+                Assert.AreEqual(2, entry.TimeScale, .001f); Assert.AreEqual(.1f, entry.MixDuration, .001f);
+                skeleton.Update(.05f); Assert.That(skeleton.Skeleton.RootBone.Rotation, Is.InRange(1f, 29f));
+                skeleton.Update(.1f); Assert.AreEqual(30, skeleton.Skeleton.RootBone.Rotation, .5f);
+                driver.Stop(.3f);
+                var back = skeleton.AnimationState.GetCurrent(0);
+                Assert.AreEqual("Idle", back.Animation.Name); Assert.IsTrue(back.Loop); Assert.AreEqual(.3f, back.MixDuration, .001f);
+            }
+            finally { Object.Destroy(go); Object.Destroy(data); Object.Destroy(json); }
+        }
     }
 }

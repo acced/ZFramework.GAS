@@ -103,6 +103,15 @@ namespace ZFramework.GAS.Editor
     }
     public static class TimelineMath
     {
+        private static readonly float[] RulerSteps = { .05f, .1f, .25f, .5f, 1, 2, 5 };
+        public static float RulerStep(float pixelsPerSecond)
+        {
+            float minimum = 56 / Mathf.Max(1, pixelsPerSecond);
+            foreach (float step in RulerSteps) if (step >= minimum) return step;
+            float scale = 10;
+            while (scale < minimum) scale *= 10;
+            return scale;
+        }
         public static float Snap(float time, float fps, bool bypass = false) => bypass || fps <= 0 ? time : Mathf.Round(time * fps) / fps;
         public static float X(float time, float pixelsPerSecond, float offset) => time * pixelsPerSecond - offset;
         public static float Time(float x, float pixelsPerSecond, float offset) => (x + offset) / pixelsPerSecond;

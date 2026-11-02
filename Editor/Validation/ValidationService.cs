@@ -186,6 +186,44 @@ namespace ZFramework.GAS.Editor
             }
         }
     }
+    public sealed class CueOverlapRule : ISkillValidationRule
+    {
+        public string Id => "GAS015";
+        public void Validate(ValidationContext c, ScriptableObject asset, List<Issue> issues)
+        {
+            if (asset is not SkillAnimationAsset animation || !(animation.Duration > 0)) return;
+            var array = c.Document.Serialized(asset).FindProperty("cueRegions");
+            var seen = new Dictionary<string, List<(float start, float end)>>();
+            for (int i = 0; i < array.arraySize; i++)
+            {
+                var item = array.GetArrayElementAtIndex(i);
+                string tag = item.FindPropertyRelative("cueTag.m_Name").stringValue;
+                float start = item.FindPropertyRelative("start").floatValue, end = item.FindPropertyRelative("end").floatValue;
+                if (end < 0) end = animation.Duration;
+                if (string.IsNullOrEmpty(tag) || !(start >= 0 && end > start && end <= animation.Duration)) continue;
+                if (!seen.TryGetValue(tag, out var spans)) seen[tag] = spans = new();
+                if (spans.Any(s => start < s.end && s.start < end))
+                    c.Add(issues, Id, asset, item.propertyPath, $"Cue「{tag}」存在重叠区间，请确认是否有意重复触发。", IssueSeverity.Warning,
+                        track: "cueRegions", elementId: item.FindPropertyRelative("id").stringValue);
+                spans.Add((start, end));
+            }
+        }
+    }
+    public sealed class BlendRule : ISkillValidationRule
+    {
+        public string Id => "GAS014";
+        public void Validate(ValidationContext c, ScriptableObject asset, List<Issue> issues)
+        {
+            if (asset is not SkillAnimationAsset animation || !(animation.Duration > 0)) return;
+            // 混入超过动画时长时运行期定义会直接拒绝；混出只需非负。
+            if (!(animation.BlendIn >= 0) || animation.BlendIn > animation.Duration)
+                c.Add(issues, Id, asset, "blendIn", $"混入时长 {animation.BlendIn:0.###}s 须在 0 到动画时长 {animation.Duration:0.###}s 之间",
+                    fix: c.Edit(asset, "修复混入时长", so => so.FindProperty("blendIn").floatValue = Mathf.Clamp(so.FindProperty("blendIn").floatValue, 0, animation.Duration)));
+            if (!(animation.BlendOut >= 0) || float.IsInfinity(animation.BlendOut))
+                c.Add(issues, Id, asset, "blendOut", "混出时长须为非负秒数",
+                    fix: c.Edit(asset, "修复混出时长", so => so.FindProperty("blendOut").floatValue = 0));
+        }
+    }
     public sealed class MarkerKeyRule : ISkillValidationRule
     {
         public string Id => "GAS012";

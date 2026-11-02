@@ -38,15 +38,31 @@
 .gas-editor .unity-two-pane-split-view__dragline { background-color: #121418; }
 .gas-editor .unity-two-pane-split-view__dragline-anchor:hover { background-color: var(--gas-accent); }
 .gas-editor GridBackground { --grid-background-color: #1f2227; --line-color: #292d33; --thick-line-color: #323740; --spacing: 20; }
-.skill-node { background-color: #2a2e34; border-color: #121418; border-width: 1px; border-radius: 6px; }
+.skill-node { background-color: #272d35; border-color: #121418; border-width: 1px; border-radius: 6px; min-height: 180px; }
 .skill-node > #node-border { border-radius: 6px; }
-.skill-node #title { padding-top: 4px; padding-bottom: 4px; }
-.skill-node #title-label { color: white; font-size: 13px; -unity-font-style: bold; }
-.skill-node #extension { padding: 6px; }
+.skill-node > .mainContainer, .skill-node #contents { background-color: #272d35; }
+.skill-node #title { background-color: #232a33; border-top-width: 3px; padding: 4px 6px; min-height: 33px; align-items: center; }
+.skill-node #title-label { color: #edf1f5; font-size: 13px; -unity-font-style: bold; padding-left: 3px; flex-shrink: 1; }
+.gas-editor .skill-node #node-border #contents #top #input,
+.gas-editor .skill-node #node-border #contents #top #output,
+.gas-editor .skill-node #node-border #contents #top #divider,
+.gas-editor .skill-node #node-border #contents #top { background-color: transparent; padding: 0; margin: 0; }
+.skill-node #divider { display: none; }
+.gas-editor .skill-node #node-border #contents #top #output { flex-grow: 1; padding: 4px 5px; }
+.gas-editor .skill-node #node-border #contents #top #input.node-title-input { position: absolute; left: 6px; top: -30px; flex-grow: 0; flex-shrink: 0; width: 20px; height: 20px; }
+.skill-node.has-title-input #title-label { padding-left: 24px; }
+.skill-node .node-title-input .port { width: 20px; min-width: 20px; padding: 0; }
+.skill-node .node-title-input .port #type { display: none; }
+.skill-node .port { background-color: transparent; min-height: 20px; height: 20px; padding-top: 0; padding-bottom: 0; }
+.skill-node .port #type { color: #b8c3d0; font-size: 10px; }
+.skill-node #extension { padding: 8px; }
 .node-summary { white-space: normal; color: #b8c0ca; font-size: 10px; margin-bottom: 5px; padding-left: 3px; }
-.node-field { margin-top: 2px; }
-.node-field .unity-base-field__label { min-width: 55px; max-width: 60px; font-size: 11px; }
-.node-field .unity-base-field { margin-left: 1px; margin-right: 1px; }
+.node-field { margin: 2px 0; height: 22px; min-height: 22px; align-items: center; }
+.node-field > .unity-base-field__label { width: 62px; min-width: 62px; max-width: 62px; font-size: 11px; color: #aebbc9; padding-left: 0; margin-right: 4px; }
+.node-field > .unity-base-field__input { min-width: 0; flex-grow: 1; }
+.skill-minimap-overlay { position: absolute; right: 10px; bottom: 10px; width: 150px; height: 92px; overflow: hidden; border-radius: 5px; }
+.gas-editor .skill-minimap { position: absolute; left: 0; top: 0; width: 150px; height: 92px; padding: 0; margin: 0; background-color: rgba(22, 28, 36, 0.85); border-width: 1px; border-color: #475567; border-radius: 5px; }
+.skill-minimap > Label { display: none; }
 .node-badge { color: white; font-size: 10px; -unity-text-align: middle-center; padding-left: 6px; padding-right: 6px; }
 .document-selected { border-color: var(--gas-accent); border-width: 2px; }
 .external-node { border-color: #718094; }
@@ -61,7 +77,18 @@
 .track-row { flex-direction: row; flex-shrink: 0; border-bottom-width: 1px; border-bottom-color: #181b20; }
 .track-heading { flex-shrink: 0; -unity-text-align: middle-left; padding-left: 10px; font-size: 11px; border-right-width: 1px; border-right-color: #14171b; border-left-width: 3px; background-color: #252a31; }
 .track-lane { flex-grow: 1; overflow: hidden; background-color: #20242a; }
+.track-heading { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cue-track-row .track-heading:hover { background-color: #303a42; }
+.timeline-scroll { min-height: 0; }
+.timeline-scroll .unity-scroll-view__content-container { flex-grow: 1; }
+.timeline-event > .event-count { position: absolute; right: 1px; top: -3px; background-color: #374b63; padding-left: 3px; padding-right: 3px; border-radius: 3px; font-size: 9px; }
+.node-cues { margin-top: 6px; border-top-width: 1px; border-top-color: #414c55; padding-top: 4px; }
+.node-cue-strip { white-space: normal; -unity-text-align: middle-left; font-size: 10px; border-width: 1px; border-radius: 4px; margin: 2px 0; padding: 5px; }
+.node-cue-strip:hover { opacity: 0.85; }
 .animation-clip { position: absolute; top: 5px; height: 23px; border-radius: 3px; padding-left: 7px; -unity-text-align: middle-left; color: white; }
+.animation-clip-caption { position: absolute; top: 5px; height: 23px; color: #ffffff; -unity-text-align: middle-left; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85); overflow: hidden; text-overflow: ellipsis; }
+.blend-handle { position: absolute; top: 0; width: 8px; height: 23px; border-radius: 2px; border-left-width: 2px; border-right-width: 2px; border-color: rgba(255, 255, 255, 0.55); }
+.blend-handle:hover { background-color: rgba(255, 255, 255, 0.25); border-color: rgb(255, 255, 255); }
 .timeline-event, .timeline-range { position: absolute; top: 5px; height: 23px; border-radius: 3px; padding-left: 5px; padding-right: 5px; border-width: 1px; border-color: #1b1f25; }
 .timeline-event > Label, .timeline-range > Label { color: white; font-size: 10px; -unity-text-align: middle-left; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; }
 .event-diamond { position: absolute; left: 3px; top: 6px; width: 9px; height: 9px; rotate: 45deg; border-radius: 1px; }
@@ -79,3 +106,25 @@
 .status-bar { height: 27px; flex-shrink: 0; background-color: #2a2e34; border-top-width: 1px; border-top-color: #15171b; }
 .status-label { flex-grow: 1; -unity-text-align: middle-left; font-size: 11px; padding-left: 10px; padding-right: 10px; color: #aeb7c4; overflow: hidden; text-overflow: ellipsis; }
 .has-errors { color: var(--gas-error); }
+.gas-editor .live-active { border-width: 2px; border-color: #50e0c2; }
+.gas-editor .live-active > #node-border { border-width: 2px; border-color: #50e0c2; }
+.gas-editor .live-active > .mainContainer { border-width: 2px; border-color: #50e0c2; }
+.playhead.live-playhead { width: 3px; background-color: #50e0c2; }
+.runtime-debug { flex-grow: 1; }
+.runtime-debug ScrollView { flex-grow: 1; }
+.runtime-debug Foldout { margin: 4px 8px; }
+.debug-guide { white-space: normal; margin: 16px; color: #b2c0d0; }
+.debug-unit-name { padding: 8px 12px; color: #b6d7eb; white-space: normal; }
+.debug-row { padding: 8px; margin: 2px 0; background-color: #272d36; border-radius: 4px; border-left-width: 2px; border-left-color: #384452; }
+.debug-row-title { flex-direction: row; align-items: center; }
+.debug-row-title Label { white-space: normal; flex-shrink: 1; }
+.debug-state-dot { width: 7px; height: 7px; border-radius: 4px; margin-right: 7px; flex-shrink: 0; }
+.debug-ability-link { flex-grow: 1; -unity-text-align: middle-left; background-color: transparent; border-width: 0; margin: 0; padding: 0; }
+.debug-detail { color: #a9b8ca; white-space: normal; margin: 3px 0; font-size: 11px; }
+.debug-progress { height: 17px; margin-top: 3px; }
+.debug-progress .unity-progress-bar__progress { background-color: #397f8f; }
+.debug-progress .unity-progress-bar__title { font-size: 10px; color: #e8f0f8; }
+.debug-task-strip { height: 76px; margin-top: 4px; background-color: #1e242d; }
+.debug-tag-new { border-left-color: #6ae7b1; background-color: #24493d; }
+.debug-positive .debug-detail { color: #72dba0; }
+.debug-negative .debug-detail { color: #f08d7f; }

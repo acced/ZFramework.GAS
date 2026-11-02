@@ -44,14 +44,21 @@ namespace ZFramework.GAS.Unity
         public SkillAnimationAsset Animation => animation;
 
         /// <summary>构建（并缓存）运行期定义。同一资产始终返回同一实例。</summary>
-        public GameplayAbilityDefinition Definition => _definition ??= new GameplayAbilityDefinition(
-            TagAssetUtility.ToSet(abilityTags),
-            TagAssetUtility.ToSet(activationRequiredTags),
-            TagAssetUtility.ToSet(activationBlockedTags),
-            TagAssetUtility.ToSet(activationOwnedTags),
-            TagAssetUtility.ToSet(cancelAbilitiesWithTags),
-            cost != null ? cost.Definition : null,
-            cooldown != null ? cooldown.Definition : null);
+        public GameplayAbilityDefinition Definition => _definition ??= Build();
+
+        private GameplayAbilityDefinition Build()
+        {
+            var definition = new GameplayAbilityDefinition(
+                TagAssetUtility.ToSet(abilityTags),
+                TagAssetUtility.ToSet(activationRequiredTags),
+                TagAssetUtility.ToSet(activationBlockedTags),
+                TagAssetUtility.ToSet(activationOwnedTags),
+                TagAssetUtility.ToSet(cancelAbilitiesWithTags),
+                cost != null ? cost.Definition : null,
+                cooldown != null ? cooldown.Definition : null);
+            DefinitionSource.Register(definition, this);
+            return definition;
+        }
 
         public void InvalidateDefinition() => _definition = null;
         private void OnValidate() => InvalidateDefinition();

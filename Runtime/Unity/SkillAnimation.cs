@@ -118,6 +118,15 @@ namespace ZFramework.GAS.Unity
         public AnimationTagWindow[] TagWindows { get; }
         public AnimationTaskEvent[] TaskEvents { get; }
 
+        /// <summary>
+        /// 混入时长：从施放前的动画过渡到本动画所用的秒数（时间轴时间，与标记点一样随实际时长缩放）。
+        /// 不能超过 <see cref="Duration"/>。
+        /// </summary>
+        public float BlendIn { get; }
+
+        /// <summary>混出时长：动画结束或被打断后过渡回施放前动画所用的实际秒数。</summary>
+        public float BlendOut { get; }
+
         /// <summary>是否存在「作用于固定目标」的效果标记点——任务据此在构造时就要求传入目标。</summary>
         public bool RequiresTarget { get; }
 
@@ -128,7 +137,9 @@ namespace ZFramework.GAS.Unity
             AnimationMarker[] markers = null,
             AnimationCueRegion[] cueRegions = null,
             AnimationTagWindow[] tagWindows = null,
-            AnimationTaskEvent[] taskEvents = null)
+            AnimationTaskEvent[] taskEvents = null,
+            float blendIn = 0f,
+            float blendOut = 0f)
         {
             if (string.IsNullOrEmpty(clipName))
             {
@@ -140,9 +151,21 @@ namespace ZFramework.GAS.Unity
                 throw new ArgumentOutOfRangeException(nameof(duration), duration, "Animation duration must be positive.");
             }
 
+            if (!(blendIn >= 0f) || blendIn > duration)
+            {
+                throw new ArgumentOutOfRangeException(nameof(blendIn), blendIn, $"Blend-in must lie within [0, {duration}] seconds.");
+            }
+
+            if (!(blendOut >= 0f) || float.IsInfinity(blendOut))
+            {
+                throw new ArgumentOutOfRangeException(nameof(blendOut), blendOut, "Blend-out must be a non-negative number of seconds.");
+            }
+
             ClipName = clipName;
             Duration = duration;
             Loop = loop;
+            BlendIn = blendIn;
+            BlendOut = blendOut;
 
             Markers = markers == null || markers.Length == 0 ? NoMarkers : (AnimationMarker[])markers.Clone();
             CueRegions = cueRegions == null || cueRegions.Length == 0 ? NoRegions : (AnimationCueRegion[])cueRegions.Clone();

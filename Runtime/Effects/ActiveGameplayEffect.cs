@@ -39,19 +39,23 @@ namespace ZFramework.GAS
         public readonly object Source;
         public readonly int StackCount;
         public readonly float RemainingTime;
+        /// <summary>施加时解析的实际总时长和周期，包含属性捕获结果。</summary>
+        public readonly float Duration, Period;
 
         internal ActiveGameplayEffectInfo(
             ActiveGameplayEffectHandle handle,
             GameplayEffectDefinition definition,
             object source,
             int stackCount,
-            float remainingTime)
+            float remainingTime, float duration, float period)
         {
             Handle = handle;
             Definition = definition;
             Source = source;
             StackCount = stackCount;
             RemainingTime = remainingTime;
+            Duration = duration;
+            Period = period;
         }
     }
 

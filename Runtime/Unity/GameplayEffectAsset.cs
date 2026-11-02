@@ -116,7 +116,7 @@ namespace ZFramework.GAS.Unity
                 }
             }
 
-            return new GameplayEffectDefinition(
+            var definition = new GameplayEffectDefinition(
                 durationPolicy,
                 duration,
                 builtModifiers,
@@ -128,6 +128,8 @@ namespace ZFramework.GAS.Unity
                 TagAssetUtility.ToSet(cueTags),
                 durationAttributeId >= 0 ? new AttributeId(durationAttributeId) : null,
                 children.Count == 0 ? null : children.ToArray());
+            DefinitionSource.Register(definition, this);
+            return definition;
         }
 
         /// <summary>编辑期修改后清掉缓存，避免继续用旧定义。</summary>

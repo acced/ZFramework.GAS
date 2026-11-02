@@ -260,6 +260,21 @@ public interface IAnimationDriver
 这正是战斗层原本手写在攻击分支里的 `state.speed = state.length / attackTime`，
 这里把它变成所有动画形式共用的契约。
 
+### 混入与混出
+
+技能动画资产有「混入」「混出」两个时长（默认 0.12s / 0.18s）。驱动实现 `IBlendingAnimationDriver` 时，`AnimationTask` 按这两个时长平滑过渡，否则退回硬切：
+
+| 驱动 | 混入 | 混出 |
+|---|---|---|
+| Animator | `CrossFadeInFixedTime` 到技能状态 | 淡回施放前所在的状态（通常是待机）；状态机自己的转换已离开技能状态时不插手 |
+| Legacy Animation | `CrossFade` | 淡回施放前权重最高的片段 |
+| Spine | 设置 `TrackEntry.MixDuration` | 混回施放前这条轨道上的动画；没有时混到空动画 |
+| 序列帧 | 不支持，直接切换 | — |
+
+**混入随实际时长缩放**：它是动作的一部分，攻速拉快时与标记点同比变短；混入不能超过动画时长（GAS014）。
+**混出按实际秒数**：它发生在技能动画之后，与攻速无关。混出为 0 时驱动不切换状态，交给 Animator 自己的转换。
+连续施放时，返回点保留最早的那个，连招结束后回到待机而不是上一个技能。
+
 库内自带三个适配器：`AnimatorAnimationDriver`、`LegacyAnimationDriver`、`SpriteSequenceDriver`。
 前两个由引擎自行推进，`Advance` 是空实现；序列帧在 `Advance` 里按进度换图。
 
@@ -365,6 +380,7 @@ owner.StartTask(spec, task);
 | Ctrl／Shift 选中，空白处拖框 | 多选；拖动选中组整体移动 |
 | Alt+拖动 | 关闭吸附；默认吸附到帧、相邻元素或播放头 |
 | 双击轨道／右键 | 添加元素；从大纲拖效果到事件轨道也可添加 |
+| 拖动混入、混出手柄 | 动画条起点的斜坡与末尾的淡出尾巴显示过渡长度；拖动两端手柄或在片段行输入「混入」「混出」调整，按帧吸附，抬手一步撤销 |
 | M、R | 在播放头添加事件；两次 R 标记 Cue 区间起止 |
 | 逗号／句号、Home／End | 前后逐帧、首尾定位 |
 | Ctrl+C/V、Delete | 复制、粘贴到播放头、删除选择 |
@@ -521,4 +537,4 @@ Unity 6000.3 批处理编译和集成检查通过：Core 实际程序集不引�
 - **召唤的具体实现**——涉及单位表、生成根节点、路径系统等游戏专属概念，
   派生 `GameplayAbilityTask` 即可，库不做只转发的壳
 - **对象池**——视觉体与任务对象的生命周期归使用方
-- **Live Link、Playable 与通用自定义事件轨道**——属于计划 M6 可选扩展。
+- **完整 Animator 状态机混合预览、Playable 与通用自定义事件轨道**——属于可选扩展。已提供编辑器内的运行时调试窗口及时间轴/效果节点联动，使用方式见 `Docs~/EditorGuide.md`。

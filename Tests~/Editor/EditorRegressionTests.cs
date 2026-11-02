@@ -311,6 +311,172 @@ namespace ZFramework.GAS.Editor.Tests
         [TestCase(10f, 60f)]
         public void FrameSnappingErrorDoesNotExceedHalfFrame(float duration, float fps)
         { for (float t = 0; t < duration; t += .00137f) Assert.LessOrEqual(Mathf.Abs(TimelineMath.Snap(t, fps) - t), .5001f / fps); }
+
+        private void SetRanges(SkillAnimationAsset animation, string track, params (string id, string tag, float start, float end)[] spans)
+        {
+            Edit(animation, so =>
+            {
+                so.FindProperty("duration").floatValue = 1;
+                var array = so.FindProperty(track); array.arraySize = spans.Length;
+                for (int i = 0; i < spans.Length; i++)
+                {
+                    var p = array.GetArrayElementAtIndex(i); var s = spans[i];
+                    p.FindPropertyRelative("id").stringValue = s.id;
+                    p.FindPropertyRelative("start").floatValue = s.start; p.FindPropertyRelative("end").floatValue = s.end;
+                    if (track == "cueRegions") p.FindPropertyRelative("cueTag.m_Name").stringValue = s.tag;
+                }
+            });
+            _doc.Notify(new ChangeSet(animation, true));
+        }
+        private static VisualElement TimelineItem(TimelinePanel timeline, string track, string id)
+            => timeline.Query<VisualElement>().ToList().Single(e => e.userData as string == track + "/" + id);
+        private static void Pointer(VisualElement view, EventType type, Vector2 point)
+        {
+            var system = new Event { type = type, mousePosition = point, button = 0 };
+            if (type == EventType.MouseDown) { using var e = PointerDownEvent.GetPooled(system); e.target = view; view.SendEvent(e); }
+            else if (type == EventType.MouseDrag) { using var e = PointerMoveEvent.GetPooled(system); e.target = view; view.SendEvent(e); }
+            else { using var e = PointerUpEvent.GetPooled(system); e.target = view; view.SendEvent(e); }
+        }
+        [UnityTest]
+        public IEnumerator TimelineGroupsCuesAndPacksOverlappingRangesWithoutChangingData()
+        {
+            var animation = Animation();
+            SetRanges(animation, "cueRegions", ("a", "Cue.Ground.Sigil", 0, .5f), ("b", "Cue.Ground.Sigil", .2f, .4f),
+                ("c", "Cue.Ground.Sigil", .5f, .8f), ("d", "Cue.Warcry.Aura", .1f, .7f));
+            SetRanges(animation, "tagWindows", ("t1", "", 0, .3f), ("t2", "", .2f, .6f), ("t3", "", .6f, -1));
+            TimelineCommands.Add(_doc, new EventTrack(), .2f); TimelineCommands.Add(_doc, new EventTrack(), .2f);
+            string before = Snapshot(animation);
+            var window = SkillEditorWindow.Open(); window.Show(_ability); yield return null; yield return null;
+            var timeline = window.rootVisualElement.Q<TimelinePanel>(); timeline.Fit(); yield return null;
+            var a = TimelineItem(timeline, "cueRegions", "a"); var b = TimelineItem(timeline, "cueRegions", "b");
+            var c = TimelineItem(timeline, "cueRegions", "c"); var d = TimelineItem(timeline, "cueRegions", "d");
+            Assert.AreSame(a.parent, b.parent); Assert.AreNotSame(a.parent, d.parent);
+            Assert.AreEqual(a.style.top.value.value, c.style.top.value.value); Assert.Greater(b.style.top.value.value, a.style.top.value.value);
+            Assert.AreEqual(2, timeline.Query(className: "cue-track-row").ToList().Count);
+            Assert.Greater(TimelineItem(timeline, "tagWindows", "t2").style.top.value.value, TimelineItem(timeline, "tagWindows", "t1").style.top.value.value);
+            Assert.AreEqual(TimelineItem(timeline, "tagWindows", "t1").style.top.value.value, TimelineItem(timeline, "tagWindows", "t3").style.top.value.value);
+            Assert.AreEqual("×2", timeline.Q<Label>(className: "event-count").text);
+            Assert.AreEqual(before, Snapshot(animation));
+            // 折叠后仍可由结构图选中区间并自动展开。
+            var heading = a.parent.parent.Q<Label>(className: "track-heading");
+            Pointer(heading, EventType.MouseDown, heading.worldBound.center);
+            Assert.AreEqual(DisplayStyle.None, a.style.display.value);
+            window.Document.Selection.Select(animation, "cueRegions", "b"); yield return null;
+            Assert.AreEqual(DisplayStyle.Flex, b.style.display.value);
+            Assert.IsTrue(b.ClassListContains("selected-element"));
+        }
+        [UnityTest]
+        public IEnumerator CueDragFreezesLanesUntilReleaseAndUndoRestoresGrouping()
+        {
+            var animation = Animation();
+            SetRanges(animation, "cueRegions", ("a", "Cue.Test", 0, .5f), ("b", "Cue.Test", .6f, .8f));
+            var window = SkillEditorWindow.Open(); window.Show(_ability); yield return null; yield return null;
+            var timeline = window.rootVisualElement.Q<TimelinePanel>(); timeline.Fit(); yield return null;
+            var view = TimelineItem(timeline, "cueRegions", "b"); float top = view.style.top.value.value;
+            float scale = timeline.Q<Label>(className: "animation-clip").layout.width;
+            Vector2 origin = view.worldBound.center, end = origin - new Vector2(.3f * scale, 0);
+            Undo.ClearAll(); Pointer(view, EventType.MouseDown, origin); Pointer(view, EventType.MouseDrag, end);
+            Assert.AreEqual(top, view.style.top.value.value);
+            Assert.AreEqual(.6f, TimelineCommands.Find(_doc.Serialized(animation), "cueRegions", "b").FindPropertyRelative("start").floatValue, .001f);
+            Pointer(view, EventType.MouseUp, end); yield return null;
+            Assert.Greater(TimelineItem(timeline, "cueRegions", "b").style.top.value.value, top);
+            Assert.AreEqual(.3f, TimelineCommands.Find(_doc.Serialized(animation), "cueRegions", "b").FindPropertyRelative("start").floatValue, .02f);
+            Undo.PerformUndo(); yield return null;
+            Assert.AreEqual(.6f, TimelineCommands.Find(_doc.Serialized(animation), "cueRegions", "b").FindPropertyRelative("start").floatValue, .001f);
+            Assert.AreEqual(top, TimelineItem(timeline, "cueRegions", "b").style.top.value.value);
+        }
+        [Test]
+        public void CueRowInsertionKeepsTagInSameUndoStep()
+        {
+            var animation = Animation(); Undo.ClearAll();
+            string id = TimelineCommands.Add(_doc, new CueRegionTrack(), .2f, cueTag: "Cue.Ground.Sigil");
+            Assert.AreEqual("Cue.Ground.Sigil", TimelineCommands.Find(_doc.Serialized(animation), "cueRegions", id).FindPropertyRelative("cueTag.m_Name").stringValue);
+            Undo.PerformUndo(); Assert.AreEqual(0, _doc.Serialized(animation).FindProperty("cueRegions").arraySize);
+            Undo.PerformRedo(); Assert.IsNotNull(TimelineCommands.Find(_doc.Serialized(animation), "cueRegions", id));
+        }
+        [Test]
+        public void CueOverlapWarningIgnoresTouchingOtherTagsAndInvalidSpans()
+        {
+            var animation = Animation();
+            SetRanges(animation, "cueRegions", ("a", "Cue.A", 0, .4f), ("b", "Cue.A", .4f, .6f),
+                ("other", "Cue.B", .1f, .9f), ("overlap", "Cue.A", .5f, -1), ("empty", "Cue.A", .2f, .2f), ("invalid", "Cue.A", .8f, .2f));
+            using var validation = new ValidationService(_doc); validation.ValidateNow(true);
+            var issue = validation.Issues.Single(i => i.Id == "GAS015");
+            Assert.AreEqual(IssueSeverity.Warning, issue.Severity); Assert.AreEqual("overlap", issue.ElementId); Assert.AreEqual("cueRegions", issue.Track);
+        }
+        private static bool GraphHasOverlaps(SkillGraphView graph)
+        {
+            var bounds = graph.nodes.Select(n => new Rect(n.GetPosition().position, n.layout.size)).ToArray();
+            for (int i = 0; i < bounds.Length; i++)
+                for (int j = i + 1; j < bounds.Length; j++) if (bounds[i].Overlaps(bounds[j])) return true;
+            return false;
+        }
+        private static IEnumerator WaitForGraph(SkillEditorWindow window, Func<bool> done)
+        {
+            double until = EditorApplication.timeSinceStartup + 8;
+            while (!done() && EditorApplication.timeSinceStartup < until) { window.Repaint(); yield return null; }
+            Assert.IsTrue(done(), "结构图没有在有效尺寸计算完成后排好布局");
+            yield return null; yield return null;
+        }
+        [UnityTest]
+        public IEnumerator EmbeddedCueStripSelectsStableTimelineRegionAndDoesNotCreateNodes()
+        {
+            var animation = Animation(); var effect = Effect();
+            SetRanges(animation, "cueRegions", ("a", "Cue.Test", .1f, .5f), ("b", "Cue.Test", .6f, -1));
+            Edit(effect, so => { var cues = so.FindProperty("cueTags"); cues.arraySize = 1; cues.GetArrayElementAtIndex(0).FindPropertyRelative("m_Name").stringValue = "Cue.Effect"; });
+            var window = SkillEditorWindow.Open(); window.Show(_ability); yield return null; yield return null;
+            var graph = window.rootVisualElement.Q<SkillGraphView>();
+            yield return WaitForGraph(window, () => window.Document.Assets.All(a => window.Document.Layout.TryGetPosition(a, out _)));
+            Assert.AreEqual(3, graph.NodeCount); Assert.AreEqual(3, graph.Query<Button>(className: "node-cue-strip").ToList().Count);
+            var strip = graph.Query<Button>(className: "node-cue-strip").ToList().Single(b => b.userData as string == "b");
+            Pointer(strip, EventType.MouseDown, strip.worldBound.center); Pointer(strip, EventType.MouseUp, strip.worldBound.center);
+            Assert.AreEqual(animation, window.Document.Selection.Asset); Assert.AreEqual("cueRegions", window.Document.Selection.Track); Assert.AreEqual("b", window.Document.Selection.ElementId);
+            Assert.IsTrue(strip.ClassListContains("selected-cue"));
+            EditCommand.Run(window.Document, "重排 Cue", animation, so => so.FindProperty("cueRegions").MoveArrayElement(1, 0));
+            Assert.AreEqual("b", window.Document.Selection.ElementId);
+            Assert.AreEqual("b", graph.Q<Button>(className: "selected-cue").userData);
+        }
+        [UnityTest]
+        public IEnumerator NewGraphNodesAvoidMeasuredBoundsAndKeepSavedPositions()
+        {
+            var animation = Animation(); var blocker = Effect("Blocker");
+            SetRanges(animation, "cueRegions", Enumerable.Range(0, 8).Select(i => ("c" + i, "Cue.Tall" + i, .1f, .9f)).ToArray());
+            _doc.Layout.SetPosition(_ability, new Vector2(40, 50));
+            _doc.Layout.SetPosition(blocker, new Vector2(345, 50)); _doc.Layout.Save();
+            var window = SkillEditorWindow.Open(); window.Show(_ability); yield return null;
+            var graph = window.rootVisualElement.Q<SkillGraphView>();
+            yield return WaitForGraph(window, () => window.Document.Layout.TryGetPosition(animation, out _) && !GraphHasOverlaps(graph));
+            Assert.AreEqual(new Vector2(40, 50), window.Document.Layout.Position(_ability, Vector2.zero));
+            Assert.AreEqual(new Vector2(345, 50), window.Document.Layout.Position(blocker, Vector2.zero));
+            // UI Toolkit 会按系统 DPI 对屏幕布局取整；存储坐标必须精确不变。
+            Assert.Less(Vector2.Distance(new Vector2(40, 50), graph.nodes.First(n => n.title == _ability.name).GetPosition().position), 1);
+            Assert.Less(Vector2.Distance(new Vector2(345, 50), graph.nodes.First(n => n.title == "Blocker").GetPosition().position), 1);
+            var positions = graph.nodes.ToDictionary(n => n.title, n => n.GetPosition().position);
+            var added = SkillAssetFactory.Create(window.Document, typeof(GameplayEffectAsset), "New effect", EffectDurationPolicy.Instant,
+                blocker, new PortId(PortKind.Applied));
+            yield return WaitForGraph(window, () => window.Document.Layout.TryGetPosition(added, out _) && !GraphHasOverlaps(graph));
+            foreach (var node in graph.nodes.Where(n => positions.ContainsKey(n.title))) Assert.Less(Vector2.Distance(positions[node.title], node.GetPosition().position), 1);
+            positions = graph.nodes.ToDictionary(n => n.title, n => n.GetPosition().position);
+            EditCommand.Run(window.Document, "改动画时长", animation, so => so.FindProperty("duration").floatValue = 1.2f);
+            yield return null; yield return null;
+            foreach (var node in graph.nodes) Assert.Less(Vector2.Distance(positions[node.title], node.GetPosition().position), 1);
+            window.Close(); window = SkillEditorWindow.Open(); window.Show(_ability); yield return null; yield return null;
+            graph = window.rootVisualElement.Q<SkillGraphView>();
+            foreach (var node in graph.nodes) Assert.Less(Vector2.Distance(positions[node.title], node.GetPosition().position), 1);
+        }
+        [UnityTest]
+        public IEnumerator AutoArrangeWaitsForTallNodesAndExplicitlyReplacesSavedLayout()
+        {
+            new MeleeTemplate().Build(_ability); _doc.Notify(new ChangeSet(_ability, true));
+            SetRanges(_ability.Animation, "cueRegions", Enumerable.Range(0, 10).Select(i => ("c" + i, "Cue.Tall" + i, .1f, .9f)).ToArray());
+            foreach (var asset in _doc.Assets) _doc.Layout.SetPosition(asset, new Vector2(40, 50)); _doc.Layout.Save();
+            var window = SkillEditorWindow.Open(); window.Show(_ability);
+            var graph = window.rootVisualElement.Q<SkillGraphView>(); graph.AutoArrange(); // 故意在首轮布局前调用。
+            yield return WaitForGraph(window, () => graph.nodes.All(n => n.layout.height > 0) && !GraphHasOverlaps(graph));
+            Assert.IsFalse(GraphHasOverlaps(graph));
+            Assert.Greater(graph.nodes.First(n => n.title == _ability.Animation.name).layout.height, 300);
+            Assert.Greater(graph.nodes.Select(n => n.GetPosition().x).Distinct().Count(), 1);
+        }
         [Test]
         public void AllTemplatesCreateOwnedAnimations()
         {
@@ -330,6 +496,53 @@ namespace ZFramework.GAS.Editor.Tests
             var graph = window.rootVisualElement.Q<SkillGraphView>(); var before = graph.nodes.ToList();
             EditCommand.Run(window.Document, "修改时长", _ability.Animation, so => so.FindProperty("duration").floatValue = 1.5f);
             yield return null; CollectionAssert.AreEquivalent(before, graph.nodes.ToList()); window.Close();
+        }
+        [UnityTest]
+        public IEnumerator InlineNodeFieldsKeepBindingUndoAndDefinitionInvalidation()
+        {
+            var animation = Animation(); var effect = Effect("Effect", EffectDurationPolicy.Duration);
+            var window = SkillEditorWindow.Open(); window.Show(_ability); yield return null; yield return null;
+            var graph = window.rootVisualElement.Q<SkillGraphView>();
+            var node = graph.nodes.First(n => n.title == "Effect"); var oldDefinition = effect.Definition;
+            Assert.AreEqual(0, node.inputContainer.resolvedStyle.backgroundColor.a);
+            Assert.AreEqual(0, node.outputContainer.resolvedStyle.backgroundColor.a);
+            Assert.IsTrue(node.titleContainer.worldBound.Overlaps(node.inputContainer.worldBound), "输入连接点应该位于标题栏");
+            Undo.ClearAll(); node.Q<FloatField>("node-duration").value = 2.5f;
+            yield return WaitForGraph(window, () => window.Document.Serialized(effect).FindProperty("duration").floatValue == 2.5f && !ReferenceEquals(oldDefinition, effect.Definition));
+            Undo.PerformUndo(); yield return null; yield return null;
+            Assert.AreEqual(1, window.Document.Serialized(effect).FindProperty("duration").floatValue);
+            Assert.AreEqual(1, node.Q<FloatField>("node-duration").value);
+            node.Q<EnumField>("node-durationPolicy").value = EffectDurationPolicy.Infinite;
+            var animationNode = graph.nodes.First(n => n.title == animation.name);
+            animationNode.Q<TextField>("node-clipName").value = "Slash";
+            animationNode.Q<Toggle>("node-loop").value = true;
+            yield return WaitForGraph(window, () => window.Document.Serialized(effect).FindProperty("durationPolicy").intValue == (int)EffectDurationPolicy.Infinite &&
+                animation.ClipName == "Slash" && window.Document.Serialized(animation).FindProperty("loop").boolValue);
+            Assert.AreEqual(0, graph.Query<UnityEditor.UIElements.PropertyField>().ToList().Count);
+        }
+        [UnityTest]
+        public IEnumerator MiniMapRemainsInCornerAfterResizeAndCanBeHidden()
+        {
+            var window = SkillEditorWindow.Open(); window.Show(_ability); yield return null; yield return null;
+            var graph = window.rootVisualElement.Q<SkillGraphView>(); var host = graph.Q("minimap-overlay");
+            var map = graph.Q<MiniMap>(); bool previous = graph.MiniMapVisible;
+            try
+            {
+                graph.MiniMapVisible = true;
+                foreach (var width in new[] { 1080f, 1280f })
+                {
+                    window.position = new Rect(window.position.position, new Vector2(width, 800));
+                    yield return null; yield return null; yield return null;
+                    Assert.AreEqual(10, graph.worldBound.xMax - host.worldBound.xMax, 1);
+                    Assert.AreEqual(10, graph.worldBound.yMax - host.worldBound.yMax, 1);
+                    Assert.Less(Vector2.Distance(host.worldBound.position, map.worldBound.position), 1);
+                    Assert.AreEqual(DisplayStyle.None, map.Q<Label>().resolvedStyle.display);
+                }
+                var toggle = window.rootVisualElement.Q<UnityEditor.UIElements.ToolbarToggle>("show-minimap");
+                toggle.value = false; Assert.IsFalse(graph.MiniMapVisible);
+                toggle.value = true; Assert.IsTrue(graph.MiniMapVisible);
+            }
+            finally { EditorPrefs.SetBool("ZFramework.GAS.ShowMiniMap", previous); }
         }
         [UnityTest]
         public IEnumerator DeletingNodeAndUnrelatedEdgeTogetherAppliesBothInOneUndo()
@@ -399,6 +612,19 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.Throws<ArgumentException>(() => _ = _ability.Definition);
             GrantTag(cooldown); _ability.InvalidateDefinition(); _doc.Notify(new ChangeSet(cooldown)); validation.ValidateNow(true);
             Assert.IsFalse(validation.Issues.Any(i => i.Id == "GAS002")); Assert.IsNotNull(_ability.Definition);
+        }
+        [Test]
+        public void BlendLongerThanAnimationIsReportedAndFixed()
+        {
+            var animation = Animation();
+            Edit(animation, so => { so.FindProperty("duration").floatValue = .5f; so.FindProperty("blendIn").floatValue = .8f; });
+            _doc.Notify(new ChangeSet(animation, true)); using var validation = new ValidationService(_doc); validation.ValidateNow(true);
+            var issue = validation.Issues.Single(i => i.Id == "GAS014");
+            Assert.AreEqual(IssueSeverity.Error, issue.Severity);
+            Assert.Throws<ArgumentOutOfRangeException>(() => _ = animation.Definition);
+            issue.FixAction(); validation.ValidateNow(true);
+            Assert.IsFalse(validation.Issues.Any(i => i.Id == "GAS014")); Assert.AreEqual(.5f, animation.BlendIn, 1e-6f);
+            animation.InvalidateDefinition(); Assert.AreEqual(.5f, animation.Definition.BlendIn, 1e-6f);
         }
         [Test]
         public void ValidationFindsTimelineBoundsKeysCallerAndUnknownTags()

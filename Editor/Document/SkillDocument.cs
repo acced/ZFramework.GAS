@@ -37,12 +37,18 @@ namespace ZFramework.GAS.Editor
         public bool Playing;
         public bool Loop = true;
         public float Speed = 1;
+        private bool _live;
+        public bool Live
+        {
+            get => _live;
+            set { if (_live == value) return; _live = value; if (value) Playing = false; Changed?.Invoke(); }
+        }
         public event Action Changed;
         public void Seek(float time, float duration)
         { Time = Mathf.Clamp(time, 0, Mathf.Max(0, duration)); Changed?.Invoke(); }
         public void Tick(float delta, float duration)
         {
-            if (!Playing || duration <= 0) return;
+            if (Live || !Playing || duration <= 0) return;
             float next = Time + delta * Speed;
             if (next > duration) { if (Loop) next %= duration; else { next = duration; Playing = false; } }
             Seek(next, duration);

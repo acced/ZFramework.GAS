@@ -15,13 +15,16 @@ namespace ZFramework.GAS.Tests
 {
     public sealed class CueVfxPlaybackTests
     {
-        private static void Tags() => GameplayTagManager.Initialize(SampleTags.All.Concat(new[] { "Test.Cue.Ground" })
+        private static void Tags() => GameplayTagManager.Initialize(SampleTags.All
             .Select(name => new GameplayTagRegistration(name)).ToArray());
         [UnityTest]
         public IEnumerator ParticleCueFollowsPolicyAndAutomaticallyReclaimsItsTail()
         {
             Tags();
-            var tag = GameplayTagManager.RequestTag("Test.Cue.Ground");
+            // A generated registry may already have initialized the domain before this test runs.
+            // Use its existing sample tag; per-owner routers keep this fixture isolated.
+            var tag = GameplayTagManager.RequestTag(SampleTags.CueGroundTest);
+            Assert.IsTrue(tag.IsValid);
             var prefab = new GameObject("Particle template"); prefab.SetActive(false);
             var particles = prefab.AddComponent<ParticleSystem>();
             var main = particles.main; main.playOnAwake = false; main.startLifetime = .2f; main.startSpeed = 0; main.loop = true;

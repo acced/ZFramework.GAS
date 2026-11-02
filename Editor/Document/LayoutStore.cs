@@ -43,6 +43,12 @@ namespace ZFramework.GAS.Editor
         }
         public Vector2 Position(UnityEngine.Object asset, Vector2 fallback)
             => Position(AssetReferences.Key(asset), fallback);
+        public bool TryGetPosition(UnityEngine.Object asset, out Vector2 position)
+        {
+            var node = _data.nodes.Find(n => n.key == AssetReferences.Key(asset));
+            position = node?.position ?? default;
+            return node != null;
+        }
         public Vector2 Position(string key, Vector2 fallback)
             => _data.nodes.Find(n => n.key == key)?.position ?? fallback;
         public void SetPosition(UnityEngine.Object asset, Vector2 position)

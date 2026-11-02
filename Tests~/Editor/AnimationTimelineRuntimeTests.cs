@@ -16,6 +16,15 @@ namespace ZFramework.GAS.Editor.Tests
             public void Advance(float time) { }
             public void Stop() => Stops++;
         }
+        private sealed class BlendingDriver : IBlendingAnimationDriver
+        {
+            public float BlendIn = -1, BlendOut = -1; public int PlainPlays, PlainStops;
+            public float Play(string name, float duration, bool loop) { PlainPlays++; return duration > 0 ? duration : 1; }
+            public float Play(string name, float duration, bool loop, float blendIn) { BlendIn = blendIn; return duration > 0 ? duration : 1; }
+            public void Advance(float time) { }
+            public void Stop() => PlainStops++;
+            public void Stop(float blendOut) => BlendOut = blendOut;
+        }
         [Serializable]
         private sealed class CountingSpawner : TaskSpawner
         {
@@ -151,6 +160,36 @@ namespace ZFramework.GAS.Editor.Tests
             for (int i = 0; i < 1000; i++) owner.Tick(1);
             long bytes = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.AreEqual(0, bytes); Assert.AreEqual(1100, spawner.Count); owner.EndAbility(ability);
+        }
+        [Test]
+        public void BlendingDriverReceivesAuthoredBlendOnFinishAndCancel()
+        {
+            var definition = new SkillAnimationDefinition("Attack", 1, blendIn: .1f, blendOut: .25f);
+            foreach (bool cancel in new[] { false, true })
+            {
+                var owner = new AbilitySystemComponent(); var ability = Activate(owner); var driver = new BlendingDriver();
+                owner.StartTask(ability, new AnimationTask(definition, driver));
+                Assert.AreEqual(.1f, driver.BlendIn, 1e-6f);
+                if (cancel) owner.EndAbility(ability); else owner.Tick(1.1f);
+                Assert.AreEqual(.25f, driver.BlendOut, 1e-6f, cancel ? "打断" : "播完");
+                Assert.AreEqual(0, driver.PlainPlays + driver.PlainStops, "支持混合的驱动不应再走硬切重载");
+            }
+        }
+        [Test]
+        public void PlainDriverStillPlaysWithoutBlending()
+        {
+            var owner = new AbilitySystemComponent(); var ability = Activate(owner); var driver = new Driver();
+            owner.StartTask(ability, new AnimationTask(new SkillAnimationDefinition("Attack", 1, blendIn: .2f, blendOut: .2f), driver));
+            owner.Tick(1.1f); Assert.AreEqual(1, driver.Stops);
+        }
+        [TestCase(-.1f, 0f)]
+        [TestCase(1.5f, 0f)]
+        [TestCase(float.NaN, 0f)]
+        [TestCase(0f, -1f)]
+        [TestCase(0f, float.PositiveInfinity)]
+        public void DefinitionRejectsInvalidBlends(float blendIn, float blendOut)
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new SkillAnimationDefinition("Attack", 1, blendIn: blendIn, blendOut: blendOut));
         }
     }
 }

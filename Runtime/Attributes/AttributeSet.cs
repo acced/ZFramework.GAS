@@ -25,6 +25,14 @@ namespace ZFramework.GAS
 
         public int Count => _attributes.Count;
 
+        /// <summary>清空并填充调用方列表。列表容量足够时不分配；返回的是属性对象的引用。</summary>
+        public void CopyTo(List<GameplayAttribute> results)
+        {
+            if (results == null) throw new ArgumentNullException(nameof(results));
+            results.Clear();
+            foreach (var pair in _attributes) results.Add(pair.Value);
+        }
+
         /// <summary>
         /// 新增属性。重复添加视为配置错误直接抛出——静默返回旧值会让重复初始化难以定位。
         /// 需要「有则改、无则建」的调用方请显式使用 <see cref="TryGet"/>。

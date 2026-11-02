@@ -64,6 +64,11 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private float duration = 1f;
         [SerializeField] private bool loop;
 
+        [Tooltip("从施放前的动画过渡进来的秒数（时间轴时间，随攻速缩放）；0 为硬切")]
+        [Min(0)] [SerializeField] private float blendIn = .12f;
+        [Tooltip("结束或被打断后过渡回施放前动画的秒数；0 表示驱动不切换状态，交给 Animator 自己的转换")]
+        [Min(0)] [SerializeField] private float blendOut = .18f;
+
         [Tooltip("仅供时间轴把秒显示成帧，不参与任何运行期计算")]
         [SerializeField] private float frameRate = 30f;
 
@@ -82,6 +87,8 @@ namespace ZFramework.GAS.Unity
         public float FrameRate => frameRate;
         public string ClipName => clipName;
         public bool Loop => loop;
+        public float BlendIn => blendIn;
+        public float BlendOut => blendOut;
 
         /// <summary>构建（并缓存）运行期定义。同一资产始终返回同一实例。</summary>
         public SkillAnimationDefinition Definition => _definition ??= Build();
@@ -106,7 +113,10 @@ namespace ZFramework.GAS.Unity
             for (int i = 0; i < tagWindows.Length; i++) builtWindows[i] = tagWindows[i].Build();
             var builtTasks = new AnimationTaskEvent[taskEvents.Length];
             for (int i = 0; i < taskEvents.Length; i++) builtTasks[i] = taskEvents[i].Build();
-            return new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray(), builtWindows, builtTasks);
+            var definition = new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray(), builtWindows, builtTasks,
+                blendIn, blendOut);
+            DefinitionSource.Register(definition, this);
+            return definition;
         }
 
         /// <summary>编辑期修改后清掉缓存，避免继续用旧定义。</summary>

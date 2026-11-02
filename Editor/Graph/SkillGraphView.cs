@@ -17,23 +17,38 @@ namespace ZFramework.GAS.Editor
         private readonly SkillDocument _doc;
         private readonly Dictionary<ScriptableObject, SkillNode> _nodes = new();
         private readonly Dictionary<string, Edge> _edges = new();
-        private readonly Dictionary<string, CueNode> _cueNodes = new();
+        private readonly HashSet<ScriptableObject> _pendingPlacement = new();
+        private readonly Dictionary<ScriptableObject, Vector2> _preferredPositions = new();
+        private readonly Dictionary<ScriptableObject, Vector2> _measuredSizes = new();
+        private readonly Dictionary<ScriptableObject, Vector2> _layoutPositions = new();
+        private IVisualElementScheduledItem _layoutWork;
+        private bool _arrangeRequested, _frameRequested, _framing, _disposed;
+        private readonly HashSet<ScriptableObject> _liveAssets = new();
+        private readonly VisualElement _miniMapHost;
+        public bool MiniMapVisible
+        {
+            get => _miniMapHost.style.display.value != DisplayStyle.None;
+            set => _miniMapHost.style.display = value ? DisplayStyle.Flex : DisplayStyle.None;
+        }
         private bool _syncing;
         internal bool IsSyncing => _syncing;
         private GameplayAbilityAsset _root;
         private Vector2 _mouse;
         private readonly List<Group> _groups = new();
         private ScriptableObject[] _clipboard = Array.Empty<ScriptableObject>();
-        public int NodeCount => _nodes.Count + _cueNodes.Count;
+        public int NodeCount => _nodes.Count;
         public SkillGraphView(SkillDocument doc)
         {
             _doc = doc; style.flexGrow = 1; focusable = true;
             SetupZoom(.2f, 1.8f);
             var grid = new GridBackground(); Insert(0, grid); grid.StretchToParentSize();
             this.AddManipulator(new ContentDragger()); this.AddManipulator(new SelectionDragger()); this.AddManipulator(new RectangleSelector());
-            var minimap = new MiniMap { anchored = true }; minimap.SetPosition(new Rect(12, 12, 135, 82));
-            minimap.style.position = Position.Absolute; minimap.style.right = 12; minimap.style.bottom = 12;
-            Add(minimap);
+            _miniMapHost = new VisualElement { name = "minimap-overlay" }; _miniMapHost.AddToClassList("skill-minimap-overlay");
+            // MiniMap.Resize 会重写自身的 left/top。外层固定角落，内层原点保持为零，隔离它的自动定位。
+            var surface = new VisualElement { style = { flexGrow = 1 } }; _miniMapHost.Add(surface);
+            var minimap = new MiniMap { anchored = true, maxWidth = 150, maxHeight = 92 };
+            minimap.AddToClassList("skill-minimap"); minimap.Q<Label>().style.display = DisplayStyle.None;
+            surface.Add(minimap); Add(_miniMapHost);
             graphViewChanged = OnGraphChanged;
             nodeCreationRequest = ctx => Search(ctx.screenMousePosition);
             RegisterCallback<MouseMoveEvent>(e => _mouse = e.localMousePosition);
@@ -45,7 +60,7 @@ namespace ZFramework.GAS.Editor
                 {
                     if (obj is GameplayAbilityAsset ability) { SkillEditorWindow.Open().Show(ability); break; }
                     if (obj is GameplayEffectAsset || obj is SkillAnimationAsset)
-                    { var asset = (ScriptableObject)obj; _doc.Layout.SetPosition(asset, contentViewContainer.WorldToLocal(e.mousePosition)); _doc.AddLoose(asset); _doc.Selection.Select(asset); }
+                    { var asset = (ScriptableObject)obj; _doc.AddLoose(asset); SuggestPosition(asset, contentViewContainer.WorldToLocal(e.mousePosition)); _doc.Selection.Select(asset); }
                 }
                 DragAndDrop.AcceptDrag(); e.StopPropagation();
             });
@@ -60,6 +75,8 @@ namespace ZFramework.GAS.Editor
                 if (rootChanged)
                 {
                     _root = _doc.Root;
+                    _pendingPlacement.Clear(); _preferredPositions.Clear(); _arrangeRequested = false;
+                    foreach (var node in _nodes.Values) RemoveElement(node); _nodes.Clear();
                     foreach (var group in _groups) RemoveElement(group); _groups.Clear();
                     foreach (var comment in _doc.Layout.Comments)
                     {
@@ -69,16 +86,17 @@ namespace ZFramework.GAS.Editor
                 var live = new HashSet<ScriptableObject>(_doc.Assets);
                 foreach (var pair in _nodes.ToArray())
                     if (!live.Contains(pair.Key)) { RemoveElement(pair.Value); _nodes.Remove(pair.Key); }
-                int index = 0;
                 foreach (var asset in _doc.Assets)
                 {
                     if (!_nodes.TryGetValue(asset, out var node))
                     {
                         node = new SkillNode(_doc, this, asset); _nodes[asset] = node; AddElement(node);
-                        Vector2 fallback = asset == _root ? new Vector2(45, 80) : new Vector2(350 + (index / 3) * 290, 55 + (index % 3) * 230);
-                        node.SetPosition(new Rect(_doc.Layout.Position(asset, fallback), new Vector2(245, 170)));
+                        bool saved = _doc.Layout.TryGetPosition(asset, out var point);
+                        node.SetPosition(new Rect(saved ? point : new Vector2(40, 50), Vector2.zero));
+                        node.style.height = StyleKeyword.Auto;
+                        if (!saved) _pendingPlacement.Add(asset);
                     }
-                    node.Sync(); index++;
+                    node.Sync(); node.EnableInClassList("live-active", _liveAssets.Contains(asset));
                 }
                 var links = _doc.Assets.SelectMany(PortRules.Links).GroupBy(l => l.Key).Select(g => g.First()).ToArray();
                 var keys = new HashSet<string>(links.Select(l => l.Key));
@@ -93,8 +111,9 @@ namespace ZFramework.GAS.Editor
                     var port = from.Output(link.Port); if (port == null) continue;
                     var edge = port.ConnectTo(to.Input); edge.userData = link; AddElement(edge); _edges[link.Key] = edge;
                 }
-                SyncCues();
-                if (rootChanged) schedule.Execute(() => { if (_nodes.Count > 0) FrameAll(); }).StartingIn(100);
+                _pendingPlacement.IntersectWith(live);
+                _frameRequested |= rootChanged;
+                QueueLayout();
                 SyncSelection();
             }
             finally { _syncing = false; }
@@ -104,9 +123,10 @@ namespace ZFramework.GAS.Editor
             if (_syncing) return change;
             if (change.movedElements != null)
             {
+                if (_framing) { _framing = false; _frameRequested = false; _layoutWork?.Pause(); }
                 foreach (var element in change.movedElements)
-                    if (element is SkillNode node) _doc.Layout.SetPosition(node.Asset, node.GetPosition().position);
-                    else if (element is CueNode cue) _doc.Layout.SetPosition(cue.Key, cue.GetPosition().position);
+                    if (element is SkillNode node)
+                    { _pendingPlacement.Remove(node.Asset); _doc.Layout.SetPosition(node.Asset, node.GetPosition().position); }
                 SaveComments(); _doc.Layout.Save();
             }
             if (change.elementsToRemove != null)
@@ -136,7 +156,7 @@ namespace ZFramework.GAS.Editor
             if (_doc.Root == null) { _doc.Report("先从技能库选择或新建一个技能"); return; }
             var provider = ScriptableObject.CreateInstance<SkillNodeSearchProvider>();
             Vector2 graphPosition = contentViewContainer.WorldToLocal(screen - (EditorWindow.focusedWindow != null ? EditorWindow.focusedWindow.position.position : Vector2.zero));
-            provider.Initialize(_doc, parent, port, graphPosition);
+            provider.Initialize(_doc, parent, port, graphPosition, this);
             SearchWindow.Open(new SearchWindowContext(screen), provider);
         }
         public override List<Port> GetCompatiblePorts(Port start, NodeAdapter adapter)
@@ -161,13 +181,15 @@ namespace ZFramework.GAS.Editor
             bool previous = _syncing; _syncing = true;
             try
             {
-                GraphElement selected = _cueNodes.Values.FirstOrDefault(c => c.Source == _doc.Selection.Asset && c.Track == "cueRegions" && c.Track == _doc.Selection.Track && c.Id == _doc.Selection.ElementId);
-                if (selected == null && _doc.Selection.Asset is ScriptableObject asset && _nodes.TryGetValue(asset, out var node)) selected = node;
+                GraphElement selected = _doc.Selection.Asset is ScriptableObject asset && _nodes.TryGetValue(asset, out var node) ? node : null;
                 if (selected != null && !selection.Contains(selected)) { ClearSelection(); AddToSelection(selected); }
             }
             finally { _syncing = previous; }
             foreach (var pair in _nodes)
+            {
                 pair.Value.EnableInClassList("document-selected", pair.Key == _doc.Selection.Asset);
+                pair.Value.SyncCueSelection();
+            }
             foreach (var edge in _edges.Values)
                 if (edge.userData is AssetLink link)
                     edge.selected = link.Parent == _doc.Selection.Asset && link.Port.ElementId == _doc.Selection.ElementId && link.Port.Kind == PortKind.Marker;
@@ -179,7 +201,89 @@ namespace ZFramework.GAS.Editor
         }
         public void ApplyIssues(IReadOnlyList<Issue> issues)
         { foreach (var pair in _nodes) pair.Value.SetIssues(issues.Where(i => i.Asset == pair.Key).ToArray()); }
+        public void SetLive(IReadOnlyCollection<ScriptableObject> assets)
+        {
+            _liveAssets.Clear();
+            if (assets != null) foreach (var asset in assets) if (asset != null) _liveAssets.Add(asset);
+            foreach (var pair in _nodes) pair.Value.EnableInClassList("live-active", _liveAssets.Contains(pair.Key));
+        }
         public void AutoArrange()
+        { _arrangeRequested = true; _frameRequested = true; QueueLayout(); }
+
+        // 搜索菜单提供初始位置；已经摆好的节点只保留原位。
+        internal void SuggestPosition(ScriptableObject asset, Vector2 point)
+        {
+            if (asset == null || _doc.Layout.TryGetPosition(asset, out _)) return;
+            _preferredPositions[asset] = point; _pendingPlacement.Add(asset); QueueLayout();
+        }
+        private void QueueLayout()
+        {
+            _layoutWork?.Pause(); _measuredSizes.Clear(); _framing = false;
+            if (_disposed || (!_arrangeRequested && !_frameRequested && _pendingPlacement.Count == 0)) return;
+            _layoutWork = schedule.Execute(LayoutWhenMeasured).Every(16);
+        }
+        private void LayoutWhenMeasured()
+        {
+            if (_disposed || _nodes.Count == 0) { _layoutWork?.Pause(); return; }
+            if (_framing)
+            {
+                // SetPosition 后再等实际布局更新；否则 FrameAll 仍会按旧坐标取景。
+                if (_nodes.Any(p => (p.Value.GetPosition().position - _layoutPositions[p.Key]).sqrMagnitude > 1)) return;
+                _layoutWork.Pause(); _framing = false; _frameRequested = false; FrameAll(); return;
+            }
+            // 字段绑定和 Cue 条会改变高度。连续两次取得相同的有效尺寸后才定位。
+            bool stable = true;
+            foreach (var pair in _nodes)
+            {
+                Vector2 size = pair.Value.layout.size;
+                if (!(size.x > 0 && size.y > 0) || float.IsInfinity(size.x) || float.IsInfinity(size.y)) return;
+                if (!_measuredSizes.TryGetValue(pair.Key, out var previous) || (size - previous).sqrMagnitude > .01f) stable = false;
+                _measuredSizes[pair.Key] = size;
+            }
+            if (!stable) return;
+            _layoutPositions.Clear();
+            foreach (var pair in _nodes) _layoutPositions[pair.Key] = pair.Value.GetPosition().position;
+            if (_arrangeRequested) ArrangeMeasured(); else PlaceNewNodes();
+            _arrangeRequested = false; _pendingPlacement.Clear(); _preferredPositions.Clear();
+            _doc.Layout.Save();
+            if (_frameRequested) _framing = true; else _layoutWork.Pause();
+        }
+        private Rect Bounds(ScriptableObject asset) => new(_layoutPositions[asset], _measuredSizes[asset]);
+        private void Place(ScriptableObject asset, Vector2 point)
+        {
+            var node = _nodes[asset];
+            node.SetPosition(new Rect(point, _measuredSizes[asset])); node.style.height = StyleKeyword.Auto;
+            // GetPosition 返回上一轮布局的 Rect；本轮后续子节点必须使用刚设置的位置。
+            _layoutPositions[asset] = point;
+            _doc.Layout.SetPosition(asset, point);
+        }
+        private void PlaceNewNodes()
+        {
+            // 用户可能在等待布局的这一帧已拖动节点；保存过的位置永远优先。
+            foreach (var asset in _pendingPlacement.ToArray())
+                if (_doc.Layout.TryGetPosition(asset, out var saved)) { Place(asset, saved); _pendingPlacement.Remove(asset); }
+            var occupied = _nodes.Keys.Where(a => !_pendingPlacement.Contains(a)).Select(Bounds).ToList();
+            var links = _doc.Assets.SelectMany(PortRules.Links).ToArray();
+            while (_pendingPlacement.Count > 0)
+            {
+                var asset = _doc.Assets.FirstOrDefault(a => _pendingPlacement.Contains(a) &&
+                    !links.Any(l => l.Child == a && _pendingPlacement.Contains(l.Parent))) ?? _pendingPlacement.First();
+                var parent = links.FirstOrDefault(l => l.Child == asset && !_pendingPlacement.Contains(l.Parent)).Parent;
+                if (parent == null && asset != _root) parent = _root;
+                Vector2 point = parent != null && _nodes.ContainsKey(parent) ? new Vector2(Bounds(parent).xMax + 60, Bounds(parent).y) : new Vector2(40, 50);
+                if (_preferredPositions.TryGetValue(asset, out var preferred)) point = preferred;
+                var candidate = new Rect(point, _measuredSizes[asset]);
+                while (true)
+                {
+                    var padded = Rect.MinMaxRect(candidate.xMin - 24, candidate.yMin - 24, candidate.xMax + 24, candidate.yMax + 24);
+                    var collisions = occupied.Where(r => r.Overlaps(padded)).ToArray();
+                    if (collisions.Length == 0) break;
+                    candidate.y = collisions.Max(r => r.yMax) + 40;
+                }
+                Place(asset, candidate.position); occupied.Add(candidate); _pendingPlacement.Remove(asset);
+            }
+        }
+        private void ArrangeMeasured()
         {
             var levels = new Dictionary<ScriptableObject, int>();
             if (_root != null) levels[_root] = 0;
@@ -189,56 +293,17 @@ namespace ZFramework.GAS.Editor
                     if (levels.TryGetValue(asset, out int depth))
                         foreach (var link in PortRules.Links(asset))
                             if (link.Child != _root && depth < 7 && (!levels.TryGetValue(link.Child, out int old) || old < depth + 1)) levels[link.Child] = depth + 1;
-            var rows = new Dictionary<int, float>();
-            foreach (var asset in _doc.Assets)
+            var links = _doc.Assets.SelectMany(PortRules.Links).ToArray();
+            float x = 40;
+            foreach (var column in _doc.Assets.GroupBy(a => levels.TryGetValue(a, out var level) ? level : 1).OrderBy(g => g.Key))
             {
-                int col = levels.TryGetValue(asset, out int level) ? level : 1;
-                rows.TryGetValue(col, out float y); var node = _nodes[asset];
-                Vector2 point = new(40 + col * 300, 50 + y);
-                node.SetPosition(new Rect(point, node.GetPosition().size)); _doc.Layout.SetPosition(asset, point);
-                rows[col] = y + Mathf.Max(200, node.layout.height) + 55;
+                float ParentY(ScriptableObject a) => links.Where(l => l.Child == a && _nodes.ContainsKey(l.Parent))
+                    .Select(l => Bounds(l.Parent).center.y).DefaultIfEmpty(50).Average();
+                float y = 50;
+                foreach (var asset in column.OrderBy(ParentY).ThenBy(a => _nodes[a].GetPosition().y).ThenBy(AssetReferences.Key, StringComparer.Ordinal))
+                { Place(asset, new Vector2(x, y)); y += _measuredSizes[asset].y + 55; }
+                x += column.Max(a => _measuredSizes[a].x) + 60;
             }
-            foreach (var cue in _cueNodes.Values)
-            {
-                int col = (levels.TryGetValue(cue.Source, out int level) ? level : 1) + 1;
-                rows.TryGetValue(col, out float y); Vector2 point = new(40 + col * 300, 50 + y);
-                cue.SetPosition(new Rect(point, cue.GetPosition().size)); _doc.Layout.SetPosition(cue.Key, point); rows[col] = y + 160;
-            }
-            _doc.Layout.Save(); schedule.Execute(() => FrameAll()).StartingIn(50);
-        }
-        private void SyncCues()
-        {
-            var live = new HashSet<string>();
-            foreach (var asset in _doc.Assets)
-            {
-                bool regions = asset is SkillAnimationAsset;
-                var array = _doc.Serialized(asset).FindProperty(regions ? "cueRegions" : "cueTags");
-                if (array == null) continue;
-                for (int i = 0; i < array.arraySize; i++)
-                {
-                    var item = array.GetArrayElementAtIndex(i);
-                    string tag = item.FindPropertyRelative(regions ? "cueTag.m_Name" : "m_Name").stringValue;
-                    if (string.IsNullOrEmpty(tag)) continue;
-                    string id = regions ? item.FindPropertyRelative("id").stringValue : tag;
-                    string key = AssetReferences.Key(asset) + "/cue/" + id; live.Add(key);
-                    if (!_cueNodes.TryGetValue(key, out var cue))
-                    {
-                        cue = new CueNode(_doc, this, key, asset, regions ? "cueRegions" : null, id); _cueNodes[key] = cue; AddElement(cue);
-                        var point = _nodes[asset].GetPosition().position + new Vector2(300, i * 140);
-                        cue.SetPosition(new Rect(_doc.Layout.Position(key, point), new Vector2(230, 110)));
-                        cue.Connection = _nodes[asset].CuePort().ConnectTo(cue.Input);
-                        cue.Connection.capabilities &= ~Capabilities.Deletable; AddElement(cue.Connection);
-                    }
-                    cue.SetLabel(tag, regions ? $"区间 · {item.FindPropertyRelative("start").floatValue:0.##}s → " +
-                        (item.FindPropertyRelative("end").floatValue < 0 ? "动画结束" : $"{item.FindPropertyRelative("end").floatValue:0.##}s") : "效果 · " + asset.name);
-                }
-            }
-            foreach (var pair in _cueNodes.ToArray()) if (!live.Contains(pair.Key))
-            {
-                var edge = pair.Value.Connection; edge.output?.Disconnect(edge); edge.input?.Disconnect(edge); RemoveElement(edge);
-                RemoveElement(pair.Value); _cueNodes.Remove(pair.Key);
-            }
-            foreach (var node in _nodes.Values) node.ShowCuePort(_cueNodes.Values.Any(c => c.Source == node.Asset));
         }
         private void SaveComments()
         {
@@ -285,7 +350,7 @@ namespace ZFramework.GAS.Editor
                 }
             }
         }
-        public void Dispose() { _doc.Changed -= Sync; _doc.Selection.Changed -= SyncSelection; this.Unbind(); }
+        public void Dispose() { _disposed = true; _layoutWork?.Pause(); _doc.Changed -= Sync; _doc.Selection.Changed -= SyncSelection; this.Unbind(); }
     }
 
     internal sealed class SkillNode : Node
@@ -294,7 +359,7 @@ namespace ZFramework.GAS.Editor
         private readonly SkillGraphView _graph;
         private readonly Dictionary<PortId, Port> _outputs = new();
         private readonly Label _badge, _summary;
-        private Port _cuePort;
+        private readonly VisualElement _cues;
         public ScriptableObject Asset { get; }
         public Port Input { get; }
         public SkillNode(SkillDocument doc, SkillGraphView graph, ScriptableObject asset)
@@ -303,39 +368,78 @@ namespace ZFramework.GAS.Editor
             AddToClassList("skill-node"); style.width = 245;
             if (asset == doc.Root) capabilities &= ~Capabilities.Deletable;
             Input = new SkillPort(Direction.Input, Port.Capacity.Multi, asset.GetType(), graph, doc);
-            Input.portName = asset == doc.Root ? "能力" : "被引用"; inputContainer.Add(Input);
+            Input.portName = ""; Input.tooltip = "被引用"; inputContainer.Add(Input);
+            // RefreshPorts 会把容器放回 #top；保留层级，用绝对定位把连接点放到标题左侧。
+            inputContainer.AddToClassList("node-title-input"); EnableInClassList("has-title-input", asset != doc.Root);
             if (asset == doc.Root) Input.style.display = DisplayStyle.None;
             _badge = new Label(); _badge.AddToClassList("node-badge"); titleContainer.Add(_badge);
             _summary = new Label(); _summary.AddToClassList("node-summary"); extensionContainer.Add(_summary);
             var so = doc.Serialized(asset);
-            if (asset is GameplayEffectAsset) { Field(so, "durationPolicy", "策略"); Field(so, "duration", "时长 / s"); Field(so, "period", "周期 / s"); }
-            else if (asset is SkillAnimationAsset) { Field(so, "clipName", "片段"); Field(so, "duration", "时长 / s"); Field(so, "loop", "循环"); }
+            if (asset is GameplayEffectAsset)
+            {
+                Field(so, "durationPolicy", new EnumField("策略", (EffectDurationPolicy)so.FindProperty("durationPolicy").intValue));
+                Field(so, "duration", new FloatField("时长 / s") { isDelayed = true });
+                Field(so, "period", new FloatField("周期 / s") { isDelayed = true });
+            }
+            else if (asset is SkillAnimationAsset)
+            {
+                Field(so, "clipName", new TextField("片段") { isDelayed = true });
+                Field(so, "duration", new FloatField("时长 / s") { isDelayed = true });
+                Field(so, "loop", new Toggle("循环"));
+            }
             else
             {
                 var button = new Button(() => { doc.Selection.Select(asset); SkillEditorWindow.Open().ShowAbilitySettings(); }) { text = "编辑能力标签与门禁" };
                 extensionContainer.Add(button);
             }
+            _cues = new VisualElement(); _cues.AddToClassList("node-cues"); extensionContainer.Add(_cues);
             RegisterCallback<MouseDownEvent>(e => { if (e.clickCount == 2) EditorGUIUtility.PingObject(asset); });
             RefreshExpandedState();
         }
-        private void Field(SerializedObject so, string path, string label)
+        private void Field<T>(SerializedObject so, string path, BaseField<T> field)
         {
-            var field = new PropertyField(so.FindProperty(path), label); field.AddToClassList("node-field"); field.Bind(so);
-            field.RegisterCallback<SerializedPropertyChangeEvent>(e => schedule.Execute(() => _doc.Notify(new ChangeSet(Asset, path == "clipName", path))));
+            field.name = "node-" + path; field.AddToClassList("node-field"); field.BindProperty(so.FindProperty(path));
+            // 等绑定完成写回后再通知文档，保留 Unity 的 Undo 和外部修改同步。
+            field.RegisterValueChangedCallback(e => schedule.Execute(() =>
+            { if (Asset != null && panel != null) _doc.Notify(new ChangeSet(Asset, path == "clipName", path)); }));
             extensionContainer.Add(field);
         }
         public override void OnSelected() { base.OnSelected(); if (!_graph.IsSyncing) _doc.Selection.Select(Asset); }
         public Port Output(PortId id) => _outputs.TryGetValue(id, out var port) ? port : null;
-        public Port CuePort()
+        private void SyncCues(SerializedObject so)
         {
-            if (_cuePort == null)
+            _cues.Clear();
+            bool regions = Asset is SkillAnimationAsset;
+            var array = so.FindProperty(regions ? "cueRegions" : "cueTags");
+            if (array != null) for (int i = 0; i < array.arraySize; i++)
             {
-                _cuePort = InstantiatePort(Orientation.Horizontal, Direction.Output, Port.Capacity.Multi, typeof(string));
-                _cuePort.portName = "Cue · 只读"; _cuePort.portColor = SkillColors.Cue; _cuePort.SetEnabled(false); outputContainer.Add(_cuePort);
+                var item = array.GetArrayElementAtIndex(i);
+                string tag = item.FindPropertyRelative(regions ? "cueTag.m_Name" : "m_Name").stringValue;
+                if (string.IsNullOrEmpty(tag) && !regions) continue;
+                string id = regions ? item.FindPropertyRelative("id").stringValue : null;
+                string label = "Cue · " + (string.IsNullOrEmpty(tag) ? "未设置标签" : tag.StartsWith("Cue.", StringComparison.Ordinal) ? tag.Substring(4) : tag);
+                if (regions) label += $"  {item.FindPropertyRelative("start").floatValue:0.##}–" +
+                    (item.FindPropertyRelative("end").floatValue < 0 ? "动画结束" : $"{item.FindPropertyRelative("end").floatValue:0.##}s");
+                var strip = new Button(() => _doc.Selection.Select(Asset, regions ? "cueRegions" : null, id))
+                { text = label, userData = id, tooltip = tag + (regions ? " · 点击定位时间轴区间" : " · 效果触发的 Cue") };
+                strip.AddToClassList("node-cue-strip"); _cues.Add(strip);
             }
-            return _cuePort;
+            _cues.style.display = _cues.childCount == 0 ? DisplayStyle.None : DisplayStyle.Flex;
+            SyncCueSelection();
         }
-        public void ShowCuePort(bool visible) { if (_cuePort != null) _cuePort.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None; }
+        public void SyncCueSelection()
+        {
+            foreach (var strip in _cues.Children())
+            {
+                bool selected = _doc.Selection.Asset == Asset && _doc.Selection.Track == "cueRegions" && (string)strip.userData == _doc.Selection.ElementId;
+                strip.EnableInClassList("selected-cue", selected);
+                var cue = SkillColors.Cue;
+                strip.style.color = Color.Lerp(cue, Color.white, .72f);
+                strip.style.backgroundColor = new Color(cue.r, cue.g, cue.b, selected ? .28f : .12f);
+                var border = selected ? Color.Lerp(cue, Color.white, .6f) : new Color(cue.r, cue.g, cue.b, .55f);
+                strip.style.borderLeftColor = strip.style.borderRightColor = strip.style.borderTopColor = strip.style.borderBottomColor = border;
+            }
+        }
         public void Sync()
         {
             if (Asset == null) return;
@@ -367,7 +471,7 @@ namespace ZFramework.GAS.Editor
                 }
                 _summary.text = "ANIMATION  /  " + markers.arraySize + " 个事件";
             }
-            titleContainer.style.backgroundColor = color;
+            titleContainer.style.borderTopColor = color; Input.portColor = color; elementTypeColor = color;
             bool external = Asset != _doc.Root && AssetDatabase.GetAssetPath(Asset) != AssetDatabase.GetAssetPath(_doc.Root);
             EnableInClassList("external-node", external);
             if (external) title += "  ↗";
@@ -389,7 +493,9 @@ namespace ZFramework.GAS.Editor
                 }
                 port.portName = pair.Value; port.portColor = color;
             }
-            RefreshPorts();
+            SyncCues(so); RefreshPorts(); RefreshExpandedState();
+            inputContainer.style.display = Asset == _doc.Root ? DisplayStyle.None : DisplayStyle.Flex;
+            outputContainer.style.display = _outputs.Count == 0 ? DisplayStyle.None : DisplayStyle.Flex;
         }
         public void SetIssues(IReadOnlyList<Issue> issues)
         {

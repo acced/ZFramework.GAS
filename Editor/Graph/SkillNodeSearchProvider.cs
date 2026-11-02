@@ -11,9 +11,10 @@ namespace ZFramework.GAS.Editor
     public sealed class SkillNodeSearchProvider : ScriptableObject, ISearchWindowProvider
     {
         private SkillDocument _doc; private ScriptableObject _parent; private PortId? _port; private Vector2 _position;
+        private SkillGraphView _graph;
         private sealed class Entry { public ScriptableObject Asset; public Type Type; public EffectDurationPolicy Policy; public string Name; }
-        public void Initialize(SkillDocument doc, ScriptableObject parent, PortId? port, Vector2 position)
-        { _doc = doc; _parent = parent; _port = port; _position = position; }
+        public void Initialize(SkillDocument doc, ScriptableObject parent, PortId? port, Vector2 position, SkillGraphView graph = null)
+        { _doc = doc; _parent = parent; _port = port; _position = position; _graph = graph; }
         public List<SearchTreeEntry> CreateSearchTree(SearchWindowContext context)
         {
             var tree = new List<SearchTreeEntry> { new SearchTreeGroupEntry(new GUIContent("添加节点"), 0) };
@@ -44,7 +45,8 @@ namespace ZFramework.GAS.Editor
             ScriptableObject asset = item.Asset;
             if (asset != null) { if (_port.HasValue) PortRules.Attach(_doc, _parent, _port.Value, asset); else _doc.AddLoose(asset); }
             else asset = SkillAssetFactory.Create(_doc, item.Type, item.Name, item.Policy, _parent, _port);
-            _doc.Layout.SetPosition(asset, _position); _doc.Selection.Select(asset);
+            if (_parent == null) _graph?.SuggestPosition(asset, _position);
+            _doc.Selection.Select(asset);
             _doc.Notify(new ChangeSet(asset, true));
             DestroyImmediate(this); return true;
         }

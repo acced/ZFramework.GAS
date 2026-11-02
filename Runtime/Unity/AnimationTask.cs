@@ -103,7 +103,9 @@ namespace ZFramework.GAS.Unity
             Array.Sort(_boundaries, static (a, c) =>
             { int order = a.Time.CompareTo(c.Time); if (order == 0) order = a.Kind.CompareTo(c.Kind); return order == 0 ? a.Index.CompareTo(c.Index) : order; });
 
-            float played = driver.Play(definition.ClipName, durationOverride, definition.Loop);
+            float played = driver is IBlendingAnimationDriver blending
+                ? blending.Play(definition.ClipName, durationOverride, definition.Loop, definition.BlendIn)
+                : driver.Play(definition.ClipName, durationOverride, definition.Loop);
 
             // 驱动找不到片段时返回 0：表现缺失不应连带把判定一起丢掉，
             // 时间轴按调用方要求的时长（没有则按授权时长）照常推进。
@@ -127,6 +129,9 @@ namespace ZFramework.GAS.Unity
 
         /// <summary>本次播放的实际时长（秒）。</summary>
         public float Duration { get; }
+
+        /// <summary>本次任务实际持有的定义；资产在编辑器中修改后该实例仍然有效。</summary>
+        public SkillAnimationDefinition Definition => _definition;
 
         /// <summary>当前这一圈的归一化进度（0~1）。</summary>
         public float NormalizedTime => _cycleTime / Duration;
@@ -192,7 +197,12 @@ namespace ZFramework.GAS.Unity
                 }
             }
 
-            try { _driver.Stop(); } catch (Exception ex) { error ??= ex; }
+            try
+            {
+                if (_driver is IBlendingAnimationDriver blending) blending.Stop(_definition.BlendOut);
+                else _driver.Stop();
+            }
+            catch (Exception ex) { error ??= ex; }
 
             // 放在最后：回调里多半要结束能力，届时区间已收尾、动画已停。
             try { _onFinished?.Invoke(this); } catch (Exception ex) { error ??= ex; }

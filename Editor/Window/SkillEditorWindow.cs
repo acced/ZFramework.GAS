@@ -26,6 +26,9 @@ namespace ZFramework.GAS.Editor
         private Label _breadcrumb, _status;
         private ToolbarMenu _backend;
         private ToolbarButton _counts;
+        private ToolbarToggle _followRuntime;
+        private bool _followingRuntime;
+        private readonly HashSet<ScriptableObject> _liveAssets = new();
         private ObjectField _rootField, _previewField;
         private double _lastTime;
         private readonly List<GameplayAbilityAsset> _history = new();
@@ -47,7 +50,12 @@ namespace ZFramework.GAS.Editor
             if (EditorUtility.EntityIdToObject(instanceId) is not GameplayAbilityAsset ability) return false;
             Open().Show(ability); return true;
         }
-        private void OnEnable() { titleContent = new GUIContent("GAS 技能编辑器"); _lastTime = EditorApplication.timeSinceStartup; EditorApplication.update += Tick; }
+        private void OnEnable()
+        {
+            titleContent = new GUIContent("GAS 技能编辑器"); _lastTime = EditorApplication.timeSinceStartup; EditorApplication.update += Tick;
+            RuntimeDebugSession.Changed += ApplyRuntime;
+            EditorApplication.playModeStateChanged += RuntimeModeChanged;
+        }
         private void CreateGUI()
         {
             Cleanup(); rootVisualElement.Clear(); rootVisualElement.AddToClassList("gas-editor");
@@ -72,6 +80,10 @@ namespace ZFramework.GAS.Editor
             centerTabs.Add(new ToolbarButton(() => SetSettings(true)) { text = "能力设置" });
             centerTabs.Add(new ToolbarButton(() => _graph.AutoArrange()) { text = "自动整理" });
             centerTabs.Add(new ToolbarButton(() => _graph.FrameAll()) { text = "显示全部" });
+            var minimap = new ToolbarToggle { name = "show-minimap", text = "小地图", value = EditorPrefs.GetBool("ZFramework.GAS.ShowMiniMap", true) };
+            _graph.MiniMapVisible = minimap.value;
+            minimap.RegisterValueChangedCallback(e => { _graph.MiniMapVisible = e.newValue; EditorPrefs.SetBool("ZFramework.GAS.ShowMiniMap", e.newValue); });
+            centerTabs.Add(minimap);
             centerTabs.Add(new ToolbarButton(() => ToggleMessages()) { text = "消息" }); _center.Add(centerTabs);
             var timelineSplit = Split("TimelineHeight", 1, 278, TwoPaneSplitViewOrientation.Vertical); _center.Add(timelineSplit);
             _graphHost = new VisualElement { style = { flexGrow = 1, minHeight = 120 } }; _graphHost.Add(_graph); _graphHost.Add(_settings); _settings.style.display = DisplayStyle.None;
@@ -87,6 +99,7 @@ namespace ZFramework.GAS.Editor
             _doc.Changed += Changed; _doc.Feedback += Feedback; _validation.Changed += ValidationChanged;
             rootVisualElement.RegisterCallback<GeometryChangedEvent>(_ => Responsive());
             _doc.Open(activeAbility); SyncToolbar(); _validation.ValidateNow(true);
+            ApplyRuntime(RuntimeDebugSession.Current);
         }
         private TwoPaneSplitView Split(string key, int fixedPane, float initial, TwoPaneSplitViewOrientation orientation)
         {
@@ -106,6 +119,10 @@ namespace ZFramework.GAS.Editor
             var create = new ToolbarMenu { text = "+ 新建技能" }; create.AddToClassList("primary-button");
             foreach (var item in SkillTemplateRegistry.Templates) { var template = item; create.menu.AppendAction(template.DisplayName, _ => SkillTemplateRegistry.Choose(template, Show)); }
             toolbar.Add(create); toolbar.Add(new ToolbarButton(Save) { text = "保存", tooltip = "Ctrl+S" });
+            _followRuntime = new ToolbarToggle { text = "跟随运行时", name = "follow-runtime", tooltip = "跟随运行时调试窗口观察的单位；当前技能的时间轴与生效效果同步显示" };
+            _followRuntime.SetEnabled(EditorApplication.isPlaying);
+            _followRuntime.SetValueWithoutNotify(_followingRuntime);
+            _followRuntime.RegisterValueChangedCallback(e => SetFollowRuntime(e.newValue)); toolbar.Add(_followRuntime);
             toolbar.Add(new ToolbarButton(() => Navigate(-1)) { text = "◀" }); toolbar.Add(new ToolbarButton(() => Navigate(1)) { text = "▶" });
             _breadcrumb = new Label("选择技能"); _breadcrumb.AddToClassList("breadcrumb"); toolbar.Add(_breadcrumb);
             _counts = new ToolbarButton(() => ToggleMessages()) { text = "校验" }; toolbar.Add(_counts); host.Add(toolbar);
@@ -140,7 +157,7 @@ namespace ZFramework.GAS.Editor
             int next = _historyIndex + direction; if (next < 0 || next >= _history.Count) return;
             _historyIndex = next; activeAbility = _history[next]; _doc.Open(activeAbility); SyncToolbar();
         }
-        private void Changed(ChangeSet change) { SyncToolbar(); if (_showSettings && change.Structure) _settings.Rebuild(); UpdateStatus(); }
+        private void Changed(ChangeSet change) { SyncToolbar(); if (_showSettings && change.Structure) _settings.Rebuild(); UpdateStatus(); ApplyRuntime(RuntimeDebugSession.Current); }
         private void SyncToolbar()
         {
             _rootField.SetValueWithoutNotify(_doc.Root); _previewField.SetValueWithoutNotify(_doc.PreviewPrefab);
@@ -206,7 +223,43 @@ namespace ZFramework.GAS.Editor
             _doc?.Playback.Tick(delta, _doc.Root?.Animation?.Duration ?? 0);
         }
         private void OnFocus() { if (_doc != null && !EditorApplication.isCompiling) _doc.Notify(new ChangeSet(_doc.Root, true)); }
-        private void OnDisable() { EditorApplication.update -= Tick; Cleanup(); }
+        public bool FollowingRuntime => _followingRuntime;
+        public void SetFollowRuntime(bool enabled)
+        {
+            _followingRuntime = enabled;
+            _followRuntime?.SetValueWithoutNotify(enabled);
+            ApplyRuntime(RuntimeDebugSession.Current);
+        }
+        private void RuntimeModeChanged(PlayModeStateChange state)
+        {
+            _followRuntime?.SetEnabled(state == PlayModeStateChange.EnteredPlayMode);
+            if (state == PlayModeStateChange.ExitingPlayMode || state == PlayModeStateChange.EnteredEditMode) SetFollowRuntime(false);
+        }
+        private void ApplyRuntime(RuntimeSnapshot snapshot)
+        {
+            if (_doc == null) return;
+            _liveAssets.Clear();
+            if (!_followingRuntime || snapshot == null)
+            {
+                _doc.Playback.Live = false; _graph.SetLive(null); return;
+            }
+            foreach (var ability in snapshot.Abilities) if (ability.Active && ability.Asset != null) _liveAssets.Add(ability.Asset);
+            foreach (var effect in snapshot.Effects) if (effect.Asset != null) _liveAssets.Add(effect.Asset);
+            _graph.SetLive(_liveAssets);
+            RuntimeSnapshot.Animation match = null;
+            foreach (var task in snapshot.Tasks)
+                if (_doc.Root != null && task.Asset != null && task.Asset == _doc.Root.Animation &&
+                    (match == null || task.AbilityAsset == _doc.Root)) match = task;
+            _doc.Playback.Live = match != null;
+            if (match != null) _doc.Playback.Seek(match.AuthoredTime, match.Definition.Duration);
+        }
+        private void OnDisable()
+        {
+            EditorApplication.update -= Tick;
+            RuntimeDebugSession.Changed -= ApplyRuntime;
+            EditorApplication.playModeStateChanged -= RuntimeModeChanged;
+            Cleanup();
+        }
         private void Cleanup()
         {
             if (_validation != null) _validation.Changed -= ValidationChanged;

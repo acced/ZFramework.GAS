@@ -35,6 +35,7 @@ internal static class Program
         Run(nameof(DataContractRoundTrip), DataContractRoundTrip);
         Run(nameof(RequirementsEquivalence), RequirementsEquivalence);
         Run(nameof(RandomCountMutations), RandomCountMutations);
+        Run(nameof(DebugReadback), DebugReadback);
         HotPath();
     }
 
@@ -225,6 +226,31 @@ internal static class Program
         long allocated = GC.GetAllocatedBytesForCurrentThread() - startBytes;
         Check(allocated == 0, "Warmed activation/tag mutation must allocate zero bytes");
         Console.WriteLine($"PERF 100000 activation/end pairs: {elapsed * 1000.0 / Stopwatch.Frequency:F2} ms; {allocated} allocated bytes");
+    }
+
+    private sealed class ReadbackTask : GameplayAbilityTask
+    {
+        protected override void OnTick(float deltaTime) { }
+    }
+    private static void DebugReadback()
+    {
+        var asc = new AbilitySystemComponent(2);
+        var health = asc.Attributes.Add(new AttributeId(1), 100);
+        var attack = asc.Attributes.Add(new AttributeId(2), 20);
+        var list = new List<GameplayAttribute>(2) { health };
+        asc.Attributes.CopyTo(list);
+        Check(list.Count == 2 && list.Contains(health) && list.Contains(attack), "CopyTo replaces the supplied contents with all attributes");
+        var ability = asc.GrantAbility(new GameplayAbilityDefinition()); asc.TryActivateAbility(ability);
+        var task = new ReadbackTask(); asc.StartTask(ability, task);
+        Check(asc.ActiveTaskCount == 1 && ReferenceEquals(asc.GetActiveTask(0), task), "GetActiveTask matches task count and identity");
+        for (int i = 0; i < 100; i++) asc.Attributes.CopyTo(list);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 10000; i++) { asc.Attributes.CopyTo(list); _ = asc.GetActiveTask(0); }
+        Check(GC.GetAllocatedBytesForCurrentThread() == before, "Warm debug readback must allocate zero bytes");
+        asc.EndAbility(ability); Check(asc.ActiveTaskCount == 0 && !task.IsActive, "Readback does not change task cancellation semantics");
+        asc.Attributes.Remove(attack.Id); asc.Attributes.CopyTo(list);
+        Check(list.Count == 1 && ReferenceEquals(list[0], health), "CopyTo drops removed attributes");
+        asc.Attributes.Clear(); asc.Attributes.CopyTo(list); Check(list.Count == 0, "Empty CopyTo clears the destination");
     }
 
     private static void CountEvents()

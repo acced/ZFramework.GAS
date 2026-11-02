@@ -7,19 +7,23 @@ namespace ZFramework.GAS.Unity
     /// <see cref="Animator"/> 的驱动：<paramref name="clipName"/> 即状态机里的状态名。
     ///
     /// 拉伸靠 <see cref="Animator.speed"/>，作用于整个 Animator——技能动画期间
-    /// 该 Animator 应当由技能独占。<see cref="Stop"/> 恢复播放前的速度，而不是强设成 1：
+    /// 该 Animator 应当由技能独占。<see cref="Stop()"/> 恢复播放前的速度，而不是强设成 1：
     /// 速度可能本来就被别处调过（减速 debuff 等），技能不该顺手把它抹掉。
+    ///
+    /// 混入用 <see cref="Animator.CrossFadeInFixedTime(int, float, int, float)"/>：过渡时间同样受
+    /// <see cref="Animator.speed"/> 缩放，因而与拉伸后的动作同比变化。混出时回到施放前所在的状态（通常是待机）。
     ///
     /// <b>循环由状态自身的 clip 决定</b>，运行期改不了，因此 <c>loop</c> 参数在此实现中不生效；
     /// 时间轴侧的循环语义（标记点每圈重触发）仍由 <see cref="AnimationTask"/> 保证。
     /// </summary>
-    public sealed class AnimatorAnimationDriver : IAnimationDriver
+    public sealed class AnimatorAnimationDriver : IBlendingAnimationDriver
     {
         private readonly Animator _animator;
         private readonly int _layer;
 
         private float _restoreSpeed;
         private bool _playing;
+        private int _playingState, _returnState;
 
         public AnimatorAnimationDriver(Animator animator, int layer = 0)
         {
@@ -27,9 +31,12 @@ namespace ZFramework.GAS.Unity
             _layer = layer;
         }
 
-        public float Play(string clipName, float duration, bool loop)
+        public float Play(string clipName, float duration, bool loop) => Play(clipName, duration, loop, 0f);
+
+        public float Play(string clipName, float duration, bool loop, float blendIn)
         {
-            if (!_animator.HasState(_layer, Animator.StringToHash(clipName)))
+            int state = Animator.StringToHash(clipName);
+            if (!_animator.HasState(_layer, state))
             {
                 // 一次都没播过就不许留下痕迹：Stop 据此判断该不该碰 speed。
                 return 0f;
@@ -38,15 +45,21 @@ namespace ZFramework.GAS.Unity
             if (!_playing)
             {
                 _restoreSpeed = _animator.speed;
+                // 连续施放时保留最早的返回点：连招结束后回到待机，而不是回到上一个技能。
+                _returnState = CurrentOrNext().fullPathHash;
                 _playing = true;
             }
 
             _animator.speed = 1f;
-            _animator.Play(clipName, _layer, 0f);
+            // 目标就是当前状态时（同一技能再次施放）交叉淡入不会从头开始，直接重播。
+            bool restart = Is(_animator.GetCurrentAnimatorStateInfo(_layer), state) && !_animator.IsInTransition(_layer);
+            if (blendIn > 0f && !restart) _animator.CrossFadeInFixedTime(state, blendIn, _layer, 0f);
+            else _animator.Play(state, _layer, 0f);
+            _playingState = state;
 
             // 状态切换要等 Animator 下次求值才生效，不推一下就只能读到上一个状态的时长。
             _animator.Update(0f);
-            float natural = _animator.GetCurrentAnimatorStateInfo(_layer).length;
+            float natural = (_animator.IsInTransition(_layer) ? _animator.GetNextAnimatorStateInfo(_layer) : _animator.GetCurrentAnimatorStateInfo(_layer)).length;
 
             if (duration > 0f && natural > 0f)
             {
@@ -62,25 +75,43 @@ namespace ZFramework.GAS.Unity
         {
         }
 
+        public void Stop() => Stop(0f);
+
         /// <summary>
-        /// 恢复播放前的速度。没播过就什么都不做——找不到状态时 <see cref="Play"/> 直接返回了 0，
+        /// 恢复播放前的速度，并在 <paramref name="blendOut"/> 大于 0 时过渡回施放前的状态。
+        /// 没播过就什么都不做——找不到状态时 <see cref="Play(string, float, bool, float)"/> 直接返回了 0，
         /// 此时若强设 speed = 1，一次拼错的片段名就会静默清掉别处施加的减速。
+        /// 状态机自己的转换已经离开技能状态时，不再插手。
         /// </summary>
-        public void Stop()
+        public void Stop(float blendOut)
         {
             if (!_playing)
             {
                 return;
             }
 
+            _playing = false;
+
             // 组件可能已随单位一起销毁（回收、场景卸载），这不是错误。
-            if (_animator != null)
+            if (_animator == null)
             {
-                _animator.speed = _restoreSpeed;
+                return;
             }
 
-            _playing = false;
+            _animator.speed = _restoreSpeed;
+            var settled = CurrentOrNext();
+            if (blendOut > 0f && _returnState != 0 && _returnState != settled.fullPathHash && Is(settled, _playingState))
+            {
+                _animator.CrossFadeInFixedTime(_returnState, blendOut, _layer);
+            }
         }
+
+        /// <summary>正在过渡时以目标状态为准：那才是马上要停留的状态。</summary>
+        private AnimatorStateInfo CurrentOrNext()
+            => _animator.IsInTransition(_layer) ? _animator.GetNextAnimatorStateInfo(_layer) : _animator.GetCurrentAnimatorStateInfo(_layer);
+
+        /// <summary>片段名可以写完整路径（Base Layer.Attack）也可以只写状态名，两种哈希都要认。</summary>
+        private static bool Is(in AnimatorStateInfo info, int state) => info.fullPathHash == state || info.shortNameHash == state;
     }
 
     /// <summary>

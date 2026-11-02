@@ -38,7 +38,7 @@ namespace ZFramework.GAS.Editor
             if (changed) { if (recordUndo) so.ApplyModifiedProperties(); else so.ApplyModifiedPropertiesWithoutUndo(); }
             return changed;
         }
-        public static string Add(SkillDocument doc, ITrackType track, float time, UnityEngine.Object dropped = null)
+        public static string Add(SkillDocument doc, ITrackType track, float time, UnityEngine.Object dropped = null, string cueTag = null)
         {
             var animation = doc.Root?.Animation;
             if (animation == null) { doc.Report("先添加动画，再编辑时间轴"); return null; }
@@ -48,6 +48,7 @@ namespace ZFramework.GAS.Editor
                 var array = so.FindProperty(track.PropertyPath);
                 int index = array.arraySize++; var item = array.GetArrayElementAtIndex(index);
                 track.InitializeNew(item, Mathf.Clamp(time, 0, animation.Duration), dropped);
+                if (track.PropertyPath == "cueRegions" && cueTag != null) item.FindPropertyRelative("cueTag.m_Name").stringValue = cueTag;
                 id = item.FindPropertyRelative("id").stringValue;
             }, true, track.PropertyPath);
             doc.Selection.Select(animation, track.PropertyPath, id);

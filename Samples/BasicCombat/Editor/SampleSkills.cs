@@ -33,7 +33,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 Region(so, T.SlashTrailStart, T.SlashTrailEnd, SampleTags.CueSwordTrail);
                 Window(so, .12f, .4f, SampleTags.SuperArmor);
                 Window(so, .55f, .85f, SampleTags.ComboWindow);
-            });
+            }, .08f, .2f);
             return Bind(ability, cost, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
 
@@ -53,7 +53,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 {
                     visualPrefab = visual, impactEffect = damage, speed = 13, radius = .3f, curveHeight = .25f, maxDistance = 18,
                 };
-            });
+            }, .12f, .22f);
             return Bind(ability, cost, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
 
@@ -68,7 +68,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 Region(so, T.WarcryAuraStart, T.WarcryLength, SampleTags.CueWarcryAura);
                 Region(so, .2f, .9f, SampleTags.CueGroundTest);
                 Window(so, .2f, .9f, SampleTags.SuperArmor);
-            });
+            }, .15f, .28f);
             return Bind(ability, null, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
 
@@ -87,7 +87,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 Marker(so, T.SanctuaryBegin, "开始引导", heal, AnimationMarkerTarget.Self);
                 Region(so, T.SanctuaryBegin, T.SanctuaryEnd, SampleTags.CueSanctuary);
                 Window(so, T.SanctuaryBegin, T.SanctuaryEnd, SampleTags.Channeling);
-            });
+            }, .2f, .35f);
             return Bind(ability, null, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
 
@@ -100,7 +100,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 // 纯回调事件：召唤什么、召唤到哪由宿主决定。
                 Marker(so, T.SummonStrike, "召唤", null, AnimationMarkerTarget.Target);
                 Region(so, T.SummonCircleStart, T.SummonCircleEnd, SampleTags.CueSummon);
-            });
+            }, .15f, .28f);
             return Bind(ability, null, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
 
@@ -146,7 +146,8 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             magnitude.FindPropertyRelative("captureFrom").enumValueIndex = (int)MagnitudeCapture.Source;
         }
 
-        private static SkillAnimationAsset Animation(GameplayAbilityAsset owner, string name, string state, float length, Action<SerializedObject> timeline)
+        private static SkillAnimationAsset Animation(GameplayAbilityAsset owner, string name, string state, float length, Action<SerializedObject> timeline,
+            float blendIn = .12f, float blendOut = .2f)
         {
             var animation = SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(owner, name);
             Edit(animation, so =>
@@ -154,6 +155,8 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 so.FindProperty("clipName").stringValue = "Base Layer." + state;
                 so.FindProperty("duration").floatValue = length;
                 so.FindProperty("frameRate").floatValue = 30;
+                so.FindProperty("blendIn").floatValue = blendIn;
+                so.FindProperty("blendOut").floatValue = blendOut;
                 timeline(so);
             });
             TimelineCommands.EnsureIds(animation);

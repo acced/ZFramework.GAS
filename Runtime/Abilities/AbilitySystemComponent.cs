@@ -57,6 +57,9 @@ namespace ZFramework.GAS
 
         public int ActiveTaskCount => _tasks.Count;
 
+        /// <summary>按索引只读访问当前任务；不要在枚举期间推进或取消能力。</summary>
+        public GameplayAbilityTask GetActiveTask(int index) => _tasks[index];
+
         /// <summary>
         /// 启动一个属于 <paramref name="spec"/> 的延迟动作。能力必须处于激活状态——
         /// 任务的存活期是能力存活期的子集，给未激活的能力挂任务没有意义。

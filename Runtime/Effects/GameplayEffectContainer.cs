@@ -663,7 +663,8 @@ namespace ZFramework.GAS
 
         private static ActiveGameplayEffectInfo CreateInfo(ActiveGameplayEffect effect) =>
             new ActiveGameplayEffectInfo(
-                effect.Handle, effect.Definition, effect.Source, effect.StackCount, effect.RemainingTime);
+                effect.Handle, effect.Definition, effect.Source, effect.StackCount, effect.RemainingTime,
+                effect.ResolvedDuration, effect.ResolvedPeriod);
 
         private void DispatchCues(GameplayEffectDefinition definition, GameplayCueEvent cueEvent, object source, int stackCount)
         {

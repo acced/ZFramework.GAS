@@ -64,7 +64,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             // 文件名即片段名：Unity 导入时会把对象名改成文件名。
             foreach (var pair in clips) AssetDatabase.CreateAsset(pair.Value, folder + "/Animations/Knight/" + pair.Key + ".anim");
             var knightController = BuildController(folder + "/Animations/Knight/Knight.controller", clips["Idle"],
-                new[] { "Slash", "Bolt", "Warcry", "Sanctuary", "Summon" }, clips);
+                new[] { "Slash", "Bolt", "Warcry", "Sanctuary", "Summon" }, clips, false);
             knight.AddComponent<Animator>().runtimeAnimatorController = knightController;
             knight.AddComponent<SkillAnimator>();
             var cueLibrary = SampleVfx.Build(art, knight, clips["Slash"], folder);
@@ -76,7 +76,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var hit = KnightAnimations.DummyHit();
             AssetDatabase.CreateAsset(hit, folder + "/Animations/TrainingDummy/Hit.anim");
             dummy.AddComponent<Animator>().runtimeAnimatorController = BuildController(folder + "/Animations/TrainingDummy/TrainingDummy.controller", null,
-                new[] { "Hit" }, new Dictionary<string, AnimationClip> { ["Hit"] = hit });
+                new[] { "Hit" }, new Dictionary<string, AnimationClip> { ["Hit"] = hit }, true);
             var dummyPrefab = SavePrefab(dummy, folder + "/Prefabs/TrainingDummy.prefab");
 
             var bolt = SavePrefab(SampleVfx.BuildProjectile(art), folder + "/Prefabs/ArcaneBolt.prefab");
@@ -127,10 +127,10 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         }
 
         /// <summary>
-        /// 待机为默认状态；每个技能状态播完后自动回到待机。
-        /// 技能由 <see cref="AnimatorAnimationDriver"/> 按「Base Layer.状态名」直接播放。
+        /// 待机为默认状态。技能由 <see cref="AnimatorAnimationDriver"/> 按「Base Layer.状态名」交叉淡入，
+        /// 结束时按动画资产的混出时长淡回待机；<paramref name="returnToIdle"/> 只给不经驱动播放的动作（如受击）加回待机的转换。
         /// </summary>
-        private static AnimatorController BuildController(string path, AnimationClip idle, IEnumerable<string> actions, IReadOnlyDictionary<string, AnimationClip> clips)
+        private static AnimatorController BuildController(string path, AnimationClip idle, IEnumerable<string> actions, IReadOnlyDictionary<string, AnimationClip> clips, bool returnToIdle)
         {
             var controller = AnimatorController.CreateAnimatorControllerAtPath(path);
             var machine = controller.layers[0].stateMachine;
@@ -142,6 +142,8 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             {
                 var state = machine.AddState(name, new Vector3(560, -120 + row++ * 70));
                 state.motion = clips[name];
+                // 骑士的技能由驱动按动画资产的混出时长回到待机；只有不经驱动的受击动作需要状态机自己转回。
+                if (!returnToIdle) continue;
                 var back = state.AddTransition(idleState);
                 back.hasExitTime = true; back.exitTime = .94f; back.duration = .12f; back.hasFixedDuration = true;
             }

@@ -31,22 +31,41 @@ namespace ZFramework.GAS.Unity
     }
 
     /// <summary>
+    /// 能平滑过渡的驱动。<see cref="AnimationTask"/> 检测到驱动实现了本接口时，
+    /// 按技能动画的混入、混出时长调用下面两个重载；否则退回 <see cref="IAnimationDriver"/> 的硬切。
+    ///
+    /// <b>混入随实际时长缩放</b>：它是动作的一部分，攻速拉快时与标记点同比变短。
+    /// <b>混出按实际秒数</b>：它发生在技能动画之后，与攻速无关。
+    /// </summary>
+    public interface IBlendingAnimationDriver : IAnimationDriver
+    {
+        /// <param name="blendIn">从当前动画过渡进来的时长（时间轴秒数，驱动自行按拉伸比例换算）；0 为硬切。</param>
+        float Play(string clipName, float duration, bool loop, float blendIn);
+
+        /// <param name="blendOut">过渡回施放前动画的实际秒数；0 时驱动不切换状态，只做清理。</param>
+        void Stop(float blendOut);
+    }
+
+    /// <summary>
     /// 旧版 <see cref="Animation"/> 组件的驱动——宿主战斗层今天用的就是它。
     ///
     /// 变速即「把 length 秒的片段播成 duration 秒」，正是战斗单位原本手写在攻击分支里的那一行；
-    /// 这里把它变成所有动画形式共用的契约。
+    /// 这里把它变成所有动画形式共用的契约。混入、混出用 <see cref="Animation.CrossFade(string, float)"/>，
+    /// 混出时淡回施放前权重最高的片段（通常是待机）。
     /// </summary>
-    public sealed class LegacyAnimationDriver : IAnimationDriver
+    public sealed class LegacyAnimationDriver : IBlendingAnimationDriver
     {
         private readonly Animation _animation;
-        private string _playing;
+        private string _playing, _return;
         private float _restoreSpeed, _restoreTime;
         private WrapMode _restoreWrap;
 
         public LegacyAnimationDriver(Animation animation)
             => _animation = animation != null ? animation : throw new ArgumentNullException(nameof(animation));
 
-        public float Play(string clipName, float duration, bool loop)
+        public float Play(string clipName, float duration, bool loop) => Play(clipName, duration, loop, 0f);
+
+        public float Play(string clipName, float duration, bool loop, float blendIn)
         {
             AnimationState state = _animation[clipName];
             if (state == null)
@@ -54,9 +73,15 @@ namespace ZFramework.GAS.Unity
                 return 0f;
             }
 
+            if (_playing == null)
+            {
+                _return = Dominant(clipName);
+            }
+
             if (_playing != clipName)
             {
-                Stop();
+                // 连续施放时不硬停上一个技能，交叉淡入会把它淡出；只把它的设置还原。
+                Restore(_playing, false);
                 _restoreSpeed = state.speed;
                 _restoreTime = state.time;
                 _restoreWrap = state.wrapMode;
@@ -70,7 +95,9 @@ namespace ZFramework.GAS.Unity
             state.speed = stretch ? state.length / duration : 1f;
             state.wrapMode = loop ? WrapMode.Loop : WrapMode.Once;
             state.time = 0f;
-            _animation.Play(clipName);
+            // 淡入时长按实际秒数计算：时间轴上的混入随拉伸同比缩放。
+            if (blendIn > 0f) _animation.CrossFade(clipName, blendIn / state.speed);
+            else _animation.Play(clipName);
             _playing = clipName;
 
             return stretch ? duration : state.length;
@@ -81,7 +108,9 @@ namespace ZFramework.GAS.Unity
         {
         }
 
-        public void Stop()
+        public void Stop() => Stop(0f);
+
+        public void Stop(float blendOut)
         {
             if (_playing == null)
             {
@@ -91,12 +120,36 @@ namespace ZFramework.GAS.Unity
             // 组件可能已随单位一起销毁（回收、场景卸载），这不是错误。
             if (_animation != null)
             {
-                _animation.Stop(_playing);
-                var state = _animation[_playing];
-                if (state != null) { state.speed = _restoreSpeed; state.time = _restoreTime; state.wrapMode = _restoreWrap; }
+                bool fade = blendOut > 0f && _return != null && _animation[_return] != null;
+                if (fade) _animation.CrossFade(_return, blendOut);
+                else _animation.Stop(_playing);
+                // 淡出期间不回拨时间，否则正在淡出的姿势会跳一下。
+                Restore(_playing, !fade);
             }
 
             _playing = null;
+            _return = null;
+        }
+
+        private void Restore(string clipName, bool time)
+        {
+            var state = clipName != null ? _animation[clipName] : null;
+            if (state == null) return;
+            state.speed = _restoreSpeed;
+            state.wrapMode = _restoreWrap;
+            if (time) state.time = _restoreTime;
+        }
+
+        /// <summary>施放前权重最高的片段，混出时淡回它。</summary>
+        private string Dominant(string exclude)
+        {
+            string best = null; float weight = 0f;
+            foreach (AnimationState candidate in _animation)
+            {
+                if (candidate.enabled && candidate.weight > weight && candidate.name != exclude) { best = candidate.name; weight = candidate.weight; }
+            }
+
+            return best;
         }
     }
 }
