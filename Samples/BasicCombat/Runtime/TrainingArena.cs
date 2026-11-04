@@ -29,6 +29,8 @@ namespace ZFramework.GAS.Samples.BasicCombat
         [SerializeField] private Transform aimPoint;
         [SerializeField] private Skill[] skills = new Skill[0];
         [SerializeField] private AbilitySetAsset abilitySet;
+        [SerializeField] private SkillClipOverrideSet axeOverride;
+        private SkillAnimator _equipped;
         [Tooltip("体力每秒回复")]
         [SerializeField] private float staminaRegen = 16;
         [Header("表现")]
@@ -38,6 +40,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
         private GameplayCueRouter _router;
         private TargetSearcher _searcher;
         private TimelineTaskContext _context;
+        private ArenaPresentation _presentation;
         private Animator _dummyAnimator;
         private readonly List<Popup> _popups = new();
         private readonly List<Effect> _effects = new();
@@ -61,8 +64,10 @@ namespace ZFramework.GAS.Samples.BasicCombat
             dummy.Initialize(_router);
             _dummyAnimator = dummy.GetComponentInChildren<Animator>();
             _searcher = new TargetSearcher(16);
+            _presentation=gameObject.AddComponent<ArenaPresentation>();
             _context = new TimelineTaskContext
             {
+                Camera=_presentation, Time=_presentation, Rig=_presentation,
                 Origin = hero.transform, Target = aimPoint, Searcher = _searcher, Scene = gameObject.scene,
                 RentVisual = prefab => Instantiate(prefab, castPoint.position, Quaternion.identity).transform,
                 ReturnVisual = ReturnBolt,
@@ -131,15 +136,21 @@ namespace ZFramework.GAS.Samples.BasicCombat
             if (_camera != null)
             {
                 _shake = Mathf.Max(0, _shake - dt * 4);
-                _camera.localPosition = _cameraHome + UnityEngine.Random.insideUnitSphere * (_shake * _shake * .03f);
+                _camera.localPosition = _cameraHome + _presentation.CameraOffset() + UnityEngine.Random.insideUnitSphere * (_shake * _shake * .03f);
             }
         }
 
         // ───────────── 施放 ─────────────
 
-        public void Cast(int index)
+        public void Cast(int index) => TryCast(index);
+        public void ToggleWeaponMotion()
         {
-            if (index < 0 || index >= skills.Length) return;
+            if(_equipped!=null){_equipped.PopOverride(axeOverride);_equipped=null;return;}
+            if(axeOverride!=null && hero!=null){_equipped=hero.GetComponentInChildren<SkillAnimator>();_equipped?.PushOverride(axeOverride);}
+        }
+        public bool TryCast(int index)
+        {
+            if (index < 0 || index >= skills.Length) return false;
             var skill = skills[index];
             var result = hero.SkillRunner.TryCast(skill.asset, dummy.AbilitySystem, _context);
             if (result != AbilityActivationResult.Activated)
@@ -151,8 +162,9 @@ namespace ZFramework.GAS.Samples.BasicCombat
                     AbilityActivationResult.AlreadyActive => skill.Name + " 正在施放",
                     _ => "当前状态无法施放 " + skill.Name,
                 });
-                return;
+                return false;
             }
+            return true;
         }
 
         private void ReturnBolt(Transform visual)
@@ -207,6 +219,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
             // 键盘经 IMGUI 事件读取，新旧输入系统下都可用。
             if (e.type == EventType.KeyDown && e.keyCode >= KeyCode.Alpha1 && e.keyCode <= KeyCode.Alpha9)
             { Cast(e.keyCode - KeyCode.Alpha1); e.Use(); }
+            if(e.type==EventType.KeyDown && e.keyCode==KeyCode.Q){ToggleWeaponMotion();e.Use();}
 
             var camera = Camera.main;
             float scale = Mathf.Max(1, Screen.height / 900f);
@@ -216,7 +229,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
             // 标题
             Panel(new Rect(20, 18, 330, 64), new Color(.06f, .08f, .12f, .78f));
             GUI.Label(new Rect(34, 24, 320, 30), "BasicCombat · 训练场", _titleStyle);
-            GUI.Label(new Rect(34, 52, 320, 22), "按 1–5 施放技能，点击技能栏亦可", _smallStyle);
+            GUI.Label(new Rect(34, 52, 320, 22), "1–5 施放 · Q 切换斩击动作："+(_equipped!=null?"斧劈":"剑斩"), _smallStyle);
 
             // 假人血条
             if (camera != null) WorldBar(camera, dummy, scale);
@@ -289,6 +302,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
 
         private void OnDestroy()
         {
+            if(_equipped!=null)_equipped.PopOverride(axeOverride);
             if (hero != null) { hero.HealthChanged -= OnHealthChanged; hero.AbilitySystem?.Clear(); }
             if (dummy != null) dummy.HealthChanged -= OnHealthChanged;
         }

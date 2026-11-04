@@ -4,6 +4,7 @@ using GameplayTags;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UIElements;
 using ZFramework.GAS.Unity;
 using Object = UnityEngine.Object;
 
@@ -68,6 +69,85 @@ namespace ZFramework.GAS.Editor.Tests
         private TimelineTaskContext Services(Transform origin, Transform target = null, Pool pool = null)
             => new TimelineTaskContext { Origin = origin, Target = target, TargetPosition = target != null ? target.position : Vector3.forward * 3,
                 Objects = pool ?? new Pool(), Searcher = new TargetSearcher(), SceneTasks = _scene };
+
+        [Test] public void GeometryPreviewMatchesRuntimeSphereColliderQueriesIncludingSurfaceContacts()
+        {
+            var origin=Unit("origin",new Vector3(333,0,333));var dummy=Unit("proxy",origin.transform.position);
+            float radius=SkillPreviewSimulation.DummyRadius;var collider=dummy.GetComponent<SphereCollider>();
+            collider.radius=radius;collider.center=Vector3.up*radius;dummy.gameObject.layer=29;
+            var ctx=new SkillExecutionContext(null,origin.AbilitySystem.GrantAbility(new GameplayAbilityDefinition()),null,new EffectEvaluationContext(1),Services(origin.transform));
+            var buffer=new TargetQueryBuffer();var searcher=new TargetSearcher();
+            foreach(var kind in new[]{TargetQueryKind.Circle,TargetQueryKind.Sector,TargetQueryKind.Line})
+            {
+                var query=new TargetQuery{kind=kind,radius=new SkillNumber(3),width=new SkillNumber(1),layerMask=1<<29}.Build();
+                bool hit=false,miss=false;
+                foreach(var delta in new[]{new Vector3(0,0,3.10f),new Vector3(0,0,3.22f),new Vector3(.62f,0,2),new Vector3(.75f,0,2),new Vector3(1.9f,0,.2f)})
+                {
+                    dummy.transform.position=origin.transform.position+delta;Physics.SyncTransforms();
+                    bool actual=searcher.Query(query,ctx,buffer)>0;
+                    Assert.AreEqual(actual,SkillPreviewSimulation.Contains(query,ctx.Values,delta,radius),kind+" at "+delta);
+                    hit|=actual;miss|=!actual;
+                }
+                Assert.IsTrue(hit && miss);
+            }
+        }
+        [Test] public void PreviewOfAnimationlessCastUsesOneConditionalBranchAndTheAimedProjectileContact()
+        {
+            var owner=Unit("caster",new Vector3(88,0,88));var points=new SkillActionTestUnit[3];
+            for(int i=0;i<points.Length;i++){points[i]=Unit("proxy"+i,owner.transform.position+SkillPreviewSimulation.Position(DummyLayout.直线,i,3,2));
+                var c=points[i].GetComponent<SphereCollider>();c.radius=SkillPreviewSimulation.DummyRadius;c.center=Vector3.up*c.radius;
+                points[i].gameObject.layer=28;}
+            Physics.SyncTransforms();
+            var hit=new ApplyEffectAction{effect=Effect(),targets=new TargetQuery{kind=TargetQueryKind.FixedTarget}};
+            var skill=Skill(new ConditionalAction{requireTarget=true,whenTrue=new SkillAction[]{
+                new LaunchProjectileAction{prefab=Go("missile"),speed=new SkillNumber(4),radius=.12f,onHit=new SkillAction[]{hit}}},
+                whenFalse=new SkillAction[]{new ApplyEffectAction{effect=Effect(),targets=new TargetQuery{kind=TargetQueryKind.Circle,radius=new SkillNumber(3)}}}});
+            var path=AssetDatabase.GenerateUniqueAssetPath("Assets/GASPreviewBranch.asset");AssetDatabase.CreateAsset(skill,path);
+            var preview=new PreviewRenderUtility();
+            try{
+                var runner=new SkillRunner(owner.AbilitySystem,null);runner.TryCast(skill,points[2].AbilitySystem,Services(owner.transform,points[2].transform));
+                _scene.Tick(.46f);_scene.Tick(.04f); int runtime=0;
+                for(int i=0;i<3;i++)if(points[i].AbilitySystem.Attributes.GetCurrent(new AttributeId(1))<100){runtime++;Assert.AreEqual(2,i);}
+                Assert.AreEqual(1,runtime);
+                using var doc=new SkillDocument();doc.Open(skill);doc.Playback.Seek(.5f,1);
+                using var simulation=new SkillPreviewSimulation(preview){AimIndex=3};
+                simulation.Sample(doc,owner.transform,3,DummyLayout.直线,2,null,1,false,null);
+                Assert.AreEqual(runtime,simulation.HitCount);Assert.IsTrue(simulation.WasHit(2));
+                doc.Playback.Seek(0,1);simulation.AimIndex=4;
+                simulation.Sample(doc,owner.transform,4,DummyLayout.直线,2,null,1,false,null);
+                Assert.AreEqual(0,simulation.HitCount,"Aimed projectile has not arrived; the alternate area must not fire.");
+                simulation.AimIndex=0;simulation.Sample(doc,owner.transform,3,DummyLayout.直线,2,null,1,false,null);
+                Assert.AreEqual(3,simulation.HitCount,"No target must select only the alternate branch.");
+            }finally{preview.Cleanup();AssetDatabase.DeleteAsset(path);}
+        }
+        [Test] public void EffectOnlyParameterSurvivesModuleExtractionRemappingAndInlining()
+        {
+            var p=new SkillParameter{defaultValue=7};var alternate=new SkillParameter{defaultValue=19};
+            var effect=Effect(parameter:p.Id);
+            var root=Skill(new ApplyEffectAction{effect=effect,targets=new TargetQuery{kind=TargetQueryKind.Self}});root.parameters=new[]{p,alternate};
+            var path=AssetDatabase.GenerateUniqueAssetPath("Assets/GASEffectScopeTest.asset");
+            var modulePath=AssetDatabase.GenerateUniqueAssetPath("Assets/GASEffectScopeModule.asset");
+            AssetDatabase.CreateAsset(root,path);AssetDatabase.AddObjectToAsset(effect,root);
+            try
+            {
+                using var doc=new SkillDocument();doc.Open(root);
+                float Cast(){
+                    var asc=new AbilitySystemComponent();asc.Attributes.Add(new AttributeId(1),100);
+                    var runner=new SkillRunner(asc,null);runner.TryCast(root);return asc.Attributes.GetCurrent(new AttributeId(1));
+                }
+                Assert.AreEqual(93,Cast());
+                SkillFlowCommands.Extract(doc,root,"activationActions",0,1,modulePath,_=>true);
+                var call=(CallModuleAction)root.activationActions[0];Assert.AreEqual(p.Id,call.bindings[0].callerParameterId);
+                Assert.AreEqual(93,Cast());call.bindings[0].callerParameterId=alternate.Id;
+                Assert.AreEqual(81,Cast()); SkillFlowCommands.Inline(doc,root,"activationActions",0,_=>true);
+                Assert.IsInstanceOf<InlineParameterScopeAction>(root.activationActions[0]);Assert.AreEqual(81,Cast());
+                var owned=((ApplyEffectAction)((InlineParameterScopeAction)root.activationActions[0]).actions[0]).effect;
+                Assert.AreNotSame(((ApplyEffectAction)call.module.actions[0]).effect,owned);
+                Assert.AreEqual(path,AssetDatabase.GetAssetPath(owned));
+                AssetDatabase.DeleteAsset(modulePath);Assert.AreEqual(81,Cast(),"Inlined effects must outlive the module file.");
+                CollectionAssert.DoesNotContain(AssetDatabase.GetDependencies(path),modulePath);
+            }finally{AssetDatabase.DeleteAsset(path);AssetDatabase.DeleteAsset(modulePath);}
+        }
 
         private sealed class RecordAim : SkillAction
         {
@@ -143,11 +223,11 @@ namespace ZFramework.GAS.Editor.Tests
             var action = new SpawnPrefabAction(); var skill = Skill(action);
             Edit(skill, so => so.FindProperty("cost").objectReferenceValue = Effect(-20));
             var runner = new SkillRunner(owner, null);
-            Assert.Throws<SkillActionException>(() => runner.TryCast(skill));
+            Assert.AreEqual(AbilityActivationResult.InvalidConfiguration, runner.TryCast(skill));
             Assert.AreEqual(100, owner.Attributes.GetCurrent(new AttributeId(1)));
             Assert.AreEqual(action.Id, runner.GetSpec(skill).LastExecutionFailure.SourceId);
             skill.activationActions = new SkillAction[] { new ApplyEffectAction { effect = Effect(parameter: "deleted-id"), targets = new TargetQuery { kind = TargetQueryKind.Self } } };
-            Assert.Throws<SkillActionException>(() => runner.TryCast(skill));
+            Assert.AreEqual(AbilityActivationResult.InvalidConfiguration, runner.TryCast(skill));
             StringAssert.Contains("deleted-id", runner.GetSpec(skill).LastExecutionFailure.Message);
             Assert.AreEqual(100, owner.Attributes.GetCurrent(new AttributeId(1)));
         }
@@ -330,7 +410,7 @@ namespace ZFramework.GAS.Editor.Tests
             for (int i = 0; i < 256; i++) target.gameObject.AddComponent<BoxCollider>();
             int received = 0; target.AbilitySystem.Events.Received += _ => received++;
             var skill = Skill(new SendGameplayEventAction { tag = "Test.Other", targets = new TargetQuery { kind = TargetQueryKind.Circle } });
-            Physics.SyncTransforms(); Assert.Throws<InvalidOperationException>(() => new SkillRunner(source.AbilitySystem, null).TryCast(skill, taskContext: Services(source.transform)));
+            Physics.SyncTransforms(); Assert.AreEqual(AbilityActivationResult.ExecutionFailed, new SkillRunner(source.AbilitySystem, null).TryCast(skill, taskContext: Services(source.transform)));
             Assert.AreEqual(0, received);
         }
         [TestCase(false, 0), TestCase(true, 0), TestCase(false, 1), TestCase(true, 1), TestCase(false, 2), TestCase(true, 2)]
@@ -365,7 +445,7 @@ namespace ZFramework.GAS.Editor.Tests
             foreach (SkillAction action in new SkillAction[] { new LaunchProjectileAction { prefab = prefab }, new SpawnPrefabAction { prefab = prefab, position = SkillSpawnPosition.TargetPoint } })
             {
                 var skill = Skill(action); Edit(skill, so => so.FindProperty("cost").objectReferenceValue = Effect(-10)); var runner = new SkillRunner(source.AbilitySystem, null);
-                Assert.Throws<SkillActionException>(() => runner.TryCast(skill, taskContext: service)); Assert.AreEqual(100, source.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
+                Assert.AreEqual(AbilityActivationResult.InvalidConfiguration, runner.TryCast(skill, taskContext: service)); Assert.AreEqual(100, source.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
             }
             service.TargetPosition = Vector3.zero;
             Assert.DoesNotThrow(() => new SkillRunner(source.AbilitySystem, null).TryCast(Skill(new LaunchProjectileAction { prefab = prefab }), taskContext: service));
@@ -408,6 +488,55 @@ namespace ZFramework.GAS.Editor.Tests
             set.RevokeFrom(runner); Assert.IsNull(runner.GetSpec(skill));
             set.GrantTo(runner); Assert.IsTrue(runner.RevokeAll(skill)); Assert.IsNull(runner.GetSpec(skill));
         }
+        [Test] public void ClearRegrantsOriginalSetLevelAndOverridesAndStillRevokesCorrectly()
+        {
+            var owner = new AbilitySystemComponent(); var runner = new SkillRunner(owner, null); var parameter = new SkillParameter { defaultValue = 1 };
+            var skill = Skill(); skill.parameters = new[] { parameter };
+            var set = New<AbilitySetAsset>(); set.abilities = new[] { new AbilitySetAsset.Entry { skill = skill, level = 3,
+                parameters = new[] { new SkillParameterOverride { parameterId = parameter.Id, value = 7 } } } };
+            set.GrantTo(runner); var previous = runner.GetSpec(skill); owner.Clear();
+            Assert.IsNull(runner.GetSpec(skill)); Assert.IsFalse(runner.IsActive(skill)); Assert.AreEqual(0, owner.GrantedAbilityCount);
+            runner.TryCast(skill);
+            Assert.AreNotSame(previous, runner.GetSpec(skill)); Assert.AreEqual(3, runner.GetExecution(skill).Values.Level);
+            Assert.AreEqual(7, runner.GetExecution(skill).Values.Parameter(parameter.Id)); set.RevokeFrom(runner);
+            Assert.IsNull(runner.GetSpec(skill)); Assert.AreEqual(0, owner.GrantedAbilityCount);
+            set.GrantTo(runner); owner.Clear(); set.RevokeFrom(runner); Assert.AreEqual(0, owner.GrantedAbilityCount); Assert.IsNull(runner.GetSpec(skill));
+        }
+        [Test] public void TargetRebindingWithoutTransformPreservesAimAndHostCanClearIt()
+        {
+            var owner = new AbilitySystemComponent(); var target = new AbilitySystemComponent(); var spec = owner.GrantAbility(new GameplayAbilityDefinition());
+            owner.TryActivateAbility(spec); var services = new TimelineTaskContext { TargetPosition = Vector3.right * 7 };
+            var context = new SkillExecutionContext(null, spec, null, spec.EvaluationContext, services);
+            Assert.AreEqual(services.TargetPosition, context.WithTarget(target).Services.RequireTargetPosition());
+            services.ClearTargetPosition(); Assert.IsFalse(services.HasTargetPosition); Assert.Throws<InvalidOperationException>(() => services.RequireTargetPosition());
+            Assert.IsTrue(context.Services.HasTargetPosition, "Clearing reusable host services must not change an existing cast snapshot.");
+            context.Services.ClearTargetPosition(); Assert.IsFalse(context.WithTarget(target).Services.HasTargetPosition); owner.Clear();
+        }
+        [Test] public void InvalidFirstGrantDoesNotLeaveAnEntryWithoutGrantProvenance()
+        {
+            var skill = Skill(); var cost = Effect(0); var owner = new AbilitySystemComponent(); owner.Attributes.Add(new AttributeId(1), 100);
+            Edit(cost, so => { so.FindProperty("durationPolicy").enumValueIndex = (int)EffectDurationPolicy.Duration; so.FindProperty("duration").floatValue = 1; });
+            Edit(skill, so => so.FindProperty("cost").objectReferenceValue = cost);
+            var runner = new SkillRunner(owner, null); Assert.AreEqual(AbilityActivationResult.InvalidConfiguration, runner.TryCast(skill));
+            Assert.IsInstanceOf<ArgumentException>(runner.LastCastCheck.Error);
+            Assert.IsNull(runner.GetSpec(skill)); Assert.AreEqual(0, owner.GrantedAbilityCount);
+            Edit(cost, so => so.FindProperty("durationPolicy").enumValueIndex = (int)EffectDurationPolicy.Instant); cost.InvalidateDefinition(); skill.InvalidateDefinition();
+            Assert.AreEqual(AbilityActivationResult.Activated, runner.TryCast(skill)); Assert.IsTrue(runner.Revoke(skill)); Assert.IsNull(runner.GetSpec(skill));
+        }
+        [Test] public void ThrowingAreaExitDoesNotFailInterruptingCastOrCancelDetachedObjects()
+        {
+            var source = Unit("source", default); var target = Unit("target", Vector3.forward); var prefab = Go("prefab");
+            var skill = Skill(new SpawnPrefabAction { prefab = prefab }, new CreateAreaAction { ownership = SkillTaskOwnership.Ability,
+                duration = new SkillNumber(20), targets = new TargetQuery { kind = TargetQueryKind.FixedTarget }, exitEffect = Effect(-1) });
+            Edit(skill, so => { so.FindProperty("abilityTags").arraySize = 1; so.FindProperty("abilityTags.Array.data[0].m_Name").stringValue = "Test.Other"; });
+            var next = Skill(); Edit(next, so => { so.FindProperty("cancelAbilitiesWithTags").arraySize = 1; so.FindProperty("cancelAbilitiesWithTags.Array.data[0].m_Name").stringValue = "Test.Other"; });
+            var runner = new SkillRunner(source.AbilitySystem, null); runner.TryCast(skill, target.AbilitySystem, Services(source.transform, target.transform));
+            source.AbilitySystem.Tick(.01f); target.AbilitySystem.Attributes.Get(new AttributeId(1)).OnCurrentValueChanged += (_, _, _) => throw new InvalidOperationException("area exit callback");
+            Assert.DoesNotThrow(() => Assert.AreEqual(AbilityActivationResult.Activated, runner.TryCast(next)));
+            Assert.IsFalse(runner.IsActive(skill)); Assert.AreEqual(1, _scene.Count);
+            Assert.IsNull(runner.GetExecution(skill).Error); StringAssert.Contains("area exit callback", runner.GetSpec(skill).LastCleanupError);
+            Assert.AreEqual(0, source.AbilitySystem.ActiveTaskCount);
+        }
         [Test] public void WarmPeriodicModuleBindingsDoNotAllocate()
         {
             var source = Unit("source", Vector3.zero); var target = Unit("target", Vector3.forward);
@@ -448,6 +577,96 @@ namespace ZFramework.GAS.Editor.Tests
         }
         private sealed class SourceRequiredFilter : ITargetFilter
         { public bool Allows(AbilitySystemComponent source, AbilitySystemComponent target) => source.Attributes.Count > 0; }
+        private sealed class ThrowingSelection : ISkillTargetSelection
+        {
+            public IDisposable Request(SkillExecutionContext context, Action<AbilitySystemComponent, Transform> selected)
+                => throw new NullReferenceException("picker startup");
+        }
+        [Test] public void ModuleTaskBeginFailureIsReportedOnceWithTheFullCauseAndOuterCall()
+        {
+            var owner = new AbilitySystemComponent(); var module = New<SkillActionModuleAsset>(); module.name = "Picker";
+            var wait = new WaitSkillAction { kind = SkillWaitKind.Target }; module.actions = new SkillAction[] { wait };
+            var call = new CallModuleAction { module = module }; var skill = Skill(call); var runner = new SkillRunner(owner, null);
+            Assert.AreEqual(AbilityActivationResult.ExecutionFailed, runner.TryCast(skill, taskContext: new TimelineTaskContext { TargetSelection = new ThrowingSelection() }));
+            Assert.IsFalse(runner.IsActive(skill)); Assert.AreEqual(0, owner.ActiveTaskCount); Assert.AreEqual(1, owner.DiagnosticCount);
+            var diagnostic = owner.GetDiagnostic(0); Assert.AreEqual(call.Id, diagnostic.SourceId);
+            StringAssert.Contains(wait.Id, diagnostic.Message); Assert.IsInstanceOf<NullReferenceException>(diagnostic.Error.GetBaseException());
+            Assert.AreSame(diagnostic.Error, runner.LastCastCheck.Error);
+        }
+        [TestCase(0, false), TestCase(1, false), TestCase(2, false)]
+        [TestCase(0, true), TestCase(1, true), TestCase(2, true)]
+        public void DirectTaskHitUsesCastSourcePolicy(int kind, bool frozen)
+        {
+            var source = Unit("source", Vector3.right * 30); var target = Unit("target", source.transform.position + Vector3.forward);
+            var owner = source.AbilitySystem; var health = new AttributeId(1); var attack = new AttributeId(2);
+            var value = owner.Attributes.Add(attack, 5); var ability = owner.GrantAbility(new GameplayAbilityDefinition());
+            owner.TryActivateAbility(ability, captureSource: frozen);
+            var damage = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] {
+                new EffectModifier(health, ModifierOperation.Add, EffectMagnitude.FromAttribute(attack, -1, MagnitudeCapture.Source)) });
+            value.BaseValue = 11;
+            GameplayAbilityTask task = kind switch
+            {
+                0 => new AnimationTask(new SkillAnimationDefinition("a", 1, markers: new[] { new AnimationMarker(.1f, effect: damage) }), new Driver(), target.AbilitySystem, 1),
+                1 => new ProjectileTask(new ProjectileConfig { Visual = Go("shot", source.transform.position).transform, Speed = 20,
+                    Aim = ProjectileAim.Position, TargetPosition = target.transform.position, CollisionRadius = .25f, CollisionMask = ~0, ImpactEffect = damage }, new TargetSearcher(), owner.Attributes, owner),
+                _ => new AreaEffectTask(new AreaEffectConfig { Position = target.transform.position, Radius = .25f, CollisionMask = ~0, EnterEffect = damage }, new TargetSearcher(), owner.Attributes, owner)
+            };
+            owner.StartTask(ability, task); value.BaseValue = 17; Physics.SyncTransforms(); owner.Tick(.2f);
+            Assert.AreEqual(frozen ? 95 : 83, target.AbilitySystem.Attributes.GetCurrent(health), "5 = cast time; 11 = task start (never correct); 17 = hit time.");
+            owner.Clear();
+        }
+        private sealed class FailingExternalTask : GameplayAbilityTask
+        {
+            public override string DiagnosticId => "external-task";
+            protected override void OnTick(float dt) => throw new ArgumentException("external task failed");
+        }
+        private sealed class FaultAction : SkillAction
+        {
+            public override SkillActionDefinition Build(SkillActionBuildContext builder)
+                => Define("delayed fault", null, _ => throw new InvalidOperationException("delayed module failure"));
+        }
+        [TestCase(false), TestCase(true)] public void ModuleIdentitySurvivesDetachedAndCleanupCallbacks(bool cleanup)
+        {
+            var source = Unit("source", default); var target = Unit("target", Vector3.forward);
+            var fault = new FaultAction(); var module = New<SkillActionModuleAsset>(); module.name = "DelayedModule";
+            module.actions = cleanup
+                ? new SkillAction[] { new WaitSkillAction { onCancel = new SkillAction[] { fault } } }
+                : new SkillAction[] { new CreateAreaAction { period = new SkillNumber(.1f), onPeriod = new SkillAction[] { fault } } };
+            var call = new CallModuleAction { module = module }; var skill = Skill(call);
+            var runner = new SkillRunner(source.AbilitySystem, null); Physics.SyncTransforms(); runner.TryCast(skill, taskContext: Services(source.transform));
+            if (cleanup) Assert.DoesNotThrow(() => runner.Cancel(skill));
+            else { Assert.IsFalse(runner.IsActive(skill)); Assert.Throws<InvalidOperationException>(() => _scene.Tick(.2f)); }
+            var diagnostic = source.AbilitySystem.GetDiagnostic(0);
+            Assert.AreEqual(call.Id, diagnostic.SourceId); Assert.AreEqual(cleanup, diagnostic.Cleanup);
+            StringAssert.Contains(fault.Id, diagnostic.Message); StringAssert.Contains(module.name, diagnostic.Message);
+            Assert.AreEqual(0, _scene.Count); source.AbilitySystem.Clear(); Assert.AreEqual(1, source.AbilitySystem.DiagnosticCount);
+        }
+        [Test] public void ExternalTaskFailureEndsAsFailureAndDiagnosticsSurviveRecycle()
+        {
+            var owner = new AbilitySystemComponent(); var skill = Skill(new WaitSkillAction { timeout = new SkillNumber(10) });
+            var runner = new SkillRunner(owner, null); runner.TryCast(skill); owner.StartTask(runner.GetSpec(skill), new FailingExternalTask());
+            Assert.Throws<ArgumentException>(() => owner.Tick(.1f));
+            Assert.IsFalse(runner.IsActive(skill)); Assert.AreEqual(0, owner.ActiveTaskCount);
+            Assert.AreEqual("执行失败", runner.GetExecution(skill).Status);
+            var snapshot = RuntimeSnapshot.Capture(owner, null);
+            Assert.AreEqual(AbilityActivationResult.ExecutionFailed, snapshot.Abilities[0].Failure.Result);
+            Assert.AreEqual("external-task", snapshot.Abilities[0].Failure.SourceId);
+            owner.Clear(); snapshot = RuntimeSnapshot.Capture(owner, null);
+            Assert.AreEqual(0, snapshot.Abilities.Count); Assert.AreEqual(1, snapshot.Diagnostics.Count);
+            Assert.AreSame(skill, DefinitionSource.Of(snapshot.Diagnostics[0].Definition));
+            var window = ScriptableObject.CreateInstance<RuntimeDebugWindow>();
+            try
+            {
+                window.Show(); RuntimeDebugSession.Publish(snapshot);
+                var rows = window.rootVisualElement.Q<UnityEngine.UIElements.VisualElement>("debug-diagnostics");
+                Assert.IsNotNull(rows);
+                Assert.IsTrue(rows.Query<UnityEngine.UIElements.Label>().ToList().Exists(label => label.text.Contains("external task failed")));
+                owner.ClearDiagnostics(); RuntimeDebugSession.Publish(RuntimeSnapshot.Capture(owner, null));
+                Assert.AreEqual(0, rows.Query<VisualElement>(className: "debug-row").ToList().Count);
+                Assert.AreEqual("暂无", rows.Q<Label>("empty").text);
+            }
+            finally { window.Close(); RuntimeDebugSession.Clear(); }
+        }
         [Test] public void RecycledSourceDoesNotReachNonSnapshotFilterAsNull()
         {
             var source = Unit("source", Vector3.zero); var target = Unit("target", Vector3.forward); var services = Services(source.transform, target.transform);

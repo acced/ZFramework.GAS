@@ -12,10 +12,21 @@ namespace ZFramework.GAS.Editor
     {
         private ToolbarMenu _units;
         private ToolbarToggle _follow;
-        private Label _hint, _unitName;
+        private Label _hint, _unitName, _observerErrors;
+        private long _observerCount=-1;
+        private Label _overflow, _watch;
+        private readonly List<SkillTrace> _traceItems = new();
+        private ListView _trace;
+        private SkillTraceLanes _lanes;
+        private ToolbarSearchField _traceFilter;
+        private ToolbarToggle _freeze;
+        private SkillHistory _history;
+        private readonly List<SkillTrace> _frozen=new();
+        private int _page, _kind=-1;
+        private long _lastSequence = -1;
         private ScrollView _scroll;
-        private readonly List<Row> _abilities = new(), _tasks = new(), _tags = new(), _attributes = new(), _effects = new(), _actions = new();
-        private VisualElement _abilityHost, _taskHost, _tagHost, _attributeHost, _effectHost, _actionHost;
+        private readonly List<Row> _abilities = new(), _tasks = new(), _tags = new(), _attributes = new(), _effects = new(), _actions = new(), _diagnostics = new();
+        private VisualElement _abilityHost, _taskHost, _tagHost, _attributeHost, _effectHost, _actionHost, _diagnosticHost;
 
         private sealed class Row : VisualElement
         {
@@ -25,9 +36,13 @@ namespace ZFramework.GAS.Editor
             public readonly TaskStrip Strip;
             public GameplayAbilityAsset Asset;
             public string ActionId;
+            public Exception Error;
             public Row(bool ability, bool task)
             {
                 AddToClassList("debug-row");
+                this.AddManipulator(new ContextualMenuManipulator(e =>
+                    e.menu.AppendAction("复制完整异常", _ => EditorGUIUtility.systemCopyBuffer = Error.ToString(),
+                        Error == null ? DropdownMenuAction.Status.Disabled : DropdownMenuAction.Status.Normal)));
                 this.AddManipulator(new ContextualMenuManipulator(e => e.menu.AppendAction("切换此动作断点", _ => SkillActionDebugger.Toggle(ActionId),
                     string.IsNullOrEmpty(ActionId) ? DropdownMenuAction.Status.Disabled : DropdownMenuAction.Status.Normal)));
                 var line = new VisualElement(); line.AddToClassList("debug-row-title");
@@ -59,12 +74,12 @@ namespace ZFramework.GAS.Editor
         }
         private void OnEnable()
         {
-            RuntimeDebugSession.Changed += Render;
+            SkillEventRecorder.Acquire(); RuntimeDebugSession.Changed += Render;
             EditorApplication.playModeStateChanged += PlayModeChanged;
         }
         private void OnDisable()
         {
-            RuntimeDebugSession.Changed -= Render;
+            SkillEventRecorder.Release(); RuntimeDebugSession.Changed -= Render;
             EditorApplication.playModeStateChanged -= PlayModeChanged;
         }
         private void PlayModeChanged(PlayModeStateChange state) => Render(RuntimeDebugSession.Current);
@@ -73,23 +88,70 @@ namespace ZFramework.GAS.Editor
             rootVisualElement.Clear(); rootVisualElement.AddToClassList("gas-editor"); rootVisualElement.AddToClassList("runtime-debug");
             var sheet = AssetDatabase.LoadAssetAtPath<StyleSheet>("Packages/com.acced.zframework.gas/Editor/Window/SkillEditor.uss");
             if (sheet != null) rootVisualElement.styleSheets.Add(sheet);
-            _abilities.Clear(); _tasks.Clear(); _tags.Clear(); _attributes.Clear(); _effects.Clear();
+            _abilities.Clear(); _tasks.Clear(); _tags.Clear(); _attributes.Clear(); _effects.Clear(); _actions.Clear(); _diagnostics.Clear();
             var toolbar = new Toolbar();
             _units = new ToolbarMenu { text = "选择单位", tooltip = "列出已加载场景中的 IAbilitySystemProvider" };
             toolbar.Add(_units);
             _follow = new ToolbarToggle { text = "跟随选中", value = RuntimeDebugSession.FollowSelection };
             _follow.RegisterValueChangedCallback(e => RuntimeDebugSession.FollowSelection = e.newValue); toolbar.Add(_follow);
             toolbar.Add(new ToolbarButton(() => { RuntimeDebugSession.RefreshProviders(); RuntimeDebugSession.Refresh(); }) { text = "刷新单位" });
-            toolbar.Add(new ToolbarButton(() => SkillActionDebugger.PauseNext = true) { text = "下个动作暂停" });
+            toolbar.Add(new ToolbarButton(() => { SkillActionDebugger.PauseNext = true; if(EditorApplication.isPlaying) EditorApplication.isPaused=false; }) { text = "下个动作暂停" });
+            toolbar.Add(new ToolbarButton(()=>{if(EditorApplication.isPlaying) EditorApplication.isPaused=false;}){text="继续"});
             toolbar.Add(new ToolbarButton(SkillActionDebugger.StepScene) { text = "场景逐帧" });
+            toolbar.Add(new ToolbarButton(() => { RuntimeDebugSession.Current?.Owner.ClearDiagnostics(); RuntimeDebugSession.Refresh(); }) { text = "清除错误记录" });
             rootVisualElement.Add(toolbar);
+            _observerErrors=new Label{name="debug-observer-errors",style={whiteSpace=WhiteSpace.Normal}};
+            _observerErrors.AddManipulator(new ContextualMenuManipulator(e=>e.menu.AppendAction("复制观察者异常堆栈",
+                _=>EditorGUIUtility.systemCopyBuffer=_observerErrors.tooltip)));
+            rootVisualElement.Add(_observerErrors);_observerCount=-1;
             _unitName = new Label(); _unitName.AddToClassList("debug-unit-name"); rootVisualElement.Add(_unitName);
             _hint = new Label(); _hint.AddToClassList("debug-guide"); rootVisualElement.Add(_hint);
+            var tabs=new Toolbar();rootVisualElement.Add(tabs);
+            var names=new[]{"单位","事件","监视"};
+            for(int i=0;i<names.Length;i++){int page=i;tabs.Add(new ToolbarButton(()=>{_page=page;ShowPage();}){text=names[i]});}
             _scroll = new ScrollView(); rootVisualElement.Add(_scroll);
             _abilityHost = Section("技能", "debug-abilities"); _taskHost = Section("正在播放", "debug-tasks");
             _tagHost = Section("标签", "debug-tags"); _attributeHost = Section("属性", "debug-attributes"); _effectHost = Section("效果", "debug-effects");
             _actionHost = Section("动作与独立任务", "debug-actions");
+            _diagnosticHost = Section("错误记录 · 保留最近 64 条", "debug-diagnostics");
+            var traceHost=Section("事件历史 · 最近 4096 条", "debug-events");
+            var filters=new Toolbar(); _freeze=new ToolbarToggle{text="冻结"}; filters.Add(_freeze);
+            var kinds=new ToolbarMenu{text="全部类型"};filters.Add(kinds);
+            void SelectKind(int value){_kind=value;kinds.text=value<0?"全部类型":((TraceKind)value).ToString();_lastSequence=-1;RefreshTrace(RuntimeDebugSession.Current);}
+            kinds.menu.AppendAction("全部类型",_=>SelectKind(-1));
+            foreach(TraceKind type in Enum.GetValues(typeof(TraceKind)))kinds.menu.AppendAction(type.ToString(),_=>SelectKind((int)type));
+            _traceFilter=new ToolbarSearchField {tooltip="按技能名或内容搜索"}; filters.Add(_traceFilter); traceHost.Add(filters);
+            _trace=new ListView(_traceItems,20,()=>new Label(),(el,i)=>{var e=_traceItems[i]; ((Label)el).text=$"帧 {e.Frame} · {e.Kind} · {(e.Skill!=null?e.Skill.name:"")}  {e.Label}";});
+            _lanes=new SkillTraceLanes(_traceItems,i=>{var picked=_traceItems[i]; _freeze.value=true;
+                int at=_traceItems.FindIndex(e=>e.Serial==picked.Serial); if(at>=0){_trace.SetSelection(at);_trace.ScrollToItem(at);} });traceHost.Add(_lanes);
+            _trace.style.height=155; traceHost.Add(_trace);
+            _trace.selectionChanged+=items=>{foreach(SkillTrace e in items) if(e.Skill!=null)
+            {
+                var w=SkillEditorWindow.Open();w.Show(e.Skill);
+                if(e.Kind==TraceKind.标记 && e.Skill.Animation!=null)
+                {
+                    w.Document.Selection.Select(e.Skill.Animation,"markers",e.RawId);
+                    var p=TimelineCommands.Find(w.Document.Serialized(e.Skill.Animation),"markers",e.RawId);
+                    if(p!=null && !w.Document.Playback.Live)w.Document.Playback.Seek(p.FindPropertyRelative("time").floatValue,e.Skill.Animation.Duration);
+                }
+                else if(SkillActionNavigation.Select(w.Document,e.RawId) || SkillActionNavigation.Select(w.Document,e.NavigationId))w.Document.OpenFlow();
+            }};
+            _traceFilter.RegisterValueChangedCallback(_=>{_lastSequence=-1; RefreshTrace(RuntimeDebugSession.Current);});
+            _watch=new Label{style={whiteSpace=WhiteSpace.Normal}}; Section("断点监视","debug-watch").Add(_watch);
+            _freeze.RegisterValueChangedCallback(e=>{
+                _frozen.Clear();
+                if(e.newValue && _history!=null)for(int i=0;i<_history.Count;i++)_frozen.Add(_history[i]);
+                _lastSequence=-1;RefreshTrace(RuntimeDebugSession.Current);
+            });
+            _overflow = new Label(); _diagnosticHost.Add(_overflow);
+            ShowPage();
             Render(RuntimeDebugSession.Current);
+        }
+        private void ShowPage()
+        {
+            foreach(var f in _scroll.Query<Foldout>().ToList())
+                f.style.display=(_page==(f.name=="debug-events"?1:f.name=="debug-watch"?2:0))?DisplayStyle.Flex:DisplayStyle.None;
+            _lastSequence=-1;RefreshTrace(RuntimeDebugSession.Current);
         }
         private VisualElement Section(string title, string key)
         {
@@ -104,9 +166,32 @@ namespace ZFramework.GAS.Editor
             if (count == 0 && empty == null) { empty = new Label("暂无") { name = "empty" }; empty.AddToClassList("debug-detail"); host.Add(empty); }
             if (count > 0) empty?.RemoveFromHierarchy();
         }
+        private void RefreshTrace(RuntimeSnapshot snapshot)
+        {
+            if(_trace==null) return;
+            var history=SkillEventRecorder.Of(snapshot?.Owner); bool same=history==_history;
+            _watch.text=SkillActionDebugger.Frame is { } f && f.Owner==snapshot?.Owner ? f.Summary : "在流程节点按 F9 设置断点。";
+            if(!same){_history=history;_freeze.SetValueWithoutNotify(false);_frozen.Clear();}
+            long revision=_freeze.value?_frozen.Count:history?.Sequence??0;
+            if(_page!=1 || same && revision==_lastSequence) return;
+            _lastSequence=revision; _traceItems.Clear();
+            string filter=_traceFilter.value;
+            int count=_freeze.value?_frozen.Count:history?.Count??0;
+            for(int i=count-1;i>=0;i--){var e=_freeze.value?_frozen[i]:history[i];if(_kind>=0 && _kind!=(int)e.Kind)continue;
+                if(string.IsNullOrEmpty(filter) || (e.Kind+" "+e.Label+" "+(e.Skill!=null?e.Skill.name:"")).IndexOf(filter,StringComparison.OrdinalIgnoreCase)>=0)_traceItems.Add(e);}
+            _trace.RefreshItems();_lanes.MarkDirtyRepaint();
+        }
         private void Render(RuntimeSnapshot snapshot)
         {
+            RefreshTrace(snapshot);
             if (_hint == null) return;
+            if (_observerCount!=DebugObserverErrors.Count)
+            {
+                _observerCount=DebugObserverErrors.Count;var error=DebugObserverErrors.Last;
+                _observerErrors.style.display=error==null?DisplayStyle.None:DisplayStyle.Flex;
+                _observerErrors.text=error==null?"":$"调试观察者异常（{_observerCount} 次） · {error.GetType().Name}: {error.Message}";
+                _observerErrors.tooltip=error?.ToString();
+            }
             bool playing = EditorApplication.isPlaying;
             _units.SetEnabled(playing); _follow.SetEnabled(playing);
             _follow.SetValueWithoutNotify(RuntimeDebugSession.FollowSelection);
@@ -134,6 +219,7 @@ namespace ZFramework.GAS.Editor
                 if (value.Active && value.OnCooldown) status += " · 冷却中";
                 if ((value.Active || value.OnCooldown) && !value.TagGatePassed) status += " · 标签门禁未通过";
                 row.ActionId = value.Failure.SourceId;
+                row.Error = value.Failure.Error;
                 if (!string.IsNullOrEmpty(value.CleanupError))
                 { status += "\n取消清理警告：" + value.CleanupError; row.ActionId = value.CleanupActionId; }
                 if (!value.Failure.Succeeded)
@@ -152,6 +238,15 @@ namespace ZFramework.GAS.Editor
                 row.tooltip = "最近失败来自实际施放检查；点击定位对应动作。";
             }
             Resize(_actions, _actionHost, snapshot.Actions.Count, ability: true);
+            Resize(_diagnostics, _diagnosticHost, snapshot.Diagnostics.Count, ability: true);
+            _overflow.style.display = snapshot.DroppedDiagnosticCount > 0 ? DisplayStyle.Flex : DisplayStyle.None;
+            if (snapshot.DroppedDiagnosticCount > 0) _overflow.text = $"已覆盖 {snapshot.DroppedDiagnosticCount} 条更早的记录";
+            for (int i = 0; i < _diagnostics.Count; i++)
+            {
+                var error = snapshot.Diagnostics[snapshot.Diagnostics.Count - i - 1]; var row = _diagnostics[i];
+                row.Asset = DefinitionSource.Of(error.Definition) as GameplayAbilityAsset; row.ActionId = error.SourceId; row.Error = error.Error;
+                row.Fill((row.Asset != null ? row.Asset.DisplayName : "技能") + (error.Cleanup ? " · 清理失败" : " · 执行失败"), error.Message, SkillColors.Hex("#e06c75"));
+            }
             for (int i = 0; i < _actions.Count; i++)
             {
                 var state = snapshot.Actions[i]; var row = _actions[i]; row.Asset = state.Asset; row.ActionId = state.Id;

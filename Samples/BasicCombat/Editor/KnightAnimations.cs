@@ -46,6 +46,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             {
                 ["Idle"] = rig.Bake("Idle", 2.4f, true, Idle()),
                 ["Slash"] = rig.Bake("Slash", Timing.SlashLength, false, Slash()),
+                ["AxeSlash"] = rig.Bake("AxeSlash", Timing.SlashLength, false, AxeSlash()),
                 ["Bolt"] = rig.Bake("Bolt", Timing.BoltLength, false, Bolt()),
                 ["Warcry"] = rig.Bake("Warcry", Timing.WarcryLength, false, Warcry()),
                 ["Sanctuary"] = rig.Bake("Sanctuary", Timing.SanctuaryLength, false, Sanctuary()),
@@ -114,6 +115,24 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 new(0, stance), new(.2f, windup, Ease.Out), new(.29f, step, Ease.In), new(Timing.SlashHit, hit, Ease.In),
                 new(.52f, follow, Ease.Out), new(.72f, settle, Ease.Smooth), new(Timing.SlashLength, stance, Ease.Smooth),
             };
+        }
+
+        // Same impact frame as Slash; an overhead chop instead of a horizontal sweep.
+        private static List<Key> AxeSlash()
+        {
+            var rest = Stance();
+            var raised = rest.With(p => {
+                p.HipsOffset = V(.02f,-.12f,-.04f);
+                p.Set("Chest",-18,12);
+                p.HandR = new LimbTarget(V(.2f,1.78f,.04f),V(0,.9f,-.45f),V(.75f,1.45f,-.25f));
+            });
+            var impact = rest.With(p => {
+                p.HipsOffset = V(0,-.16f,.12f);
+                p.Set("Chest",24,-8);
+                p.HandR = new LimbTarget(V(.08f,1.02f,.62f),V(-.15f,-.85f,.7f),V(.62f,.95f,.1f));
+            });
+            return new List<Key> { new(0,rest), new(.27f,raised,Ease.Out), new(Timing.SlashHit,impact,Ease.In),
+                new(.57f,impact), new(Timing.SlashLength,rest) };
         }
 
         private static List<Key> Bolt()

@@ -15,14 +15,19 @@ namespace ZFramework.GAS.Unity
         [AnimationSectionReference] public string nextSectionId;
         public float inputBufferStart;
         public float inputBufferEnd = 1;
-        internal AnimationSectionDefinition Build() => new AnimationSectionDefinition(id, displayName, start, end, nextSectionId, inputBufferStart, inputBufferEnd);
+        public SkillBlend transition;
+        internal AnimationSectionDefinition Build() => new AnimationSectionDefinition(id, displayName, start, end, nextSectionId, inputBufferStart, inputBufferEnd, transition);
     }
     public sealed class AnimationSectionDefinition
     {
         public readonly string Id, Name, Next;
         public readonly float Start, End, InputStart, InputEnd;
-        public AnimationSectionDefinition(string id, string name, float start, float end, string next, float inputStart, float inputEnd)
-        { Id = id; Name = name; Start = start; End = end; Next = next; InputStart = inputStart; InputEnd = inputEnd; }
+        public readonly SkillBlend Transition;
+        public AnimationSectionDefinition(string id, string name, float start, float end, string next, float inputStart, float inputEnd, SkillBlend transition = default)
+        {
+            if (transition.duration > end - start) throw new ArgumentOutOfRangeException(nameof(transition), "跳入过渡不能长于目标段。");
+            Transition = transition.Snapshot();
+            Id = id; Name = name; Start = start; End = end; Next = next; InputStart = inputStart; InputEnd = inputEnd; }
     }
     public interface IRuntimeTrackHandler
     {

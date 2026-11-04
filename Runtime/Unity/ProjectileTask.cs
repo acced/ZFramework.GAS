@@ -63,6 +63,7 @@ namespace ZFramework.GAS.Unity
         private readonly object _source;
         private readonly AbilitySystemComponent _caster;
         private readonly int _casterGeneration;
+        private readonly EffectEvaluationContext _configuredValues;
         private EffectEvaluationContext _values;
         private readonly Action<ProjectileTask> _onFinished;
         private readonly AbilitySystemComponent[] _hitBuffer;
@@ -107,7 +108,7 @@ namespace ZFramework.GAS.Unity
             _searcher = searcher ?? throw new ArgumentNullException(nameof(searcher));
             _sourceAttributes = sourceAttributes;
             _source = source is AbilitySystemComponent owner ? owner.SourceIdentity : source;
-            _values = context;
+            _configuredValues = context;
             // 发射点通常与发射者重合，不排除自己就会在第一次碰撞检测时打中自己。
             _caster = source as AbilitySystemComponent ?? (source as AbilitySourceIdentity)?.Owner;
             _casterGeneration = _caster?.Generation ?? 0;
@@ -124,7 +125,7 @@ namespace ZFramework.GAS.Unity
 
         /// <summary>视觉体，供调用方在结束回调里回收。</summary>
         public Transform Visual => _config.Visual;
-        protected override void OnBegin() => _values = (_values ?? Ability.EvaluationContext ?? new EffectEvaluationContext(Ability.Level)).CaptureSource(_sourceAttributes);
+        protected override void OnBegin() => _values = _configuredValues ?? Ability?.EvaluationContext;
 
         protected override void OnTick(float deltaTime)
         {

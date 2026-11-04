@@ -36,6 +36,17 @@ namespace ZFramework.GAS.Editor
                 var layout = new Foldout { text = before.layout == after.layout ? "编辑器布局未变化" : "编辑器布局变化（与业务数据分开）", value = false };
                 layout.Add(new Label(after.layout) { style = { whiteSpace = WhiteSpace.Normal } }); _results.Add(layout);
             }) { text = "与快照比较…" });
+            rootVisualElement.Add(new Button(()=>
+            {
+                if(_skill.value is not GameplayAbilityAsset ours)return;
+                string b=EditorUtility.OpenFilePanel("共同基础快照","","json");if(string.IsNullOrEmpty(b))return;
+                string t=EditorUtility.OpenFilePanel("另一方快照","","json");if(string.IsNullOrEmpty(t))return;
+                var conflict=new List<string>();
+                var merged=SkillSemanticDiff.Merge(JsonUtility.FromJson<SkillSemanticDiff.Snapshot>(File.ReadAllText(b)),SkillSemanticDiff.Capture(ours),JsonUtility.FromJson<SkillSemanticDiff.Snapshot>(File.ReadAllText(t)),conflict);
+                _results.Clear();_results.Add(new Label("三方合并 · "+conflict.Count+" 个冲突"));
+                foreach(var key in conflict)_results.Add(new Label(key));
+                if(conflict.Count==0){var path=EditorUtility.SaveFilePanel("导出已合并快照","",ours.name+".merged","json");if(!string.IsNullOrEmpty(path))File.WriteAllText(path,JsonUtility.ToJson(merged,true));}
+            }){text="与基础 / 另一方快照合并…"});
             _results = new ScrollView(); rootVisualElement.Add(_results);
         }
     }

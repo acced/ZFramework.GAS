@@ -19,10 +19,11 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private AnimationMarkerTarget target = AnimationMarkerTarget.Target;
 
         [SerializeReference] public SkillAction[] actions = Array.Empty<SkillAction>();
-        public AnimationMarker Build(ScriptableObject owner = null)
+        public AnimationMarker Build(ScriptableObject owner = null) => Build(owner,new SkillActionBuildContext(owner));
+        internal AnimationMarker Build(ScriptableObject owner,SkillActionBuildContext builder)
         {
             DefinitionSource.DependsOn(owner, effect);
-            return new(time, key, effect != null ? effect.Definition : null, target, id, new SkillActionBuildContext(owner).Build(actions));
+            return new(time, key, effect != null ? effect.Definition : null, target, id, builder.Build(actions));
         }
     }
 
@@ -75,6 +76,17 @@ namespace ZFramework.GAS.Unity
         [Tooltip("结束或被打断后过渡回施放前动画的秒数；0 表示驱动不切换状态，交给 Animator 自己的转换")]
         [Min(0)] [SerializeField] private float blendOut = .18f;
 
+        [SerializeField,BlendPreset(nameof(blendInCustom))] private SkillBlendCurve blendInCurve;
+        [SerializeField,BlendPreset(nameof(blendOutCustom))] private SkillBlendCurve blendOutCurve;
+        [SerializeField] private SkillBlendMode blendInMode, blendOutMode;
+        [SerializeField,HideInInspector] private AnimationCurve blendInCustom = AnimationCurve.Linear(0,0,1,1), blendOutCustom = AnimationCurve.Linear(0,0,1,1);
+        public AvatarMask mask;
+        public BoneWeightMask boneWeights;
+        public bool additive;
+        [Range(0, 1)] public float layerWeight = 1;
+        public SkillBlend BlendInSpec => new SkillBlend(blendIn, blendInCurve, blendInMode, blendInCustom);
+        public SkillBlend BlendOutSpec => new SkillBlend(blendOut, blendOutCurve, blendOutMode, blendOutCustom);
+
         [Tooltip("仅供时间轴把秒显示成帧，不参与任何运行期计算")]
         [SerializeField] private float frameRate = 30f;
 
@@ -91,6 +103,7 @@ namespace ZFramework.GAS.Unity
 
         /// <summary>时间轴显示用的帧率；运行期不使用。</summary>
         public float FrameRate => frameRate;
+        public System.Collections.Generic.IReadOnlyList<AnimationMarkerAsset> Markers => markers;
         public string ClipName => clipName;
         public bool Loop => loop;
         public float BlendIn => blendIn;
@@ -102,9 +115,10 @@ namespace ZFramework.GAS.Unity
         private SkillAnimationDefinition Build()
         {
             var builtMarkers = new AnimationMarker[markers.Length];
+            var actions=new SkillActionBuildContext(this,new HashSet<string>());
             for (int i = 0; i < markers.Length; i++)
             {
-                builtMarkers[i] = markers[i].Build(this);
+                builtMarkers[i] = markers[i].Build(this,actions);
             }
 
             var builtRegions = new List<AnimationCueRegion>(cueRegions.Length);
@@ -119,9 +133,10 @@ namespace ZFramework.GAS.Unity
             for (int i = 0; i < tagWindows.Length; i++) builtWindows[i] = tagWindows[i].Build();
             var builtTasks = new AnimationTaskEvent[taskEvents.Length];
             for (int i = 0; i < taskEvents.Length; i++) builtTasks[i] = taskEvents[i].Build();
+            DefinitionSource.DependsOn(this,boneWeights);
             var definition = new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray(), builtWindows, builtTasks,
                 blendIn, blendOut, Array.ConvertAll(sections, section => section.Build()),
-                Array.ConvertAll(runtimeTracks, track => track.Build()));
+                Array.ConvertAll(runtimeTracks, track => track.Build()), BlendInSpec, BlendOutSpec, mask, additive, layerWeight, boneWeights?.Build());
             DefinitionSource.Register(definition, this);
             return definition;
         }

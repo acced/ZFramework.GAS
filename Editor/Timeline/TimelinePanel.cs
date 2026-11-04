@@ -33,6 +33,7 @@ namespace ZFramework.GAS.Editor
         private float _copyOrigin;
         private readonly VisualElement _clipRow;
         private Label _clipCaption;
+        private Label _tail;
         private BlendRamps _ramps;
         private readonly VisualElement _marquee;
         private bool _selecting;
@@ -57,7 +58,7 @@ namespace ZFramework.GAS.Editor
             var toolbar = new Toolbar(); toolbar.AddToClassList("timeline-toolbar");
             toolbar.Add(new ToolbarButton(() => Seek(0)) { text = "|◀", tooltip = "跳到开始 Home" });
             _play = new ToolbarButton(TogglePlay) { text = "▶", tooltip = "播放 / 暂停 Space" }; toolbar.Add(_play);
-            toolbar.Add(new ToolbarButton(() => Seek(Duration)) { text = "▶|", tooltip = "跳到末尾 End" });
+            toolbar.Add(new ToolbarButton(() => Seek(doc.PlaybackDuration)) { text = "▶|", tooltip = "跳到末尾 End" });
             var loop = new ToolbarToggle { text = "循环", value = doc.Playback.Loop }; loop.RegisterValueChangedCallback(e => doc.Playback.Loop = e.newValue); toolbar.Add(loop);
             _clock = new Label(); _clock.AddToClassList("timeline-clock"); toolbar.Add(_clock);
             var speed = new PopupField<string>(new List<string> { "×0.5", "×1.0", "×1.5", "×2.0", "×3.0" }, 1) { tooltip = "攻速预览；虚影显示实际触发时间" };
@@ -122,14 +123,15 @@ namespace ZFramework.GAS.Editor
             RegisterCallback<KeyDownEvent>(OnKey);
             RegisterCallback<GeometryChangedEvent>(_ => { DrawRuler(); PositionElements(); });
             doc.Changed += Rebuild; doc.Selection.Changed += SelectionChanged; doc.Playback.Changed += PlaybackChanged;
+            doc.PreviewRangeChanged+=PreviewRangeChanged;
         }
         private float Duration => ValidPositive(_doc.Root?.Animation?.Duration ?? 1, 1);
         private float Fps => ValidPositive(_doc.Root?.Animation?.FrameRate ?? 30, 30);
         private static float ValidPositive(float value, float fallback) => value > 0 && !float.IsInfinity(value) ? value : fallback;
         private float TimeAt(float x) => TimelineMath.Time(x, _zoom, _offset);
-        private void Seek(float time) { if (!_doc.Playback.Live) _doc.Playback.Seek(time, Duration); }
-        public void TogglePlay() { if (_doc.Playback.Live) return; _doc.Playback.Playing = !_doc.Playback.Playing; if (_doc.Playback.Time >= Duration) Seek(0); PlaybackChanged(); }
-        public void Fit() { _zoom = Mathf.Clamp(Mathf.Max(100, ValidPositive(resolvedStyle.width, 640) - HeaderWidth - 24) / Duration, 30, 4000); _offset = 0; PackRows(); PositionElements(); DrawRuler(); }
+        private void Seek(float time) { if (!_doc.Playback.Live) _doc.Playback.Seek(time, _doc.PlaybackDuration); }
+        public void TogglePlay() { if (_doc.Playback.Live) return; _doc.Playback.Playing = !_doc.Playback.Playing; if (_doc.Playback.Time >= _doc.PlaybackDuration) Seek(0); PlaybackChanged(); }
+        public void Fit() { _zoom = Mathf.Clamp(Mathf.Max(100, ValidPositive(resolvedStyle.width, 640) - HeaderWidth - 24) / Mathf.Max(Duration,_doc.PlaybackDuration), 30, 4000); _offset = 0; PackRows(); PositionElements(); DrawRuler(); }
         public void Rebuild(ChangeSet change)
         {
             if (_dragging) { _rebuildPending = true; return; }
@@ -152,7 +154,7 @@ namespace ZFramework.GAS.Editor
                     if (!regroup)
                     {
                         if (_clipCaption != null) _clipCaption.text = _animation.ClipName + $" · {_animation.Duration:0.##}s";
-                        _ramps?.MarkDirtyRepaint(); PackRows(); PositionElements(); DrawRuler(); SelectionChanged(); PlaybackChanged(); return;
+                        _ramps?.MarkDirtyRepaint(); UpdateFrameData(_tracks.Q<Label>("frame-data")); PackRows(); PositionElements(); DrawRuler(); SelectionChanged(); PlaybackChanged(); return;
                     }
                 }
             }
@@ -178,17 +180,20 @@ namespace ZFramework.GAS.Editor
             // 文字放在斜坡绘制层上方，保持可读；忽略拾取以免遮住混入、混出手柄。
             _clipCaption = new Label(animation.ClipName + $"  ·  {animation.Duration:0.##}s") { pickingMode = PickingMode.Ignore };
             _clipCaption.AddToClassList("animation-clip-caption"); clipLane.Add(_clipCaption);
+            _tail=new Label("后续 · 独立任务"){pickingMode=PickingMode.Ignore};_tail.AddToClassList("preview-tail");clipLane.Add(_tail);
             clip.tooltip = _clipCaption.text;
+            var frames=AddRow("帧数据",SkillColors.Animation,null);
+            var info=new Label{ name="frame-data" };frames.Lane.Add(info); UpdateFrameData(info);
             foreach (var track in TrackTypeRegistry.Types)
             {
                 var array = _doc.Serialized(animation).FindProperty(track.PropertyPath); if (array == null) continue;
-                bool cues = track.PropertyPath == "cueRegions";
-                var groups = Enumerable.Range(0, array.arraySize).GroupBy(i => cues ? track.Label(array.GetArrayElementAtIndex(i)) : "")
+                bool cues = track.PropertyPath == "cueRegions", presentation=track.PropertyPath=="runtimeTracks";
+                var groups = Enumerable.Range(0, array.arraySize).GroupBy(i => (cues || presentation) ? track.Label(array.GetArrayElementAtIndex(i)) : "")
                     .OrderBy(g => g.Key, StringComparer.Ordinal).ToArray();
                 foreach (var group in groups)
                 {
                     var row = AddRow(cues ? "Cue · " + (string.IsNullOrEmpty(group.Key) ? "未设置标签" : group.Key)
-                        : track.DisplayName, track.Color, track, cues ? group.Key : null);
+                        : presentation ? "表现 · "+group.Key : track.DisplayName, track.Color, track, cues ? group.Key : null);
                     var lane = row.Lane;
                     foreach (int i in group)
                     {
@@ -218,8 +223,8 @@ namespace ZFramework.GAS.Editor
         }
         private RowView AddRow(string title, Color color, ITrackType track, string cueTag = null)
         {
-            var row = new VisualElement(); row.AddToClassList("track-row"); row.style.height = RowHeight;
-            var heading = new Label(title); heading.AddToClassList("track-heading"); heading.style.width = HeaderWidth; heading.style.borderLeftColor = color; row.Add(heading);
+            var row = new VisualElement(); row.AddToClassList("track-row");row.style.minHeight=RowHeight; row.style.height = RowHeight;
+            var heading = new Label(title){tooltip=title}; heading.AddToClassList("track-heading"); heading.style.width = HeaderWidth; heading.style.borderLeftColor = color; row.Add(heading);
             var lane = new VisualElement(); lane.AddToClassList("track-lane"); row.Add(lane); _tracks.Add(row);
             var data = new RowView { Lane = lane, Heading = heading, CueTag = cueTag }; _rows.Add(data);
             row.userData = cueTag ?? track?.PropertyPath;
@@ -288,6 +293,32 @@ namespace ZFramework.GAS.Editor
                     (string.IsNullOrEmpty(row.CueTag) ? "未设置标签" : row.CueTag.StartsWith("Cue.", StringComparison.Ordinal) ? row.CueTag.Substring(4) : row.CueTag) +
                     (folded ? $" ({row.Elements.Count})" : "");
             }
+        }
+        private void UpdateFrameData(Label label)
+        {
+            if(label==null || _animation==null)return;
+            var a=_doc.Serialized(_animation);var markers=a.FindProperty("markers");float first=float.PositiveInfinity,last=0;
+            for(int i=0;i<markers.arraySize;i++)
+            {var m=markers.GetArrayElementAtIndex(i);if(m.FindPropertyRelative("effect").objectReferenceValue==null && m.FindPropertyRelative("actions").arraySize==0)continue;
+             float at=m.FindPropertyRelative("time").floatValue;first=Mathf.Min(first,at);last=Mathf.Max(last,at);}
+            int Frame(float t)=>Mathf.RoundToInt(t*Fps/Mathf.Max(.001f,_doc.Playback.Speed));
+            var ranges=new List<string>();
+            foreach(var s in _animation.sections??Array.Empty<AnimationSection>())if(s!=null && s.inputBufferEnd>s.inputBufferStart)
+                ranges.Add("输入 "+Frame(s.inputBufferStart)+"–"+Frame(s.inputBufferEnd)+"f");
+            var windows=a.FindProperty("tagWindows");
+            for(int i=0;i<windows.arraySize;i++)
+            {
+                var w=windows.GetArrayElementAtIndex(i);var tags=w.FindPropertyRelative("tags");
+                for(int j=0;j<tags.arraySize;j++)
+                {
+                    string name=tags.GetArrayElementAtIndex(j).FindPropertyRelative("m_Name").stringValue;
+                    if(name!="Window.Combo" && !name.StartsWith("Window.Combo.",StringComparison.Ordinal))continue;
+                    float end=w.FindPropertyRelative("end").floatValue;
+                    ranges.Add("连招 "+Frame(w.FindPropertyRelative("start").floatValue)+"–"+Frame(end<0?Duration:end)+"f");break;
+                }
+            }
+            label.text=(float.IsPositiveInfinity(first)?"无命中标记":$"前摇 {Frame(first)}f · 命中跨度 {Frame(last)-Frame(first)}f · 后摇 {Frame(Duration)-Frame(last)}f")+
+                (ranges.Count>0?" · "+string.Join("、",ranges):"")+(_doc.PreviewEnd>Duration?$" · 后续至 {_doc.PreviewEnd:0.##}s":"");
         }
         private void BuildClipPicker(SkillAnimationAsset animation)
         {
@@ -402,24 +433,22 @@ namespace ZFramework.GAS.Editor
                 float zoom = _owner._zoom, end = _owner.Duration * zoom, blendIn = _blendIn * zoom, blendOut = _blendOut * zoom;
                 var painter = context.painter2D;
                 painter.lineWidth = 1.5f;
-                if (blendIn > .5f)
+                DrawCurve(0, blendIn, _animation.BlendInSpec, false);
+                DrawCurve(end, blendOut, _animation.BlendOutSpec, true);
+                if (_animation.sections != null) foreach (var section in _animation.sections)
+                    if (section != null) DrawCurve(section.start * zoom, section.transition.duration * zoom, section.transition, false);
+                void DrawCurve(float x, float width, SkillBlend spec, bool fadeOut)
                 {
-                    // 斜坡上方压暗：越靠左，本动画的权重越低。
-                    painter.fillColor = new Color(0, 0, 0, .38f);
-                    painter.BeginPath(); painter.MoveTo(new Vector2(0, 0)); painter.LineTo(new Vector2(blendIn, 0)); painter.LineTo(new Vector2(0, Height)); painter.ClosePath(); painter.Fill();
-                    painter.strokeColor = new Color(1, 1, 1, .85f);
-                    painter.BeginPath(); painter.MoveTo(new Vector2(0, Height)); painter.LineTo(new Vector2(blendIn, 0)); painter.Stroke();
-                }
-                if (blendOut > .5f)
-                {
-                    // 动画结束后的淡出尾巴。
-                    var color = SkillColors.Animation;
-                    painter.fillColor = new Color(color.r, color.g, color.b, .45f);
-                    painter.BeginPath(); painter.MoveTo(new Vector2(end, 0)); painter.LineTo(new Vector2(end + blendOut, Height)); painter.LineTo(new Vector2(end, Height)); painter.ClosePath(); painter.Fill();
-                    painter.strokeColor = new Color(1, 1, 1, .85f);
-                    painter.BeginPath(); painter.MoveTo(new Vector2(end, 0)); painter.LineTo(new Vector2(end + blendOut, Height)); painter.Stroke();
+                    if (width < .5f) return;
+                    var tint = spec.mode == SkillBlendMode.Freeze ? SkillColors.Cue : SkillColors.Animation;
+                    painter.strokeColor = Color.Lerp(tint, Color.white, .45f);
+                    painter.fillColor = new Color(tint.r, tint.g, tint.b, .3f);
+                    Vector2 At(int i) { float u = i / 24f, w = spec.Evaluate(u); return new Vector2(x + width*u, Height * (fadeOut ? w : 1-w)); }
+                    painter.BeginPath(); painter.MoveTo(At(0)); for (int i=1; i<=24; i++) painter.LineTo(At(i)); painter.Stroke();
+                    painter.LineTo(new Vector2(x+width,Height)); painter.LineTo(new Vector2(x,Height)); painter.ClosePath(); painter.Fill();
                 }
             }
+
         }
 
         private void SetClip(ClipInfo clip, SkillAnimationAsset animation)
@@ -441,6 +470,7 @@ namespace ZFramework.GAS.Editor
         }
         private void BindDrag(ElementView element)
         {
+            if(element.Track.PropertyPath=="markers") element.View.AddManipulator(new ContextualMenuManipulator(e=>e.menu.AppendAction("切换标记断点",_=>SkillActionDebugger.Toggle(element.Id))));
             float origin = 0, delta = 0; int resize = 0; bool dragging = false;
             ElementView[] moved = null;
             element.View.RegisterCallback<PointerDownEvent>(e =>
@@ -456,6 +486,7 @@ namespace ZFramework.GAS.Editor
                 }
                 _selected.Add(element.Key);
                 _doc.Selection.Select(_doc.Root.Animation, element.Track.PropertyPath, element.Id);
+                if (e.clickCount == 2 && element.Track.PropertyPath == "markers") { _doc.OpenFlow(); e.StopPropagation(); return; }
                 moved = _elements.Where(x => _selected.Contains(x.Key)).ToArray();
                 origin = e.position.x; delta = 0; dragging = true; _dragging = true;
                 resize = element.Track.Shape == TrackElementShape.Range ? e.localPosition.x < 7 ? -1 : e.localPosition.x > element.View.layout.width - 7 ? 1 : 0 : 0;
@@ -486,6 +517,11 @@ namespace ZFramework.GAS.Editor
             {
                 if (!dragging) return; dragging = false; _dragging = false; _dragSpans.Clear(); element.View.ReleasePointer(e.pointerId);
                 if (!float.IsFinite(delta) || Mathf.Abs(delta) < .00001f) { FinishDrag(); return; }
+                var data=_doc.Serialized(_doc.Root.Animation);
+                var paths=moved.Select(item=>{
+                    var p=TimelineCommands.Find(data,item.Track.PropertyPath,item.Id);
+                    return p?.propertyPath+(item.Track.Shape==TrackElementShape.Point?".time":resize>0?".end":".start");
+                }).ToArray();
                 EditCommand.Run(_doc, "移动时间轴元素", _doc.Root.Animation, so =>
                 {
                     foreach (var item in moved)
@@ -495,7 +531,7 @@ namespace ZFramework.GAS.Editor
                         float end = resize > 0 ? (item.End < 0 ? Duration : item.End) + delta : resize < 0 || item.End < 0 ? item.End : item.End + delta;
                         item.Track.WriteSpan(p, start, end);
                     }
-                }, false);
+                }, false,paths);
                 FinishDrag();
                 e.StopPropagation();
             });
@@ -512,6 +548,12 @@ namespace ZFramework.GAS.Editor
         {
             element.View.style.left = TimelineMath.X(start, _zoom, _offset);
             element.View.style.width = element.Track.Shape == TrackElementShape.Point ? 130 : Mathf.Max(12, ((end < 0 ? Duration : end) - start) * _zoom);
+            if(element.Track.PropertyPath=="runtimeTracks"){
+                var label=element.View.Q<Label>(); if(label!=null){
+                    bool shortBar=element.View.style.width.value.value<64;
+                    // Keep the precise bar length. Its always-visible row heading carries the name for short spans.
+                    label.style.display=shortBar?DisplayStyle.None:DisplayStyle.Flex;
+                }}
             if (element.Ghost != null) element.Ghost.style.left = TimelineMath.X(start / _doc.Playback.Speed, _zoom, _offset);
         }
         private void PositionElements()
@@ -521,8 +563,16 @@ namespace ZFramework.GAS.Editor
             var clip = _tracks.Q<Label>(className: "animation-clip"); if (clip != null) { clip.style.width = Duration * _zoom; clip.style.left = -_offset; }
             if (_clipCaption != null) { _clipCaption.style.left = -_offset + 7; _clipCaption.style.width = Mathf.Max(0, Duration * _zoom - 14); }
             _ramps?.Layout();
+            PositionTail();
             PlaybackChanged();
         }
+        private void PositionTail()
+        {
+            if(_tail==null)return;
+            _tail.style.left=Duration*_zoom-_offset;_tail.style.width=Mathf.Max(0,_doc.PreviewEnd-Duration)*_zoom;
+            _tail.style.display=_doc.PreviewEnd>Duration?DisplayStyle.Flex:DisplayStyle.None;
+        }
+        private void PreviewRangeChanged(){PositionTail();UpdateFrameData(_tracks.Q<Label>("frame-data"));PlaybackChanged();}
         private void DrawRuler()
         {
             _ruler.Clear(); float width = _ruler.layout.width; if (float.IsNaN(width) || width < 1) return;
@@ -614,7 +664,7 @@ namespace ZFramework.GAS.Editor
                 case KeyCode.Comma: Seek(_doc.Playback.Time - 1 / Fps); break;
                 case KeyCode.Period: Seek(_doc.Playback.Time + 1 / Fps); break;
                 case KeyCode.Home: Seek(0); break;
-                case KeyCode.End: Seek(Duration); break;
+                  case KeyCode.End: Seek(_doc.PlaybackDuration); break;
                 case KeyCode.L: _doc.Playback.Loop = !_doc.Playback.Loop; break;
                 case KeyCode.M: Add(TrackTypeRegistry.Get("markers")); break;
                 case KeyCode.R:
@@ -628,6 +678,6 @@ namespace ZFramework.GAS.Editor
             }
             e.StopPropagation();
         }
-        public void Dispose() { _doc.Changed -= Rebuild; _doc.Selection.Changed -= SelectionChanged; _doc.Playback.Changed -= PlaybackChanged; }
+        public void Dispose() { _doc.Changed -= Rebuild; _doc.Selection.Changed -= SelectionChanged; _doc.Playback.Changed -= PlaybackChanged; _doc.PreviewRangeChanged-=PreviewRangeChanged; }
     }
 }

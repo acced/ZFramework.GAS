@@ -40,7 +40,7 @@ namespace ZFramework.GAS.Unity
                 var unit = query.Kind == TargetQueryKind.Self ? source : context.Target;
                 if (context.Allows(query, unit))
                 { buffer.Units[0] = unit; buffer.Transforms[0] = query.Kind == TargetQueryKind.Self ? context.Services.Origin : context.Services.Target; buffer.Count = 1; }
-                return buffer.Count;
+                SkillActionDebug.Query(context,buffer); return buffer.Count;
             }
             float radius = query.Radius.Resolve(context.Values);
             var forward = context.Forward;
@@ -77,7 +77,7 @@ namespace ZFramework.GAS.Unity
             int count = applyLimit ? Mathf.Min(buffer.Count, query.MaxTargets) : buffer.Count;
             for (int i = count; i < buffer.Count; i++) { buffer.Units[i] = null; buffer.Transforms[i] = null; }
             buffer.Count = count;
-            return count;
+            SkillActionDebug.Query(context,buffer); return count;
         }
 
         private readonly Collider[] _candidates;

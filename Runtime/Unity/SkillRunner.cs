@@ -27,6 +27,8 @@ namespace ZFramework.GAS.Unity
         }
 
         public event Action<GameplayAbilityAsset, AnimationMarker> MarkerReached;
+        /// <summary>Outcome of the last synchronous TryCast, including failures before an asset could be granted.</summary>
+        public AbilityActivationCheck LastCastCheck { get; private set; }
 
         public SkillRunner(AbilitySystemComponent owner, Func<IAnimationDriver> getDriver)
         {
@@ -41,11 +43,12 @@ namespace ZFramework.GAS.Unity
         {
             if (asset == null) throw new ArgumentNullException(nameof(asset));
             var entry = Find(asset);
-            if (entry == null) _skills[asset] = entry = new Entry
+            if (entry == null) entry = new Entry
             {
-                Spec = _owner.GrantAbility(asset.Definition, Math.Max(1, level)),
                 Marker = (_, marker) => MarkerReached?.Invoke(asset, marker)
             };
+            EnsureSpec(asset, entry);
+            _skills[asset] = entry;
             if (!ReferenceEquals(source, _implicitGrant)) entry.Grants.Remove(_implicitGrant);
             entry.Grants[source] = new GrantSettings { Level = Math.Max(1, level), Overrides = CloneOverrides(overrides), Order = ++_grantOrder };
             RefreshGrant(entry);
@@ -61,7 +64,13 @@ namespace ZFramework.GAS.Unity
         {
             GrantSettings selected = null;
             foreach (var grant in entry.Grants.Values) if (selected == null || grant.Order > selected.Order) selected = grant;
-            if (selected != null) { entry.Spec.Level = selected.Level; entry.Overrides = selected.Overrides; }
+            if (selected != null) { if (entry.Spec != null) entry.Spec.Level = selected.Level; entry.Overrides = selected.Overrides; }
+        }
+        private void EnsureSpec(GameplayAbilityAsset asset, Entry entry)
+        {
+            if (entry.Spec != null) return;
+            entry.Spec = _owner.GrantAbility(asset.Definition);
+            RefreshGrant(entry);
         }
         internal void GrantSet(AbilitySetAsset source)
         {
@@ -92,15 +101,22 @@ namespace ZFramework.GAS.Unity
         public AbilityActivationResult TryCast(GameplayAbilityAsset asset, AbilitySystemComponent target = null,
             TimelineTaskContext taskContext = null, float durationOverride = 0, SkillParameterOverride[] parameterOverrides = null)
         {
-            if (Find(asset) == null) GrantFrom(_implicitGrant, asset, 1, null);
-            var entry = _skills[asset];
-            if (entry.Spec.IsActive) return AbilityActivationResult.AlreadyActive;
+            if (asset == null) throw new ArgumentNullException(nameof(asset));
+            Entry entry = null;
             SkillAnimationDefinition animation = null;
             IAnimationDriver driver = null;
             SkillExecutionContext execution;
             SkillActionDefinition[] actions;
             try
             {
+                if (Find(asset) == null) GrantFrom(_implicitGrant, asset, 1, null);
+                entry = _skills[asset];
+                EnsureSpec(asset, entry);
+                if (entry.Spec.IsActive)
+                {
+                    LastCastCheck = _owner.CheckActivation(entry.Spec);
+                    return LastCastCheck.Result;
+                }
                 if (!ReferenceEquals(entry.Spec.Definition, asset.Definition)) _owner.UpdateAbilityDefinition(entry.Spec, asset.Definition);
                 animation = asset.Animation != null ? asset.Animation.Definition : null;
                 if (animation != null)
@@ -115,8 +131,6 @@ namespace ZFramework.GAS.Unity
                     new EffectEvaluationContext(entry.Spec.Level, parameters, _owner.Attributes), taskContext);
                 actions = asset.BuildActions();
                 SkillActionBuildContext.Validate(actions, execution);
-                if (entry.Spec.Definition.Cost != null) SkillActionBuildContext.Effect(entry.Spec.Definition.Cost, execution, _owner.Attributes);
-                if (entry.Spec.Definition.Cooldown != null) SkillActionBuildContext.Effect(entry.Spec.Definition.Cooldown, execution, _owner.Attributes);
                 if (animation != null) foreach (var marker in animation.Markers)
                 {
                     if (marker.Effect != null) SkillActionBuildContext.Effect(marker.Effect, execution, target?.Attributes);
@@ -126,11 +140,13 @@ namespace ZFramework.GAS.Unity
             }
             catch (Exception exception)
             {
-                entry.Spec.LastExecutionFailure = new AbilityActivationCheck(AbilityActivationResult.InvalidConfiguration,
-                    exception.Message, sourceId: (exception as SkillActionException)?.ActionId);
-                throw;
+                LastCastCheck = AbilityActivationCheck.PreflightFailure(exception, (exception as SkillActionException)?.ActionId);
+                if (entry?.Spec != null) entry.Spec.LastExecutionFailure = LastCastCheck;
+                return LastCastCheck.Result;
             }
-            var result = _owner.TryActivateAbility(entry.Spec, execution.Values);
+            var spec = execution.Ability;
+            var result = _owner.TryActivateAbility(spec, execution.Values);
+            LastCastCheck = spec.LastActivationCheck;
             if (result != AbilityActivationResult.Activated) return result;
             entry.Execution = execution;
             execution.BindActivation();
@@ -139,7 +155,12 @@ namespace ZFramework.GAS.Unity
             try
             {
                 execution.Execute(actions);
-                if (!execution.IsCastActive) return result;
+                if (!execution.IsCastActive)
+                {
+                    if (spec.ActivationVersion == execution.Version && spec.LastExecutionFailure.Result == AbilityActivationResult.ExecutionFailed)
+                    { LastCastCheck = spec.LastExecutionFailure; return LastCastCheck.Result; }
+                    return result;
+                }
                 // The observer runs after the animation in reverse task order, allowing same-frame completion.
                 var observer = new ExecutionLifetimeTask(execution);
                 _owner.StartTask(entry.Spec, observer);
@@ -152,9 +173,12 @@ namespace ZFramework.GAS.Unity
             }
             catch (Exception exception)
             {
-                try { driver?.Stop(); }
-                finally { execution.Fail(exception, execution.CurrentActionId); }
-                throw;
+                execution.Fail(exception, execution.CurrentActionId);
+                try { if (spec.ActivationVersion == execution.Version) driver?.Stop(); }
+                catch (Exception cleanup) { _owner.RecordCleanupError(spec, execution.Version, cleanup, execution.CurrentActionId); }
+                LastCastCheck = spec.ActivationVersion == execution.Version && spec.LastExecutionFailure.Error != null
+                    ? spec.LastExecutionFailure : AbilityActivationCheck.FromError(AbilityActivationResult.ExecutionFailed, exception, execution.CurrentActionId);
+                return LastCastCheck.Result;
             }
             return result;
         }
@@ -178,7 +202,14 @@ namespace ZFramework.GAS.Unity
                 Execution.Status = "完成";
                 Complete(); owner.EndAbility(Ability);
             }
-            protected override void OnEnd(bool cancelled) { if (cancelled && Execution.Error == null) Execution.Status = "已取消"; }
+            protected override void OnEnd(bool cancelled)
+            {
+                if (!cancelled || Execution.Error != null) return;
+                var failure = Ability.LastExecutionFailure;
+                if (failure.Result == AbilityActivationResult.ExecutionFailed)
+                    Execution.Fail(failure.Error ?? new InvalidOperationException(failure.Message), failure.SourceId, alreadyRecorded: true);
+                else Execution.Status = "已取消";
+            }
         }
 
         private static SkillParameterOverride[] MergeOverrides(SkillParameterOverride[] granted, SkillParameterOverride[] cast)
@@ -198,9 +229,9 @@ namespace ZFramework.GAS.Unity
             return false;
         }
 
-        public bool IsActive(GameplayAbilityAsset asset) => Find(asset)?.Spec.IsActive ?? false;
-        public float CooldownRemaining(GameplayAbilityAsset asset) => Find(asset)?.Spec.CooldownRemaining ?? 0;
-        public float CooldownDuration(GameplayAbilityAsset asset) => Find(asset)?.Spec.CooldownDuration ?? 0;
+        public bool IsActive(GameplayAbilityAsset asset) => Find(asset)?.Spec?.IsActive ?? false;
+        public float CooldownRemaining(GameplayAbilityAsset asset) => Find(asset)?.Spec?.CooldownRemaining ?? 0;
+        public float CooldownDuration(GameplayAbilityAsset asset) => Find(asset)?.Spec?.CooldownDuration ?? 0;
         public bool Cancel(GameplayAbilityAsset asset) => _owner.EndAbility(Find(asset)?.Spec);
         public bool Revoke(GameplayAbilityAsset asset)
         {
@@ -217,15 +248,18 @@ namespace ZFramework.GAS.Unity
             var entry = Find(asset);
             if (entry == null) return false;
             _skills.Remove(asset);
-            return _owner.RemoveAbility(entry.Spec);
+            _owner.RemoveAbility(entry.Spec); return true;
         }
         private Entry Find(GameplayAbilityAsset asset)
         {
             if (asset == null || !_skills.TryGetValue(asset, out var entry)) return null;
             for (int i = 0; i < _owner.GrantedAbilityCount; i++)
                 if (ReferenceEquals(_owner.GetGrantedAbility(i), entry.Spec)) return entry;
-            _skills.Remove(asset);
-            return null;
+            // Readback/revocation must not recreate specs. Retain logical provenance until the
+            // next Grant/TryCast explicitly restores runtime state after Clear/recycling.
+            entry.Spec = null;
+            entry.Execution = null;
+            return entry;
         }
     }
 }

@@ -1,11 +1,14 @@
 using System.IO;
+using System.Collections.Generic;
 using System.Linq;
 using GameplayTags;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.Experimental.GraphView;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UIElements;
 using ZFramework.GAS.Samples.BasicCombat;
 using ZFramework.GAS.Samples.BasicCombat.Editor;
 using ZFramework.GAS.Unity;
@@ -15,6 +18,46 @@ namespace ZFramework.GAS.Editor.Tests
 {
     public sealed class CueVfxSampleTests
     {
+        [Test]
+        public void EveryGeneratedSkillMarkerOpensItsOwnAuthoredActionTree()
+        {
+            const string skills = BasicCombatSample.Folder + "/Skills/";
+            if (!AssetDatabase.IsValidFolder(skills.TrimEnd('/'))) BasicCombatSample.Create();
+            var window = ScriptableObject.CreateInstance<SkillEditorWindow>();
+            try
+            {
+                window.ShowUtility();
+                int markers = 0;
+                foreach (var name in new[] { "斩击", "战吼", "能量弹", "圣域引导", "召唤" })
+                {
+                    var skill = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(skills + name + ".asset");
+                    Assert.IsNotNull(skill, name);
+                    window.Show(skill);
+                    var animation = skill.Animation;
+                    if (animation == null) continue;
+                    var items = window.Document.Serialized(animation).FindProperty("markers");
+                    for (int i = 0; i < items.arraySize; i++)
+                    {
+                        var marker = items.GetArrayElementAtIndex(i);
+                        var actions = marker.FindPropertyRelative("actions");
+                        var expected = new List<string>();
+                        var cursor = actions.Copy();
+                        var end = cursor.GetEndProperty();
+                        while (cursor.Next(true) && !SerializedProperty.EqualContents(cursor,end))
+                            if (cursor.propertyType == SerializedPropertyType.ManagedReference && cursor.managedReferenceValue is SkillAction a)
+                                expected.Add(a.Id);
+                        window.Document.Selection.Select(animation, "markers", marker.FindPropertyRelative("id").stringValue);
+                        window.Document.OpenFlow();
+                        var nodes = window.rootVisualElement.Q<SkillFlowView>().Q<GraphView>().nodes.ToList();
+                        StringAssert.Contains(marker.FindPropertyRelative("key").stringValue, nodes.Single(n => Equals(n.userData,"$entry")).title);
+                        CollectionAssert.AreEquivalent(expected, nodes.Where(n => !Equals(n.userData,"$entry")).Select(n => n.userData), name);
+                        markers++;
+                    }
+                }
+                Assert.Greater(markers, 0);
+            }
+            finally { window.Close(); }
+        }
         [Test]
         public void GeneratedDemoUsesSharedLibraryAndRendersGroundParticlesAndSwordTrail()
         {
@@ -31,6 +74,20 @@ namespace ZFramework.GAS.Editor.Tests
             var module = AssetDatabase.LoadAssetAtPath<SkillActionModuleAsset>(folder + "/Skills/Shared/扇形斩击动作.asset");
             Assert.IsNotNull(module); Assert.IsNotNull(MonoScript.FromScriptableObject(module), "Shared module must survive a domain reload");
             Assert.IsNotNull(module.parameters); Assert.IsNotNull(MonoScript.FromScriptableObject(module.parameters));
+            // 共享参数集只放模块用到的伤害与范围；冷却留在斩击自身，模块只绑定共享集里的参数。
+            var slashSkill = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(folder + "/Skills/斩击.asset");
+            CollectionAssert.AreEquivalent(new[] { "普通伤害系数", "强化伤害系数", "范围", "基础范围" }, module.parameters.parameters.Select(p => p.displayName));
+            Assert.AreSame(module.parameters, slashSkill.parameterSet);
+            CollectionAssert.AreEqual(new[] { "冷却" }, slashSkill.parameters.Select(p => p.displayName));
+            var call = (CallModuleAction)new SerializedObject(slashSkill.Animation).FindProperty("markers.Array.data[0].actions.Array.data[0]").managedReferenceValue;
+            CollectionAssert.AreEquivalent(module.parameters.parameters.Select(p => p.Id), call.bindings.Select(b => b.moduleParameterId));
+            var variant = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(folder + "/Skills/Shared/重斩变体.asset");
+            Assert.AreSame(slashSkill.Animation,variant.Animation);
+            Assert.IsTrue(variant.clipOverrides.TryGet(slashSkill.Animation.ClipName,out var axe));
+            CollectionAssert.Contains(knight.GetComponent<Animator>().runtimeAnimatorController.animationClips.Select(c=>c.name),"AxeSlash");
+            Assert.AreEqual("Base Layer.AxeSlash",axe.replacement);
+            Assert.AreEqual(2, variant.parameterOverrides.Length, "重斩只覆盖普通与强化两个伤害系数");
+            Assert.AreEqual(1.8f, variant.ResolveParameters(1).Get(module.parameters.parameters.Single(p => p.displayName == "普通伤害系数").Id).Number, 1e-4f);
             Assert.AreEqual(9, library.bindings.Length);
             Assert.AreSame(library, knight.GetComponent<CueVfxPlayer>().Library);
             Assert.IsEmpty(knight.GetComponentsInChildren<CueVisual>(true), "角色只引用共享配置，不预挂特效。");
@@ -67,9 +124,8 @@ namespace ZFramework.GAS.Editor.Tests
                 Capture(render, "cue-ground-preview.png");
                 preview.Sample(warcry.Animation, .1f, t => sampler.Sample(warcry.Animation.ClipName, t));
                 Assert.IsFalse(Resources.FindObjectsOfTypeAll<ParticleSystem>().Any(p => p.gameObject.scene == owner.scene));
-                var slash = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(folder + "/Skills/斩击.asset");
                 const float swordTime = .37f;
-                preview.Sample(slash.Animation, swordTime, t => sampler.Sample(slash.Animation.ClipName, t));
+                preview.Sample(slashSkill.Animation, swordTime, t => sampler.Sample(slashSkill.Animation.ClipName, t));
                 var trail = owner.GetComponentInChildren<SwordTrailVisual>();
                 Assert.IsNotNull(trail); Assert.Greater(trail.GetComponent<MeshFilter>().sharedMesh.vertexCount, 4);
                 var vertices = trail.GetComponent<MeshFilter>().sharedMesh.vertices;

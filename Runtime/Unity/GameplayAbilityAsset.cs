@@ -24,6 +24,7 @@ namespace ZFramework.GAS.Unity
         public SkillParameter[] parameters = Array.Empty<SkillParameter>();
         public SkillParameterOverride[] parameterOverrides = Array.Empty<SkillParameterOverride>();
         [Header("激活动作（按顺序执行）")]
+        public SkillClipOverrideSet clipOverrides;
         [SerializeReference] public SkillAction[] activationActions = Array.Empty<SkillAction>();
         public SkillParameterValues ResolveParameters(int level, SkillParameterOverride[] castOverrides = null)
         {

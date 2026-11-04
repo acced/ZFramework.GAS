@@ -98,14 +98,16 @@ namespace ZFramework.GAS.Editor.Tests
         public void InvalidTargetIsRejectedBeforeCooldownAndDriverPlayback()
         {
             var owner = new AbilitySystemComponent(); var driver = new Driver(); var runner = new SkillRunner(owner, () => driver); var skill = Skill(targetEffect: true, cooldown: true);
-            Assert.Throws<ArgumentNullException>(() => runner.TryCast(skill));
+            Assert.AreEqual(AbilityActivationResult.InvalidConfiguration, runner.TryCast(skill));
+            Assert.IsInstanceOf<ArgumentNullException>(runner.LastCastCheck.Error);
             Assert.AreEqual(0, driver.Plays); Assert.AreEqual(0, runner.CooldownRemaining(skill)); Assert.IsFalse(runner.IsActive(skill));
         }
         [Test]
         public void DriverFailureDoesNotLeaveAbilityActive()
         {
             var owner = new AbilitySystemComponent(); var driver = new Driver { Fail = true }; var runner = new SkillRunner(owner, () => driver); var skill = Skill();
-            Assert.Throws<InvalidOperationException>(() => runner.TryCast(skill));
+            Assert.AreEqual(AbilityActivationResult.ExecutionFailed, runner.TryCast(skill));
+            Assert.IsInstanceOf<InvalidOperationException>(runner.LastCastCheck.Error);
             Assert.IsFalse(runner.IsActive(skill)); Assert.AreEqual(0, owner.ActiveTaskCount); Assert.AreEqual(1, driver.Stops);
         }
     }

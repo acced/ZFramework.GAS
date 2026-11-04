@@ -18,6 +18,7 @@ namespace ZFramework.GAS.Editor
             internal int SeekCount;
             private readonly float _start, _end;
             private readonly bool _loop;
+            private double _lastStart;
             internal Channel(AudioSkillTrack track, Scene scene)
             {
                 var go = new GameObject("GAS Audio Preview"); SceneManager.MoveGameObjectToScene(go, scene);
@@ -30,11 +31,15 @@ namespace ZFramework.GAS.Editor
             internal void Sample(AudioSkillTrack track, float time, bool seek, float speed)
             {
                 Source.volume = track.volume; Source.pitch = Mathf.Clamp(speed, .01f, 3);
-                if (seek)
+                float local=Math.Max(0,time-track.start);
+                double now=EditorApplication.timeSinceStartup;
+                // Preview scenes can lose a voice during import or device changes. Resume from the
+                // timeline, allowing time for the mixer to start; never restart a naturally ended one-shot.
+                bool recover=!seek && (track.loop || local<track.clip.length) && !Source.isPlaying && now-_lastStart>.25;
+                if (seek || recover)
                 {
-                    float local = Math.Max(0, time - track.start);
                     if (track.loop && track.clip.length > 0) local %= track.clip.length;
-                    Source.Stop(); SeekCount++;
+                    Source.Stop(); SeekCount++; _lastStart=now;
                     if (local < track.clip.length)
                     {
                         Source.timeSamples = Mathf.Min(track.clip.samples - 1, (int)(local * track.clip.frequency));

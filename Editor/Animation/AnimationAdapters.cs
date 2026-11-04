@@ -20,6 +20,7 @@ namespace ZFramework.GAS.Editor
         { Name = name; Length = length; FrameRate = frameRate; Loop = loop; Source = source; SampleRoot = sampleRoot; SampleSpeed = speed; Warning = warning; }
     }
     public interface IPoseSampler : IDisposable { void Sample(string clip, float time); }
+    public interface IBlendPoseSampler : IPoseSampler { void Sample(string from, float fromTime, string to, float toTime, float weight); }
     public interface IAnimationEditorAdapter
     {
         string BackendId { get; }
@@ -152,15 +153,17 @@ namespace ZFramework.GAS.Editor
             public void Dispose() { if (_renderer != null) _renderer.sprite = _original; }
         }
     }
-    internal sealed class ClipPoseSampler : IPoseSampler
+    internal sealed class ClipPoseSampler : IBlendPoseSampler
     {
         private readonly IReadOnlyList<ClipInfo> _clips;
         private readonly Transform[] _transforms;
         private readonly Vector3[] _positions, _scales;
-        private readonly Quaternion[] _rotations;
+        private readonly Quaternion[] _rotations, _fromRotations;
+        private readonly Vector3[] _fromPositions, _fromScales;
         public ClipPoseSampler(IReadOnlyList<ClipInfo> clips, GameObject root)
         {
             _clips = clips; _transforms = root.GetComponentsInChildren<Transform>(true);
+            _fromPositions = new Vector3[_transforms.Length]; _fromScales = new Vector3[_transforms.Length]; _fromRotations = new Quaternion[_transforms.Length];
             _positions = _transforms.Select(t => t.localPosition).ToArray(); _scales = _transforms.Select(t => t.localScale).ToArray();
             _rotations = _transforms.Select(t => t.localRotation).ToArray();
         }
@@ -170,6 +173,19 @@ namespace ZFramework.GAS.Editor
             foreach (var info in _clips)
                 if (info.Name == name && info.Source is AnimationClip clip)
                 { clip.SampleAnimation(info.SampleRoot, Mathf.Clamp(time * info.SampleSpeed, 0, clip.length)); break; }
+        }
+        public void Sample(string from, float fromTime, string to, float toTime, float weight)
+        {
+            Sample(from, fromTime);
+            for (int i = 0; i < _transforms.Length; i++)
+            { var t = _transforms[i]; _fromPositions[i] = t.localPosition; _fromRotations[i] = t.localRotation; _fromScales[i] = t.localScale; }
+            Sample(to, toTime);
+            for (int i = 0; i < _transforms.Length; i++)
+            {
+                var t = _transforms[i]; t.localPosition = Vector3.Lerp(_fromPositions[i], t.localPosition, weight);
+                t.localRotation = Quaternion.Slerp(_fromRotations[i], t.localRotation, weight);
+                t.localScale = Vector3.Lerp(_fromScales[i], t.localScale, weight);
+            }
         }
         private void Restore()
         {

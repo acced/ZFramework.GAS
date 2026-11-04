@@ -1,3 +1,16 @@
+.skill-flow-node #title-label { font-size: 15px; color: #f1f3f6; -unity-font-style: bold; }
+.skill-flow-node Label { color: #d9dfe6; font-size: 13px; }
+.skill-flow-node #title { background-color: #333b47; }
+.flow-live { border-top-width: 3px; border-top-color: #67cc90; }
+.preview-tail { position: absolute; top: 3px; bottom: 3px; padding-left: 4px; background-color: #35423c; color: #a2cfb4; overflow: hidden; }
+.flow-breakpoint { width: 20px; padding-left: 1px; padding-right: 1px; margin-left: 1px; background-color: transparent; border-width: 0; color: #f18479; }
+.flow-field { margin: 2px 5px; }
+.skill-flow-node #input, .skill-flow-node #output, .skill-flow-node #divider { background-color: transparent; }
+.skill-flow-node #port-label { color: #dfebf5; font-size: 13px; }
+.skill-flow-node .unity-base-field__input { color: #e6edf6; }
+.skill-flow-node > #contents { background-color: #26303b; }
+.flow-field .unity-base-field__label { min-width: 64px; width: 64px; }
+.flow-error { border-left-width: 3px; border-left-color: rgb(235, 101, 97); }
 .gas-editor {
     --gas-bg: #1b1d21; --gas-panel: #23262b; --gas-panel-2: #2a2e34;
     --gas-line: #363b43; --gas-text: #d6d9de; --gas-muted: #8d939c;

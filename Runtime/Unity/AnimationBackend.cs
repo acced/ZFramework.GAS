@@ -6,6 +6,7 @@ namespace ZFramework.GAS.Unity
     [Serializable]
     public abstract class AnimationBackend
     {
+        public virtual AnimationBlendCapabilities BlendCapabilities => AnimationBlendCapabilities.None;
         public abstract string BackendId { get; }
         public abstract IAnimationDriver CreateDriver(GameObject host);
         public abstract bool Validate(GameObject host, out string error);
@@ -15,6 +16,7 @@ namespace ZFramework.GAS.Unity
     public sealed class AnimatorBackend : AnimationBackend
     {
         [Min(0)] public int layer;
+        public override AnimationBlendCapabilities BlendCapabilities => AnimationBlendCapabilities.SeekBlend;
         public override string BackendId => "animator";
         public override IAnimationDriver CreateDriver(GameObject host)
             => new AnimatorAnimationDriver(host.GetComponentInChildren<Animator>(true), layer);

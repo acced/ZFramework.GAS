@@ -3,6 +3,9 @@ using System.Collections.Generic;
 
 namespace ZFramework.GAS
 {
+    // Only preflight translates a project calculation exception into a configuration diagnostic.
+    internal sealed class EffectCalculationValidationException : InvalidOperationException
+    { internal EffectCalculationValidationException(Exception cause) : base(cause.Message, cause) { } }
     /// <summary>
     /// 效果**规格**：一次具体施加的意图 = 定义 + 来源 + 调用方提供的数值。
     /// 对应 UE 的 <c>FGameplayEffectSpec</c>。本身不含运行时状态，可按值传递。
@@ -35,7 +38,7 @@ namespace ZFramework.GAS
         {
             Definition = definition ?? throw new ArgumentNullException(nameof(definition));
             SourceAttributes = sourceAttributes;
-            Source = source;
+            Source = source is AbilitySystemComponent owner ? owner.SourceIdentity : source;
             SetByCallerValues = setByCallerValues;
             Context = context;
             _callerFrozen = setByCallerValues == null;
@@ -59,22 +62,24 @@ namespace ZFramework.GAS
         private void Validate(AttributeSet target, int depth)
         {
             if (depth > 8) throw new InvalidOperationException("Conditional effect chain exceeded depth 8; check for a cycle.");
-            foreach (var modifier in Definition.Modifiers) Resolve(modifier.Magnitude, target);
-            if (Definition.DurationPolicy != EffectDurationPolicy.Instant) { ResolveDuration(target); ResolvePeriod(target); }
+            foreach (var modifier in Definition.Modifiers) ResolveForValidation(modifier.Magnitude, target);
+            if (Definition.DurationPolicy != EffectDurationPolicy.Instant) { ResolveDuration(target, true); ResolvePeriod(target, true); }
             foreach (var child in Definition.ConditionalEffects) ForChild(child.Effect).Validate(target, depth + 1);
         }
-        public float ResolvePeriod(AttributeSet target)
+        public float ResolvePeriod(AttributeSet target) => ResolvePeriod(target, false);
+        private float ResolvePeriod(AttributeSet target, bool validating)
         {
             var d = Definition;
             return Math.Max(0, Finite(d.PeriodAttribute.HasValue ? SourceValue(d.PeriodAttribute.Value)
-                : d.PeriodMagnitude.HasValue ? Resolve(d.PeriodMagnitude.Value, target) : d.Period, "period"));
+                : d.PeriodMagnitude.HasValue ? Resolve(d.PeriodMagnitude.Value, target, validating) : d.Period, "period"));
         }
-        public float ResolveDuration(AttributeSet target)
+        public float ResolveDuration(AttributeSet target) => ResolveDuration(target, false);
+        private float ResolveDuration(AttributeSet target, bool validating)
         {
             var d = Definition;
             if (d.DurationAttribute.HasValue)
             { float value = Finite(SourceValue(d.DurationAttribute.Value), "duration attribute"); if (value > 0) return value; }
-            return Finite(d.DurationMagnitude.HasValue ? Resolve(d.DurationMagnitude.Value, target) : d.Duration, "duration");
+            return Finite(d.DurationMagnitude.HasValue ? Resolve(d.DurationMagnitude.Value, target, validating) : d.Duration, "duration");
         }
         internal static float Finite(float value, string name)
         { if (float.IsNaN(value) || float.IsInfinity(value)) throw new InvalidOperationException("Non-finite effect " + name); return value; }
@@ -89,6 +94,14 @@ namespace ZFramework.GAS
         /// </summary>
         public float Resolve(in EffectMagnitude magnitude, AttributeSet targetAttributes)
             => Finite(ResolveValue(magnitude, targetAttributes), "magnitude");
+        internal float ResolveForValidation(in EffectMagnitude magnitude, AttributeSet target)
+            => Resolve(magnitude, target, true);
+        private float Resolve(in EffectMagnitude magnitude, AttributeSet target, bool validating)
+        {
+            if (!validating || magnitude.Kind != MagnitudeKind.Calculation) return Resolve(magnitude, target);
+            try { return Resolve(magnitude, target); }
+            catch (Exception ex) { throw new EffectCalculationValidationException(ex); }
+        }
         private float ResolveValue(in EffectMagnitude magnitude, AttributeSet targetAttributes)
         {
             switch (magnitude.Kind)

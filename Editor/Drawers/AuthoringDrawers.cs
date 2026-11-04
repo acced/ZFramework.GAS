@@ -164,14 +164,11 @@ namespace ZFramework.GAS.Editor
                     tools.Add(new Button(() => Change(a => { if (itemIndex + 1 < a.arraySize) a.MoveArrayElement(itemIndex, itemIndex + 1); })) { text = "↓" });
                     tools.Add(new Button(() => Change(a =>
                     {
-                        var value = property.managedReferenceValue; if (value == null) return;
-                        var clone = JsonUtility.FromJson(JsonUtility.ToJson(value), value.GetType());
-                        int index = a.arraySize++; var entry = a.GetArrayElementAtIndex(index); entry.managedReferenceValue = clone;
-                        var cursor = entry.Copy(); var end = entry.GetEndProperty();
-                        while (cursor.Next(true) && !SerializedProperty.EqualContents(cursor, end))
-                            if (cursor.name == "id" && cursor.propertyType == SerializedPropertyType.String) cursor.stringValue = Guid.NewGuid().ToString("N");
-                        a.MoveArrayElement(index, itemIndex + 1);
-                    })) { text = "复制" });
+                        try{SkillActionClipboard.Duplicate(a,itemIndex+1,property.managedReferenceValue as SkillAction,ActionEffectOwnership.ConfirmCopy);}
+                        catch(OperationCanceledException){}
+                        catch(InvalidOperationException error){root.Q<HelpBox>("action-error")?.RemoveFromHierarchy();
+                            root.Add(new HelpBox(error.Message,HelpBoxMessageType.Error){name="action-error"});}
+                    })) { text = "创建副本", tooltip="在下方添加相同动作，保留剪贴板内容" });
                     tools.Add(new Button(() => Change(a => a.DeleteArrayElementAtIndex(itemIndex))) { text = "删除" });
                 }
             }

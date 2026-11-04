@@ -19,8 +19,20 @@ namespace ZFramework.GAS.Editor
         private PreviewRenderUtility _preview;
         private GameObject _source, _instance;
         private IPoseSampler _sampler;
+        private readonly DropdownField _sectionFrom=new DropdownField("跳入预演 · 来源段");
+        private readonly List<AnimationSection> _previewSections=new();
+        private readonly DropdownField _preClip = new DropdownField("前置动画");
+        private IReadOnlyList<ClipInfo> _clips = Array.Empty<ClipInfo>();
         private CueVfxPreview _vfx;
         private SkillPreviewTools _tools;
+        private SkillPreviewSimulation _simulation;
+        private DummyLayout _layout=DummyLayout.扇形;
+        private int _dummyCount=3,_aimIndex=2;
+        private string _sourceTags="",_targetTags=""; private float _sourceValue,_targetValue;
+        private GameObject _dummyPrefab;
+        private AnimationClip _reaction;
+        private SkillClipOverrideSet _override;
+        private bool _simulate;
         private bool _ghosts, _trajectory, _ranges, _dummy, _sound;
         private float _targetDistance = 2;
         private int _level = 1;
@@ -45,13 +57,31 @@ namespace ZFramework.GAS.Editor
             }
             Option("范围", value => _ranges = value); Option("假人", value => _dummy = value);
             Option("前后帧", value => _ghosts = value); Option("根位移", value => _trajectory = value); Option("音效", value => _sound = value);
+            options.Add(_preClip); _preClip.RegisterValueChangedCallback(_ => Sample());
             var distance = new FloatField("目标距离") { value = 2, style = { width = 145 } }; options.Add(distance);
             distance.labelElement.style.minWidth = 56; distance.labelElement.style.width = 56;
             distance.RegisterValueChangedCallback(e => { _targetDistance = Mathf.Max(0, e.newValue); Sample(); });
             var level = new IntegerField("等级") { value = 1, style = { width = 100 } }; options.Add(level);
             level.labelElement.style.minWidth = 30; level.labelElement.style.width = 30;
             level.RegisterValueChangedCallback(e => { _level = Mathf.Max(1, e.newValue); Sample(); });
-            _viewport = new IMGUIContainer(Draw) { style = { flexGrow = 1, minHeight = 150 } }; Add(_viewport);
+            var advanced=new Foldout{text="目标与表现预演",value=false,style={flexShrink=0}};Add(advanced);
+            var more=new ScrollView{style={maxHeight=110}};advanced.Add(more);
+            more.Add(_sectionFrom);_sectionFrom.RegisterValueChangedCallback(_=>Sample());
+            var count=new IntegerField("假人数量"){value=_dummyCount};more.Add(count);count.RegisterValueChangedCallback(e=>{_dummyCount=Mathf.Clamp(e.newValue,1,32);Sample();});
+            var layout=new EnumField("排布",_layout);more.Add(layout);layout.RegisterValueChangedCallback(e=>{_layout=(DummyLayout)e.newValue;Sample();});
+            var prefab=new UnityEditor.UIElements.ObjectField("假人 Prefab"){objectType=typeof(GameObject),allowSceneObjects=false};more.Add(prefab);
+            prefab.RegisterValueChangedCallback(e=>{_dummyPrefab=e.newValue as GameObject;Sample();});
+            var reaction=new UnityEditor.UIElements.ObjectField("受击片段"){objectType=typeof(AnimationClip),allowSceneObjects=false};more.Add(reaction);
+            reaction.RegisterValueChangedCallback(e=>{_reaction=e.newValue as AnimationClip;Sample();});
+            void TagField(string label,Action<string> setter){var f=new TextField(label){isDelayed=true};more.Add(f);f.RegisterValueChangedCallback(e=>{setter(e.newValue);Sample();});}
+            TagField("施法者标签",v=>_sourceTags=v);TagField("假人标签",v=>_targetTags=v);
+            var targetIndex=new IntegerField("瞄准假人（0 为地面）"){value=_aimIndex};more.Add(targetIndex);targetIndex.RegisterValueChangedCallback(e=>{_aimIndex=e.newValue;Sample();});
+            var sourceValue=new FloatField("条件属性样值 · 施法者");more.Add(sourceValue);sourceValue.RegisterValueChangedCallback(e=>{_sourceValue=e.newValue;Sample();});
+            var targetValue=new FloatField("条件属性样值 · 假人");more.Add(targetValue);targetValue.RegisterValueChangedCallback(e=>{_targetValue=e.newValue;Sample();});
+            var sim=new Toggle("模拟投射物与区域");more.Add(sim);sim.RegisterValueChangedCallback(e=>{_simulate=e.newValue;Sample();});
+            var overrides=new UnityEditor.UIElements.ObjectField("片段替换表"){objectType=typeof(SkillClipOverrideSet),allowSceneObjects=false};more.Add(overrides);
+            overrides.RegisterValueChangedCallback(e=>{_override=e.newValue as SkillClipOverrideSet;Sample();});
+            _viewport = new IMGUIContainer(Draw) { style = { flexGrow = 1, flexBasis=0,minHeight = 35 } }; Add(_viewport);
             _caption = new Label("拖动旋转 · 滚轮缩放 · 双击聚焦"); _caption.AddToClassList("preview-caption"); Add(_caption);
             doc.Playback.Changed += Sample;
             doc.Changed += Changed;
@@ -60,6 +90,9 @@ namespace ZFramework.GAS.Editor
         private void ProjectChanged() { if (_source != null) Load(); }
         private void Changed(ChangeSet change)
         {
+            _previewSections.Clear();if(_doc.Root?.Animation?.sections!=null)foreach(var s in _doc.Root.Animation.sections)if(s!=null)_previewSections.Add(s);
+            var choices=new List<string>{"无"};foreach(var s in _previewSections)choices.Add(s.displayName+" · "+s.start.ToString("0.##")+"s");
+            _sectionFrom.choices=choices;if(!choices.Contains(_sectionFrom.value))_sectionFrom.SetValueWithoutNotify("无");
             _tools?.Invalidate();
             if (_source != _doc.PreviewPrefab) Load();
             else if (_instance != null) { _vfx?.Dispose(); _vfx = new CueVfxPreview(_instance); }
@@ -68,6 +101,7 @@ namespace ZFramework.GAS.Editor
         public void Load()
         {
             Cleanup(); _source = _doc.PreviewPrefab; _error = null;
+            _preClip.SetEnabled(false);
             if (_source == null) return;
             try
             {
@@ -79,9 +113,18 @@ namespace ZFramework.GAS.Editor
                 foreach (var behaviour in _instance.GetComponentsInChildren<MonoBehaviour>(true)) if (behaviour != null) behaviour.enabled = false;
                 foreach (var animator in _instance.GetComponentsInChildren<Animator>(true)) animator.enabled = false;
                 foreach (var animation in _instance.GetComponentsInChildren<Animation>(true)) animation.enabled = false;
-                _sampler = AnimationAdapterRegistry.Resolve(_source).BeginPreview(_instance);
+                var adapter = AnimationAdapterRegistry.Resolve(_source);
+                _sampler = adapter.BeginPreview(_instance); _clips = adapter.EnumerateClips(_source);
+                var names = new List<string> { "无" }; string idle = "无";
+                foreach (var clip in _clips)
+                {
+                    names.Add(clip.Name);
+                    if (idle == "无" && (clip.Name.IndexOf("idle", StringComparison.OrdinalIgnoreCase) >= 0 || clip.Name.Contains("待机"))) idle = clip.Name;
+                }
+                _preClip.choices = names; _preClip.SetValueWithoutNotify(names.Contains(_preClip.value) ? _preClip.value : idle);
+                _preClip.SetEnabled(_sampler is IBlendPoseSampler);
                 _vfx = new CueVfxPreview(_instance);
-                _tools = new SkillPreviewTools();
+                _tools = new SkillPreviewTools(); _simulation=new SkillPreviewSimulation(_preview);
                 _bounds = new Bounds(_instance.transform.position, Vector3.one);
                 var renderers = _instance.GetComponentsInChildren<Renderer>();
                 if (renderers.Length > 0) { _bounds = renderers[0].bounds; foreach (var r in renderers) _bounds.Encapsulate(r.bounds); }
@@ -101,11 +144,38 @@ namespace ZFramework.GAS.Editor
             {
                 try
                 {
-                    var clips = AnimationAdapterRegistry.Resolve(_source).EnumerateClips(_source);
+                    var clips = _clips;
+                    string clipName=animation.ClipName; AnimationClip direct=null;
+                    bool acceptsClip=_source.GetComponentInChildren<SkillAnimator>(true)?.Backend is PlayableAnimationBackend;
+                    if((_override!=null && _override.TryGet(clipName,out var replacement,acceptsClip)) ||
+                        (_doc.Root.clipOverrides!=null && _doc.Root.clipOverrides.TryGet(clipName,out replacement,acceptsClip))){ if(!string.IsNullOrEmpty(replacement.replacement))clipName=replacement.replacement; direct=replacement.clip;}
                     float natural = animation.Duration;
-                    foreach (var clip in clips) if (clip.Name == animation.ClipName) { natural = clip.Length; break; }
-                    void Pose(float time) => _sampler.Sample(animation.ClipName, time / Mathf.Max(.001f, animation.Duration) * natural);
-                    _tools?.Rebuild(_instance, _doc, Pose, _ghosts, _trajectory, _ranges, _dummy, _targetDistance, _level);
+                    foreach (var clip in clips) if (clip.Name == clipName) { natural = clip.Length; break; }
+                    void Pose(float time)
+                    {
+                        float sample = time / Mathf.Max(.001f, animation.Duration) * natural;
+                        if(direct!=null && _source.GetComponentInChildren<SkillAnimator>(true)?.Backend is PlayableAnimationBackend)
+                        { _sampler.Sample("",0); direct.SampleAnimation(_instance.GetComponentInChildren<Animator>(true).gameObject,Mathf.Clamp01(time/animation.Duration)*direct.length); return; }
+                        if(!_doc.Playback.Live && _sampler is IBlendPoseSampler sectionSampler && _sectionFrom.index>0 && _sectionFrom.index<=_previewSections.Count)
+                        {
+                            var from=_previewSections[_sectionFrom.index-1];
+                            foreach(var to in _previewSections)
+                            {
+                                var jump=to.transition;float age=time-to.start;
+                                if(from.end==to.start || jump.duration<=0 || age<0 || age>=jump.duration)continue;
+                                float source=(from.end+(jump.mode==SkillBlendMode.Freeze?0:age))*natural/animation.Duration;
+                                sectionSampler.Sample(clipName,source,clipName,sample,jump.Evaluate(age/jump.duration));return;
+                            }
+                        }
+                        var blend = animation.BlendInSpec;
+                        if (_sampler is IBlendPoseSampler mixer && !_doc.Playback.Live && time < blend.duration && _preClip.value != "无")
+                            mixer.Sample(_preClip.value, blend.mode == SkillBlendMode.Freeze ? 0 : time, clipName, sample, blend.Evaluate(time / blend.duration));
+                        else _sampler.Sample(clipName, sample);
+                    }
+                    _tools?.Rebuild(_instance, _doc, Pose, _ghosts, _trajectory, false, false, _targetDistance, _level, ()=>
+                    {
+                        SimulateTargets();
+                    });
                     _tools?.Audio(animation, _doc.Playback.Time, _sound && _doc.Playback.Playing, _doc.Playback.SeekVersion, _doc.Playback.Speed);
                     Pose(_doc.Playback.Time);
                     _vfx?.Sample(animation, _doc.Playback.Time, Pose);
@@ -132,16 +202,25 @@ namespace ZFramework.GAS.Editor
                         cue.SetActive(_instance, active, elapsed);
                     }
                 }
-                catch (Exception ex) { _error = ex.Message; }
+                catch (Exception ex) { _error = ex.Message; _tools?.Audio(null, 0, false); }
             }
-            else _vfx?.Dispose();
-            _caption.text = _cueWarning ?? "拖动旋转 · 滚轮缩放 · 双击聚焦";
+            else { _vfx?.Dispose(); _tools?.Audio(null, 0, false);
+                if(_doc.Root!=null && _instance!=null && _simulation!=null)
+                    try{_tools.Rebuild(_instance,_doc,_=>{},false,false,false,false,_targetDistance,_level,SimulateTargets);}catch(Exception e){_error=e.Message;}
+            }
+            void SimulateTargets(){
+                _simulation.SourceTags=_sourceTags;_simulation.TargetTags=_targetTags;_simulation.AimIndex=_aimIndex;
+                _simulation.SourceAttribute=_sourceValue;_simulation.TargetAttribute=_targetValue;_simulation.Reaction=_reaction;
+                _simulation.Sample(_doc,_instance.transform,_dummy?_dummyCount:0,_layout,_targetDistance,_dummyPrefab,_level,_simulate,_tools,_ranges);
+                _doc.PreviewEnd=_simulate?_simulation.End:0;
+            }
+            _caption.text = _cueWarning ?? (_dummy && _simulation!=null?$"几何预演 · 命中 {_simulation.HitCount} / {_dummyCount}（不含阵营与物理遮挡）":"拖动旋转 · 滚轮缩放 · 双击聚焦");
             _caption.tooltip = _cueWarning;
             _viewport.MarkDirtyRepaint();
         }
         private void Draw()
         {
-            Rect rect = GUILayoutUtility.GetRect(10, 10000, 150, 10000);
+            Rect rect = GUILayoutUtility.GetRect(10, 10000, 35, 10000);
             if (rect.width <= 1 || rect.height <= 1) return;
             if (_preview == null)
             {
@@ -179,6 +258,7 @@ namespace ZFramework.GAS.Editor
         }
         private void Cleanup()
         {
+            _simulation?.Dispose(); _simulation=null; _doc.PreviewEnd=0;
             _tools?.Dispose(); _tools = null;
             _vfx?.Dispose(); _vfx = null;
             foreach (var cue in _cues) { try { cue.Dispose(); } catch (Exception e) { Debug.LogException(e); } } _cues.Clear();

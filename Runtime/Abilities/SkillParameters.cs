@@ -56,22 +56,24 @@ namespace ZFramework.GAS
     public sealed class EffectEvaluationContext
     {
         private readonly Dictionary<AttributeId, float> _source;
+        private AttributeSet _liveSource;
+        public bool HasSourceSnapshot => _source != null;
+        private EffectEvaluationContext _emptySourceCapture;
+        private EffectEvaluationContext _lastCapture;
+        private AttributeSet _lastSource;
+        private long _lastSourceVersion;
         public int Level { get; }
         public SkillParameterValues Parameters { get; }
         public EffectEvaluationContext(int level, SkillParameterValues parameters = null, AttributeSet source = null)
         {
             Level = Math.Max(1, level);
             Parameters = parameters ?? SkillParameterValues.Empty;
-            if (source != null)
-            {
-                _source = new Dictionary<AttributeId, float>(source.Count);
-                var attributes = new List<GameplayAttribute>(source.Count);
-                source.CopyTo(attributes);
-                foreach (var attribute in attributes) _source.Add(attribute.Id, attribute.CurrentValue);
-            }
+            if (source != null) _source = source.CaptureValues();
         }
         public float SourceValue(AttributeId id, AttributeSet fallback)
-            => _source != null ? (_source.TryGetValue(id, out var value) ? value : 0) : fallback?.GetCurrent(id) ?? 0;
+            => _source != null ? (_source.TryGetValue(id, out var value) ? value : 0) : (fallback ?? _liveSource)?.GetCurrent(id) ?? 0;
+        internal static EffectEvaluationContext Live(int level, AttributeSet source)
+            => new EffectEvaluationContext(level) { _liveSource = source };
         public float Parameter(string id)
         {
             var value = Parameters.Get(id);
@@ -80,12 +82,21 @@ namespace ZFramework.GAS
             return value.Number;
         }
         private EffectEvaluationContext(EffectEvaluationContext source, SkillParameterValues parameters)
-        { Level = source.Level; Parameters = parameters; _source = source._source; }
+        { Level = source.Level; Parameters = parameters; _source = source._source; _liveSource = source._liveSource; }
         public EffectEvaluationContext WithParameters(SkillParameterValues parameters)
             => new EffectEvaluationContext(this, parameters ?? SkillParameterValues.Empty);
         /// <summary>Legacy asynchronous tasks also need source captures when Core supplied only a frozen level.</summary>
         public EffectEvaluationContext CaptureSource(AttributeSet source)
-            => _source != null || source == null ? this : new EffectEvaluationContext(Level, Parameters, source);
+        {
+            if (_source != null || source == null) return this;
+            if (source.Count == 0) return _emptySourceCapture ??= new EffectEvaluationContext(Level, Parameters, source);
+            if (_lastSource != source || _lastSourceVersion != source.Version || _lastCapture == null)
+            {
+                _lastCapture = new EffectEvaluationContext(Level, Parameters, source);
+                _lastSource = source; _lastSourceVersion = source.Version;
+            }
+            return _lastCapture;
+        }
     }
 
     /// <summary>Program extension point for bounded, typed calculations; never parses scripts.</summary>

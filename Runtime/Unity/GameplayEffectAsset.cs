@@ -79,6 +79,9 @@ namespace ZFramework.GAS.Unity
     [CreateAssetMenu(menuName = "ZFramework GAS/Gameplay Effect", fileName = "NewGameplayEffect")]
     public sealed class GameplayEffectAsset : ScriptableObject
     {
+        // Keep identical serialized fields in players, including AssetBundles built without TypeTree.
+        [SerializeField, HideInInspector] private string editorCopyOrigin, editorCopyHash, editorCopyLocalHash, editorCopyAcceptedHash;
+        [SerializeField, HideInInspector] private int editorCopyVersion;
         [Header("时长")]
         [SerializeField] private EffectDurationPolicy durationPolicy = EffectDurationPolicy.Instant;
         [SerializeField] private float duration;

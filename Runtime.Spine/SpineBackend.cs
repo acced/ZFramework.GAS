@@ -10,6 +10,7 @@ namespace ZFramework.GAS.Unity.Spine
     {
         [Min(0)] public int trackIndex;
         [Min(0)] public float mixDuration = .1f;
+        public override AnimationBlendCapabilities BlendCapabilities => AnimationBlendCapabilities.SeekBlend;
         public override string BackendId => "spine";
         public override bool Validate(GameObject host, out string error)
         {
@@ -21,12 +22,14 @@ namespace ZFramework.GAS.Unity.Spine
         public override IAnimationDriver CreateDriver(GameObject host)
             => new SpineAnimationDriver(host.GetComponentInChildren<SkeletonAnimation>(true), trackIndex, mixDuration);
     }
-    public sealed class SpineAnimationDriver : IBlendingAnimationDriver
+    public sealed class SpineAnimationDriver : ISkillAnimationSpeed, IAdvancedBlendingDriver, ISeekableAnimationDriver
     {
         private readonly SkeletonAnimation _skeleton;
         private readonly int _track;
         private readonly float _mix;
         private TrackEntry _entry;
+        private float _speed;
+        public void SetLocalScale(float scale){if(_entry!=null)_entry.TimeScale=_speed*scale;}
         // 施放前这条轨道上的动画：结束时混回它（通常是待机），而不是回到绑定姿势。
         private global::Spine.Animation _previous;
         private bool _previousLoop;
@@ -50,10 +53,21 @@ namespace ZFramework.GAS.Unity.Spine
             }
             _entry = _skeleton.AnimationState.SetAnimation(_track, animation, loop);
             bool stretch = duration > 0 && animation.Duration > 0;
-            _entry.TimeScale = stretch ? animation.Duration / duration : 1;
+            _entry.TimeScale = _speed = stretch ? animation.Duration / duration : 1;
             // Spine 的混合按实际时间推进、不受 TimeScale 影响，换算后才与标记点同比缩放。
             if (blendIn >= 0) _entry.MixDuration = blendIn / _entry.TimeScale;
             return stretch ? duration : animation.Duration;
+        }
+        public AnimationBlendCapabilities Capabilities => AnimationBlendCapabilities.SeekBlend;
+        public float Play(string clip, float duration, bool loop, in SkillBlend blend) => Play(clip, duration, loop, blend.duration);
+        public void Stop(in SkillBlend blend) => Stop(blend.duration);
+        public void Seek(float normalizedTime) { if (_entry != null) _entry.TrackTime = normalizedTime * _entry.Animation.Duration; }
+        public bool SeekBlend(float normalizedTime, in SkillBlend blend)
+        {
+            if (_skeleton == null || _entry == null || _skeleton.AnimationState.GetCurrent(_track) != _entry) return false;
+            float speed = _entry.TimeScale;
+            _entry = _skeleton.AnimationState.SetAnimation(_track, _entry.Animation, _entry.Loop);
+            _entry.TimeScale = speed; _entry.MixDuration = blend.duration; Seek(normalizedTime); return true;
         }
         public void Advance(float normalizedTime) { }
         public void Stop() => Stop(_mix);

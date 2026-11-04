@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZFramework GAS 技能编辑器改进方案</title>
+<style>
+  :root {
+    --bg: #1b1d21; --panel: #23262b; --panel-2: #2a2e34; --line: #363b43;
+    --text: #d6d9de; --muted: #8d939c; --accent: #4f9cf5;
+    --ok: #4cc38a; --warn: #e7b24a; --bad: #e5604f;
+    --ability: #3d7be0; --anim: #d65a9c; --cue: #27a596; --effect: #46b36d; --flow: #9a6ce0; --task: #7f8c9c;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.7 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; }
+  nav { position: fixed; top: 0; left: 0; bottom: 0; width: 232px; background: var(--panel); border-right: 1px solid var(--line); padding: 20px 14px; overflow-y: auto; }
+  nav .brand { font-weight: 700; font-size: 15px; margin-bottom: 2px; }
+  nav .ver { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  nav a { display: block; color: var(--muted); text-decoration: none; padding: 4px 8px; border-radius: 4px; font-size: 13px; }
+  nav a:hover { background: var(--panel-2); color: var(--text); }
+  nav a .n { display: inline-block; width: 26px; color: var(--accent); font-family: var(--mono); font-size: 12px; }
+  main { margin-left: 232px; padding: 36px 56px 120px; max-width: 1280px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  h2 { font-size: 21px; margin: 56px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  h2 .n { color: var(--accent); font-family: var(--mono); margin-right: 10px; }
+  h3 { font-size: 16px; margin: 28px 0 10px; }
+  h4 { font-size: 14px; margin: 18px 0 6px; color: #fff; }
+  p { margin: 8px 0; }
+  .lead { color: var(--muted); font-size: 15px; }
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--panel-2); padding: 1px 5px; border-radius: 3px; }
+  pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.55; background: #15171a; border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  .kw { color: #c792ea; } .ty { color: #82aaff; } .cm { color: #6b7380; } .st { color: #c3e88d; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 16px; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel-2); font-weight: 600; }
+  td.c, th.c { text-align: center; }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: 1fr 1fr; } .g3 { grid-template-columns: repeat(3, 1fr); } .g4 { grid-template-columns: repeat(4, 1fr); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .card h4 { margin-top: 0; }
+  .card.bad { border-left: 3px solid var(--bad); } .card.ok { border-left: 3px solid var(--ok); }
+  .card.warn { border-left: 3px solid var(--warn); } .card.info { border-left: 3px solid var(--accent); }
+  .metric { font-size: 26px; font-weight: 700; } .metric small { font-size: 13px; color: var(--muted); font-weight: 400; }
+  .tag { display: inline-block; font-size: 11.5px; padding: 0 7px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); margin: 1px 2px; white-space: nowrap; }
+  .tag.p1 { border-color: var(--bad); color: #ffb3a8; } .tag.p2 { border-color: var(--warn); color: #ffe0a0; } .tag.p3 { border-color: var(--muted); }
+  .tag.rt { border-color: var(--flow); color: #d5c0ff; } .tag.ed { border-color: var(--accent); color: #b8d6ff; }
+  .yes { color: var(--ok); } .no { color: var(--bad); } .part { color: var(--warn); }
+  ul, ol { padding-left: 22px; margin: 6px 0; } li { margin: 3px 0; }
+  .muted { color: var(--muted); } .ref { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .callout { background: #1f2a3a; border: 1px solid #2f4566; border-radius: 6px; padding: 12px 16px; margin: 14px 0; }
+  .callout.warn { background: #33291a; border-color: #5c4824; }
+
+  /* 甘特 */
+  .gantt { display: grid; grid-template-columns: 170px repeat(13, 1fr); gap: 4px 2px; font-size: 12px; align-items: center; }
+  .gantt .h { color: var(--muted); text-align: center; font-family: var(--mono); }
+  .gantt .row { grid-column: 1; color: var(--text); white-space: nowrap; }
+  .gantt .bar { height: 22px; border-radius: 4px; display: flex; align-items: center; padding: 0 8px; color: #fff; font-size: 11.5px; white-space: nowrap; overflow: hidden; }
+  .gantt .float { background: repeating-linear-gradient(45deg, #3a3f48, #3a3f48 6px, #2f333a 6px, #2f333a 12px); color: var(--muted); }
+
+  /* 界面示意 */
+  .mock { border: 1px solid #111; border-radius: 6px; overflow: hidden; background: #191919; font-size: 11.5px; line-height: 1.4; color: #c8c8c8; box-shadow: 0 10px 30px rgba(0,0,0,.4); margin: 12px 0; }
+  .mock .titlebar { background: #282828; padding: 4px 10px; border-bottom: 1px solid #111; display: flex; gap: 8px; align-items: center; }
+  .mock .tab { background: #383838; padding: 2px 10px; border-radius: 3px 3px 0 0; }
+  .mock .tab.on { background: #2f6fc9; color: #fff; }
+  .mock .toolbar { background: #303030; padding: 5px 8px; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid #111; flex-wrap: wrap; }
+  .mock .btn { background: #444; border: 1px solid #222; padding: 1px 8px; border-radius: 3px; }
+  .mock .btn.on { background: #2f6fc9; color: #fff; }
+  .mock .crumb { color: #9ab; }
+  .mock svg { display: block; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 6px 0; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .ease { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; }
+  .ease div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px; text-align: center; font-size: 11px; color: var(--muted); }
+  .ease svg { width: 100%; height: 46px; }
+  .phase-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand">技能编辑器改进方案</div>
+  <div class="ver">对标 UE 蓝图 · 团结 AnimGraph 1.0.0<br>2026-11-03</div>
+  <a href="#summary"><span class="n">00</span>结论摘要</a>
+  <a href="#gap"><span class="n">01</span>差距对照</a>
+  <a href="#roadmap"><span class="n">02</span>路线与依赖</a>
+  <a href="#p1"><span class="n">P1</span>动画混合与遮罩</a>
+  <a href="#p2"><span class="n">P2</span>动作流子图</a>
+  <a href="#p3"><span class="n">P3</span>蓝图式调试</a>
+  <a href="#p4"><span class="n">P4</span>预览与内容能力</a>
+  <a href="#p5"><span class="n">P5</span>编辑体验·性能·平台</a>
+  <a href="#risk"><span class="n">03</span>风险与对策</a>
+  <a href="#accept"><span class="n">04</span>验收与测试清单</a>
+  <a href="#reuse"><span class="n">05</span>复用清单</a>
+</nav>
+<main>
+<h1>ZFramework GAS 技能编辑器改进方案</h1>
+<p class="lead">在现有「三栏工作台 + 结构图 + 时间轴 + 预览 + 运行时调试」基础上，分五个阶段补齐与 UE 蓝图编辑器、团结 AnimGraph 1.0.0 的差距。数据格式保持兼容，每个阶段独立交付、独立验收。</p>
+
+<h2 id="summary"><span class="n">00</span>结论摘要</h2>
+<div class="grid g4">
+  <div class="card"><div class="metric">5 <small>个阶段</small></div><div class="muted">约 13 周，P5 的后 3 项可随时插入</div></div>
+  <div class="card"><div class="metric">3 <small>处核心差距</small></div><div class="muted">混合硬切、逻辑不可视、调试无数据</div></div>
+  <div class="card"><div class="metric">0 <small>次格式破坏</small></div><div class="muted">只新增字段，流程图是现有数组的投影</div></div>
+  <div class="card"><div class="metric">0 B <small>热路径分配</small></div><div class="muted">调试钩子无订阅时只做一次空判断</div></div>
+</div>
+<div class="grid g3" style="margin-top:14px">
+  <div class="card bad"><h4>动画混合是硬切／线性</h4>
+    <p>Section 跳转直接硬 Seek <span class="ref">AnimationTask.cs:213</span>；混合只有线性 CrossFade <span class="ref">PlayableAnimationBackend.cs:147-161</span>；遮罩按后端全局一份 <span class="ref">:87</span>。</p></div>
+  <div class="card bad"><h4>技能逻辑不可视</h4>
+    <p><code>SkillAction</code> 是 SerializeReference 嵌套数组，只能在 Details 里折叠编辑；结构图节点是资产，表达的是引用关系，看不出执行顺序和分支。</p></div>
+  <div class="card warn"><h4>调试只能停住，看不到数据</h4>
+    <p>断点只能在运行时窗口按 ID 设；暂停时没有参数、目标等监视值；没有执行路径高亮和事件历史，时序问题只能打日志。</p></div>
+</div>
+
+<h2 id="gap"><span class="n">01</span>差距对照</h2>
+<p class="muted">AnimGraph 一列来自《团结引擎动画系统｜AnimGraph 1.0.0 正式版发布》原文；「现状」一列按当前代码逐项核对。</p>
+<table>
+  <tr><th style="width:17%">能力</th><th style="width:22%">UE 蓝图</th><th style="width:22%">团结 AnimGraph 1.0.0</th><th style="width:25%">本项目现状</th><th class="c" style="width:8%">阶段</th></tr>
+  <tr><td>过渡曲线</td><td>Montage 混合曲线</td><td>17 种缓动预设 + 自定义曲线，作用于姿态和根运动权重</td><td class="no">只有线性</td><td class="c">P1</td></tr>
+  <tr><td>过渡模式</td><td>Inertialization 节点</td><td>CrossBlend / Inertialization / DeadBlending / FreezeBlend</td><td class="no">只有 CrossFade</td><td class="c">P1</td></tr>
+  <tr><td>段落跳转过渡</td><td>Montage Section 带混合</td><td>状态机 Transition 可配时长和曲线</td><td class="no">硬 Seek，姿态跳变</td><td class="c">P1</td></tr>
+  <tr><td>局部遮罩</td><td>Layered Blend per Bone</td><td>Avatar Mask / Avatar Weight Mask，单骨骼可公开为 Bool / Float 端口</td><td class="part">后端级一份 AvatarMask，无权重</td><td class="c">P1 / P4</td></tr>
+  <tr><td>朝目标修正</td><td>Aim Offset</td><td>Aim Offset（Simple / Look At）</td><td class="no">无</td><td class="c">P4</td></tr>
+  <tr><td>运行时替换片段</td><td>Anim Layer / Linked Graph</td><td>运行时切换 AnimationClip</td><td class="no">换武器只能复制技能</td><td class="c">P4</td></tr>
+  <tr><td>逻辑可视化</td><td>执行引脚、分支、函数、宏</td><td>Function 图、Script2Function</td><td class="no">Details 嵌套列表</td><td class="c">P2</td></tr>
+  <tr><td>提取函数</td><td>Collapse to Function</td><td>—</td><td class="no">需手动建模块</td><td class="c">P2</td></tr>
+  <tr><td>断点与监视</td><td>F9 断点、引脚值、调用栈</td><td>—</td><td class="part">仅运行时窗口按 ID 设断点，无监视</td><td class="c">P3</td></tr>
+  <tr><td>执行可视</td><td>执行线发光</td><td>State Machine Live Link</td><td class="part">播放头跟随、资产级高亮</td><td class="c">P3</td></tr>
+  <tr><td>事件历史</td><td>Gameplay Debugger、Visual Logger</td><td>—</td><td class="no">只有当前快照</td><td class="c">P3</td></tr>
+  <tr><td>多目标预览</td><td>—（Persona 单角色）</td><td>—</td><td class="part">单个线框假人，范围常显</td><td class="c">P4</td></tr>
+  <tr><td>表现轨道</td><td>Camera Shake、Time Dilation</td><td>—</td><td class="no">无相机／顿帧／时间缩放</td><td class="c">P4</td></tr>
+  <tr><td>全局查找</td><td>Find in Blueprints</td><td>—</td><td class="part">只能按资产或标签查引用</td><td class="c">P5</td></tr>
+  <tr><td>求值降频</td><td>URO（Update Rate Optimization）</td><td>UpdateFrequencyMode + PhaseOffset</td><td class="no">每单位每帧</td><td class="c">P5</td></tr>
+  <tr><td>平台</td><td>全平台</td><td>iOS / Android / OpenHarmony / 小游戏</td><td class="no">IL2CPP 未验证，无 link.xml</td><td class="c">P5</td></tr>
+</table>
+<div class="callout">已经追平或领先的部分不在本方案范围内：时间轴（标记、Cue、标签窗口、Section、运行期轨道、混入混出）、结构图（搜索创建、注释、重路由、小地图）、参数集与变体、校验一键修复、语义 Diff、运行时调试窗口与 Live Link、预览虚影／轨迹／音效。</div>
+
+<h2 id="roadmap"><span class="n">02</span>路线与依赖</h2>
+<div class="gantt">
+  <div></div><div class="h">W1</div><div class="h">W2</div><div class="h">W3</div><div class="h">W4</div><div class="h">W5</div><div class="h">W6</div><div class="h">W7</div><div class="h">W8</div><div class="h">W9</div><div class="h">W10</div><div class="h">W11</div><div class="h">W12</div><div class="h">W13</div>
+  <div class="row">P1 动画混合与遮罩</div><div class="bar" style="grid-column:2/4;background:var(--anim)">混合描述 · 驱动 · SeekBlend · 遮罩</div>
+  <div class="row">P2a 流程图（只读）</div><div class="bar" style="grid-column:4/6;background:var(--flow)">投影 · 导航 · 问题标注</div>
+  <div class="row">P3 蓝图式调试</div><div class="bar" style="grid-column:6/8;background:var(--bad)">钩子 · 事件记录 · 断点 · 监视</div>
+  <div class="row">P2b 流程图（编辑）</div><div class="bar" style="grid-column:8/10;background:var(--flow)">创建 · 重排 · 提取模块</div>
+  <div class="row">P4 预览与内容</div><div class="bar" style="grid-column:10/13;background:var(--cue)">多目标 · 模拟 · 新轨道 · 替换表</div>
+  <div class="row">P5 编辑体验</div><div class="bar" style="grid-column:13/15;background:var(--ability)">查找 · 参数面板</div>
+  <div class="row">P5 降频 / 基线 / IL2CPP</div><div class="bar float" style="grid-column:2/15">可随时插入，不依赖其他阶段</div>
+</div>
+<ul style="margin-top:14px">
+  <li><b>P3 依赖 P2a</b>：断点开关、执行路径高亮都画在流程节点上。</li>
+  <li><b>P2b 放在 P3 之后</b>：先有调试能力，编辑流程图时出错能立刻定位。</li>
+  <li><b>P4 的骨骼加权遮罩依赖 P1</b> 的双技能层和 P4 自己的 Aim Offset 作业基础设施。</li>
+  <li>每个阶段交付：代码、测试、<code>Docs~/</code> 验证记录、更新后的 README 和 EditorGuide。</li>
+</ul>
+
+<!-- ============================ P1 ============================ -->
+<h2 id="p1"><span class="n">P1</span>动画混合与遮罩</h2>
+<div class="phase-head"><span class="tag p1">优先级 1</span><span class="tag">约 2 周</span><span class="tag rt">运行时</span><span class="tag ed">编辑器</span></div>
+<p><b>目标</b>：Section 跳转不再跳姿态；混入、混出和段落过渡可以选曲线和模式；遮罩可以按技能配置。</p>
+
+<h3>1. 混合描述 SkillBlend</h3>
+<pre><code><span class="cm">// Runtime/Unity/SkillBlend.cs（新增）</span>
+<span class="kw">public enum</span> <span class="ty">SkillBlendCurve</span> { Linear, SineIn, SineOut, SineInOut, QuadIn, QuadOut, QuadInOut,
+    CubicIn, CubicOut, CubicInOut, ExpoIn, ExpoOut, ExpoInOut, BackIn, BackOut, BackInOut, Custom }
+<span class="kw">public enum</span> <span class="ty">SkillBlendMode</span> { CrossFade, Freeze, Inertialize }
+
+[Serializable] <span class="kw">public struct</span> <span class="ty">SkillBlend</span>
+{
+    <span class="kw">public float</span> duration;              <span class="cm">// 秒；随攻速缩放的规则与现有 blendIn 一致</span>
+    <span class="kw">public</span> <span class="ty">SkillBlendCurve</span> curve;
+    <span class="kw">public</span> <span class="ty">AnimationCurve</span> custom;      <span class="cm">// 仅 curve == Custom 时使用，0..1 → 0..1</span>
+    <span class="kw">public</span> <span class="ty">SkillBlendMode</span> mode;
+    <span class="kw">public float</span> Evaluate(<span class="kw">float</span> t);    <span class="cm">// 无分配的缓动函数表</span>
+}</code></pre>
+<div class="ease">
+  <div><svg viewBox="0 0 60 40"><path d="M4 36 L56 4" stroke="#4f9cf5" fill="none" stroke-width="2"/></svg>Linear</div>
+  <div><svg viewBox="0 0 60 40"><path d="M4 36 C30 36 40 30 56 4" stroke="#4f9cf5" fill="none" stroke-width="2"/></svg>QuadIn</div>
+  <div><svg viewBox="0 0 60 40"><path d="M4 36 C20 10 30 4 56 4" stroke="#4f9cf5" fill="none" stroke-width="2"/></svg>QuadOut</div>
+  <div><svg viewBox="0 0 60 40"><path d="M4 36 C30 36 30 4 56 4" stroke="#4f9cf5" fill="none" stroke-width="2"/></svg>CubicInOut</div>
+  <div><svg viewBox="0 0 60 40"><path d="M4 36 C40 36 50 30 56 4" stroke="#4f9cf5" fill="none" stroke-width="2"/></svg>ExpoIn</div>
+  <div><svg viewBox="0 0 60 40"><path d="M4 36 C8 8 18 4 56 4" stroke="#4f9cf5" fill="none" stroke-width="2"/></svg>ExpoOut</div>
+  <div><svg viewBox="0 0 60 40"><path d="M4 36 C14 30 20 42 30 20 S 48 2 56 4" stroke="#4f9cf5" fill="none" stroke-width="2"/></svg>BackIn</div>
+  <div><svg viewBox="0 0 60 40"><path d="M4 36 C14 30 26 6 34 14 S 48 2 56 4" stroke="#e7b24a" fill="none" stroke-width="2" stroke-dasharray="3 2"/></svg>Custom</div>
+</div>
+<ul>
+  <li><code>SkillAnimationAsset</code> 保留 <code>blendIn</code>/<code>blendOut</code> 时长字段，新增 <code>blendInCurve</code>、<code>blendInMode</code>、<code>blendOutCurve</code>、<code>blendOutMode</code>；<code>SkillAnimationDefinition</code> 暴露 <code>BlendInSpec</code>/<code>BlendOutSpec</code>。旧资产默认 Linear + CrossFade，行为不变。</li>
+  <li><code>AnimationSection</code> <span class="ref">SkillRuntimeTracks.cs:8</span> 新增 <code>SkillBlend transition</code>：仅在「非连续跳入本段」时使用。连续衔接（下一段起点等于本段终点）仍然不 Seek，不需要过渡。</li>
+</ul>
+
+<h3>2. 驱动能力扩展</h3>
+<pre><code><span class="cm">// Runtime/Unity/AnimationDriver.cs</span>
+[Flags] <span class="kw">public enum</span> <span class="ty">AnimationBlendCapabilities</span> { None = 0, Curve = 1, SeekBlend = 2, Freeze = 4, Inertialize = 8 }
+
+<span class="kw">public interface</span> <span class="ty">IAdvancedBlendingDriver</span> : <span class="ty">IBlendingAnimationDriver</span>
+{
+    <span class="ty">AnimationBlendCapabilities</span> Capabilities { <span class="kw">get</span>; }
+    <span class="kw">float</span> Play(<span class="kw">string</span> clip, <span class="kw">float</span> duration, <span class="kw">bool</span> loop, <span class="kw">in</span> <span class="ty">SkillBlend</span> blendIn);
+    <span class="kw">void</span>  Stop(<span class="kw">in</span> <span class="ty">SkillBlend</span> blendOut);
+    <span class="kw">bool</span>  SeekBlend(<span class="kw">float</span> normalizedTime, <span class="kw">in</span> <span class="ty">SkillBlend</span> blend);  <span class="cm">// false = 不支持，调用方退回硬 Seek</span>
+}</code></pre>
+<table>
+  <tr><th>后端</th><th>曲线</th><th>SeekBlend</th><th>Freeze</th><th>Inertialize</th></tr>
+  <tr><td>Playable</td><td class="yes">权重插值走缓动函数 <span class="ref">:147-161</span></td><td class="yes">新增同片段 ClipPlayable 定位到目标时间，复用多输入淡入</td><td class="yes">复制当前时间的 ClipPlayable，速度 0</td><td class="part">第二步：在 <code>PreviousPose</code> 作业钩子 <span class="ref">:56</span> 上做骨骼偏移衰减</td></tr>
+  <tr><td>Animator</td><td class="no">不支持（警告）</td><td class="yes"><code>CrossFadeInFixedTime</code> 带 normalizedTimeOffset</td><td class="no">—</td><td class="no">—</td></tr>
+  <tr><td>Spine</td><td class="no">—</td><td class="yes"><code>SetAnimation</code> + <code>TrackTime</code> + <code>MixDuration</code>（顺带补上 Seek）</td><td class="no">—</td><td class="no">—</td></tr>
+  <tr><td>Legacy / Sprite</td><td class="no">—</td><td class="no">保持硬切</td><td class="no">—</td><td class="no">—</td></tr>
+</table>
+<p>不支持的能力自动降级：曲线退成线性，SeekBlend 退成硬 Seek，Freeze / Inertialize 退成 CrossFade。降级同时由校验给出警告，不会静默改变观感。</p>
+
+<h3>3. AnimationTask 接入</h3>
+<ul>
+  <li><b>构造</b> <span class="ref">AnimationTask.cs:119</span>：有 <code>IAdvancedBlendingDriver</code> 时传入 <code>BlendInSpec</code>，否则走现有时长接口。</li>
+  <li><b>段落跳转</b> <span class="ref">:213</span>：目标段配置了 <code>transition</code> 且驱动支持时调用 <code>SeekBlend</code>，否则硬 Seek。标记、窗口、Cue 的时间轴语义完全不变，只改姿态。</li>
+  <li><b>结束</b> <span class="ref">:359</span>：传入 <code>BlendOutSpec</code>。</li>
+</ul>
+
+<h3>4. 按技能遮罩：双技能层交替</h3>
+<div class="mock">
+  <div class="titlebar"><span class="tab on">PlayableGraph</span><span class="muted">Playable 驱动改造后</span></div>
+  <svg viewBox="0 0 900 190" width="100%">
+    <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8d939c"/></marker></defs>
+    <rect x="20" y="20" width="190" height="40" rx="6" fill="#2a2e34" stroke="#555"/><text x="34" y="45" fill="#ddd" font-size="13">输入 0：基础姿态（Animator）</text>
+    <rect x="20" y="75" width="190" height="40" rx="6" fill="#3a2433" stroke="#d65a9c"/><text x="34" y="92" fill="#ddd" font-size="13">输入 1：技能层 A</text><text x="34" y="108" fill="#d8a" font-size="11">遮罩：上半身 · 淡出中</text>
+    <rect x="20" y="130" width="190" height="40" rx="6" fill="#3a2433" stroke="#d65a9c"/><text x="34" y="147" fill="#ddd" font-size="13">输入 2：技能层 B</text><text x="34" y="163" fill="#d8a" font-size="11">遮罩：全身 · 淡入中</text>
+    <rect x="360" y="60" width="200" height="70" rx="8" fill="#23262b" stroke="#4f9cf5"/><text x="380" y="90" fill="#fff" font-size="14">AnimationLayerMixer</text><text x="380" y="112" fill="#9ab" font-size="12">3 输入 · 每层独立 mask/additive</text>
+    <rect x="690" y="75" width="180" height="40" rx="6" fill="#2a2e34" stroke="#555"/><text x="712" y="100" fill="#ddd" font-size="13">AnimationPlayableOutput</text>
+    <path d="M210 40 L360 80" stroke="#8d939c" marker-end="url(#ar)"/><path d="M210 95 L360 95" stroke="#8d939c" marker-end="url(#ar)"/><path d="M210 150 L360 110" stroke="#8d939c" marker-end="url(#ar)"/><path d="M560 95 L690 95" stroke="#8d939c" marker-end="url(#ar)"/>
+  </svg>
+</div>
+<ul>
+  <li><code>SkillAnimationAsset</code> 新增 <code>AvatarMask mask</code>、<code>bool additive</code>、<code>float layerWeight = 1</code>，留空沿用后端设置。</li>
+  <li>新技能总在空闲层上设置自己的遮罩，旧技能在原层上带着原遮罩淡出，所以「上半身技能」接「全身技能」时不会出现遮罩突变。</li>
+  <li>非 Playable 后端忽略该设置，由校验提示。按骨骼加权遮罩放到 P4，和 Aim Offset 共用作业基础设施。</li>
+</ul>
+
+<h3>5. 编辑器</h3>
+<div class="mock">
+  <div class="toolbar"><span class="btn">▶</span><span class="btn">适配</span><span class="crumb">动画 · 连斩</span><span style="flex:1"></span><span class="btn">前置动画：待机 ▾</span></div>
+  <svg viewBox="0 0 900 150" width="100%">
+    <rect x="0" y="0" width="900" height="150" fill="#1d2026"/>
+    <text x="10" y="22" fill="#8d939c" font-size="11">片段</text>
+    <rect x="80" y="10" width="800" height="22" fill="#3a2433" stroke="#d65a9c"/>
+    <path d="M80 32 C110 32 120 10 150 10" stroke="#ffd" fill="none" stroke-width="2"/><text x="84" y="46" fill="#d8a" font-size="10">混入 · CubicInOut</text>
+    <path d="M820 10 C850 10 860 32 880 32" stroke="#ffd" fill="none" stroke-width="2"/><text x="806" y="46" fill="#d8a" font-size="10">混出 · Freeze</text>
+    <text x="10" y="80" fill="#8d939c" font-size="11">Section</text>
+    <rect x="80" y="66" width="260" height="22" fill="#2b3240" stroke="#4f9cf5"/><text x="88" y="81" fill="#cde" font-size="11">一段</text>
+    <rect x="340" y="66" width="260" height="22" fill="#2b3240" stroke="#4f9cf5"/><text x="348" y="81" fill="#cde" font-size="11">二段</text>
+    <rect x="600" y="66" width="280" height="22" fill="#2b3240" stroke="#4f9cf5"/><text x="608" y="81" fill="#cde" font-size="11">收招</text>
+    <path d="M600 88 C615 88 620 66 640 66" stroke="#e7b24a" fill="none" stroke-width="2"/><text x="604" y="102" fill="#e7b24a" font-size="10">跳入过渡 0.08s · ExpoOut</text>
+    <path d="M340 77 C440 40 520 40 600 77" stroke="#e7b24a" fill="none" stroke-dasharray="4 3"/><text x="430" y="48" fill="#e7b24a" font-size="10">QueueSection → 收招</text>
+    <text x="10" y="130" fill="#8d939c" font-size="11">标记</text><path d="M250 120 l6 6 l-6 6 l-6 -6 z" fill="#4cc38a"/><path d="M500 120 l6 6 l-6 6 l-6 -6 z" fill="#4cc38a"/>
+  </svg>
+</div>
+<ul>
+  <li>时间轴 <code>BlendRamps</code> <span class="ref">TimelinePanel.cs:341</span> 按曲线画斜坡、按模式着色；Section 起点画出跳入过渡。</li>
+  <li>Details 提供曲线预设下拉框和缩略图，选 Custom 时显示曲线编辑器。</li>
+  <li><b>预览支持混合</b>：新增 <code>IBlendPoseSampler.Sample(clipA, tA, clipB, tB, w)</code>。<code>ClipPoseSampler</code> 先采样 A 记录骨骼，再采样 B，位置线性插值、旋转球面插值；Spine 采样器用 <code>Apply(alpha)</code>。预览面板加「前置动画」选项（默认待机），可以直接看混入和段落过渡。</li>
+</ul>
+
+<h3>6. 校验与测试</h3>
+<div class="grid g2">
+  <div class="card info"><h4>新增校验</h4><ul>
+    <li>过渡时长超过段长 → 错误。</li>
+    <li>后端不支持所选曲线、模式或 SeekBlend → 警告，并说明降级结果。</li>
+    <li>非 Playable 后端配置了技能遮罩 → 警告。</li></ul></div>
+  <div class="card ok"><h4>测试</h4><ul>
+    <li>Editor：Playable 真实图上的曲线权重、两层遮罩交替、SeekBlend 输入数量与权重守恒、降级路径。</li>
+    <li>PlayMode：Section 跳转那一帧骨骼位移低于阈值（证明不跳姿态）；Animator 后端 SeekBlend 的偏移正确。</li>
+    <li>Core 零分配断言保持。</li></ul></div>
+</div>
+
+<!-- ============================ P2 ============================ -->
+<h2 id="p2"><span class="n">P2</span>动作流子图</h2>
+<div class="phase-head"><span class="tag p1">优先级 2</span><span class="tag">约 3 周（P2a 2 周 + P2b 1–2 周）</span><span class="tag ed">编辑器</span></div>
+<p><b>目标</b>：标记、激活动作、模块下的动作树，可以像蓝图执行流一样查看和编辑。<b>数据结构不变</b>：图只是现有 <code>SkillAction[]</code> 数组的投影，不引入第二份数据源。</p>
+
+<div class="mock">
+  <div class="titlebar"><span class="tab">结构图</span><span class="tab on">流程</span><span class="tab">能力设置</span><span class="tab">消息</span></div>
+  <div class="toolbar"><span class="crumb">斩击 › 动画 · 斩击 › 标记「命中」 › 扇形斩击动作（模块）</span><span style="flex:1"></span><span class="btn">自动排布</span><span class="btn">提取为模块</span></div>
+  <svg viewBox="0 0 900 330" width="100%">
+    <defs><marker id="ex" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#ddd"/></marker></defs>
+    <rect width="900" height="330" fill="#202226"/>
+    <!-- entry -->
+    <rect x="20" y="120" width="130" height="56" rx="8" fill="#2a2e34" stroke="#4cc38a" stroke-width="2"/><text x="34" y="142" fill="#fff" font-size="13">◆ 标记「命中」</text><text x="34" y="162" fill="#8d939c" font-size="11">0.42s</text>
+    <!-- conditional -->
+    <rect x="200" y="100" width="170" height="96" rx="8" fill="#2b2640" stroke="#9a6ce0" stroke-width="2"/><text x="214" y="122" fill="#fff" font-size="13">条件</text><text x="214" y="142" fill="#bba" font-size="11">需要标签 State.Empowered</text>
+    <text x="300" y="166" fill="#9fd" font-size="11" text-anchor="end">满足 ▶</text><text x="300" y="186" fill="#fb9" font-size="11" text-anchor="end">不满足 ▶</text>
+    <circle cx="370" cy="162" r="5" fill="#9fd"/><circle cx="370" cy="182" r="5" fill="#fb9"/>
+    <!-- true branch -->
+    <rect x="440" y="40" width="190" height="70" rx="8" fill="#23302a" stroke="#46b36d" stroke-width="2"/><text x="454" y="62" fill="#fff" font-size="13">施加效果</text><text x="454" y="82" fill="#bcb" font-size="11">伤害 · 强化斩击</text><text x="454" y="98" fill="#bcb" font-size="11">扇形 · 半径 {范围} · 110°</text>
+    <rect x="690" y="40" width="180" height="56" rx="8" fill="#2b2a24" stroke="#e7b24a" stroke-width="2"/><text x="704" y="62" fill="#fff" font-size="13">发送事件</text><text x="704" y="82" fill="#cc9" font-size="11">Event.Slash.Hit</text>
+    <!-- false branch -->
+    <rect x="440" y="200" width="190" height="70" rx="8" fill="#23302a" stroke="#46b36d" stroke-width="2"/><text x="454" y="222" fill="#fff" font-size="13">施加效果</text><text x="454" y="242" fill="#bcb" font-size="11">伤害 · 斩击</text><text x="454" y="258" fill="#bcb" font-size="11">扇形 · 半径 {基础范围} · 90°</text>
+    <rect x="690" y="206" width="180" height="56" rx="8" fill="#2a2e34" stroke="#e5604f" stroke-width="2"/><text x="704" y="228" fill="#fff" font-size="13">● 生成预制体</text><text x="704" y="248" fill="#e99" font-size="11">断点 · 地面裂痕</text>
+    <!-- edges -->
+    <path d="M150 148 L200 148" stroke="#ddd" stroke-width="2" marker-end="url(#ex)"/>
+    <path d="M370 162 C410 162 400 75 440 75" stroke="#9fd" stroke-width="2.5" marker-end="url(#ex)"/>
+    <path d="M370 182 C410 182 400 235 440 235" stroke="#fb9" stroke-width="2" marker-end="url(#ex)"/>
+    <path d="M630 68 L690 68" stroke="#ddd" stroke-width="2" marker-end="url(#ex)"/><text x="640" y="60" fill="#8d939c" font-size="10">然后</text>
+    <path d="M630 235 L690 235" stroke="#ddd" stroke-width="2" marker-end="url(#ex)"/>
+    <text x="440" y="310" fill="#9fd" font-size="11">■ 绿色加粗连线 = 最近一次施放实际走过的路径（P3 执行高亮）</text>
+  </svg>
+</div>
+
+<h3>节点模型</h3>
+<table>
+  <tr><th style="width:18%">元素</th><th>规则</th></tr>
+  <tr><td>入口节点</td><td>标记（<code>SkillAnimationAsset.markers[].actions</code>）、激活动作（<code>GameplayAbilityAsset.activationActions</code>）、模块（<code>SkillActionModuleAsset.actions</code>），每个所有者一个。</td></tr>
+  <tr><td>动作节点</td><td>一个 <code>SkillAction</code> 一个节点，以 action id（已有的 GUID）为键；校验、导航、调试器都已经按这个 id 工作。</td></tr>
+  <tr><td>顺序引脚「然后」</td><td>对应数组中的下一个元素。数组顺序就是执行顺序。</td></tr>
+  <tr><td>分支引脚</td><td>凡是类型为 <code>SkillAction[]</code> 的字段，反射自动生成一个分支输出：<code>whenTrue/whenFalse</code>、<code>onHit</code>、<code>onPeriod</code>、<code>onSuccess/onTimeout/onCancel</code>。新增 <code>[FlowBranch("命中时")]</code> 特性命名，项目自定义的动作也自动获得分支引脚。</td></tr>
+  <tr><td>节点主体</td><td>内嵌关键字段（复用 <code>StrategyDrawer</code>，嵌套数组除外）；完整字段仍在 Details 中编辑。</td></tr>
+  <tr><td>独立回调标识</td><td>场景归属的 <code>onHit</code>/<code>onPeriod</code> 和 <code>onCancel</code> 连线用虚线，提示该分支不能放 Wait 或能力归属任务（与构建期限制一致）。</td></tr>
+  <tr><td>布局</td><td><code>LayoutStore</code> 升级 v3，新增 <code>flow[{owner, actionId, position}]</code>；未保存位置时按树形从左到右自动排布。</td></tr>
+</table>
+<pre><code><span class="cm">// LayoutStore v3（存放在根资产 importer 的 userData，向下兼容 v2）</span>
+{ <span class="st">"schema"</span>: <span class="st">"ZFramework.GAS.Layout.v3"</span>,
+  <span class="st">"nodes"</span>: [...], <span class="st">"comments"</span>: [...], <span class="st">"reroutes"</span>: [...],
+  <span class="st">"flow"</span>: [ { <span class="st">"owner"</span>: <span class="st">"guid:localId#marker:3f2a…"</span>, <span class="st">"actionId"</span>: <span class="st">"9c1e…"</span>, <span class="st">"position"</span>: { <span class="st">"x"</span>: 440, <span class="st">"y"</span>: 40 } } ] }</code></pre>
+
+<h3>分两步交付</h3>
+<div class="grid g2">
+  <div class="card info"><h4>P2a 只读（先交付）</h4><ul>
+    <li><code>Editor/Flow/SkillFlowView.cs</code>：作为 <code>_graphHost</code> 的子视图，<code>centerTabs</code> 增加「流程」标签 <span class="ref">SkillEditorWindow.cs:80-112</span>。</li>
+    <li>入口：双击时间轴标记、双击结构图标记端口、Details「在流程中打开」。</li>
+    <li>选中联动 Details；校验问题标在节点上。</li>
+    <li>顺带修复 <code>SkillConfigurationRule</code> 不填 Track 的问题（改为 <code>@field</code>），消息面板点击可定位到具体动作。</li>
+    <li>CallModule 双击进入模块，顶部面包屑可返回。</li></ul></div>
+  <div class="card info"><h4>P2b 编辑</h4><ul>
+    <li>空格或从引脚拖出 → 搜索创建动作（TypeCache 枚举），插入对应数组。</li>
+    <li>拖动连线 → 重排或移到另一个数组，<code>EditCommand.Transaction</code> 搬移 managedReference，一次 Undo。</li>
+    <li>删除、复制、粘贴：把 <code>StrategyDrawer</code> 的 JSON 克隆和重新生成 id 抽成 <code>SkillActionClipboard</code> 共用。</li>
+    <li><b>提取为模块</b>：选中同一数组里连续的若干动作 → 新建模块，收集被引用参数生成模块参数和绑定，原位替换为 <code>CallModuleAction</code>；支持反向「内联模块」。</li>
+    <li>旧 <code>TaskSpawner</code> 任务事件显示为不透明节点，提供「转换为动作」命令。</li></ul></div>
+</div>
+<div class="card ok" style="margin-top:14px"><h4>测试</h4>
+  投影往返（数组 → 图 → 数组）不变；重排、跨分支移动、提取模块、内联模块各一次 Undo 往返；粘贴后 id 唯一；嵌套深度不超过 8；独立分支拖入 Wait 被拒绝并提示。</div>
+
+<!-- ============================ P3 ============================ -->
+<h2 id="p3"><span class="n">P3</span>蓝图式调试</h2>
+<div class="phase-head"><span class="tag p1">优先级 3</span><span class="tag">约 2 周</span><span class="tag rt">运行时钩子</span><span class="tag ed">编辑器</span></div>
+<p><b>目标</b>：从「能停住」升级为「停住后能看到数据、能看出走了哪条路、能回看历史」。</p>
+
+<h3>1. 运行时钩子（零分配）</h3>
+<pre><code><span class="cm">// Runtime/Unity/SkillActionDebug.cs：由单一委托字段改为多播事件，并补上结束钩子</span>
+<span class="kw">public static event</span> <span class="ty">Action</span>&lt;<span class="ty">SkillExecutionContext</span>, <span class="ty">SkillActionDefinition</span>&gt; Boundary;
+<span class="kw">public static event</span> <span class="ty">Action</span>&lt;<span class="ty">SkillExecutionContext</span>, <span class="ty">SkillActionDefinition</span>, <span class="ty">Exception</span>&gt; ActionFinished;
+
+<span class="cm">// Runtime/Abilities/GasDebugHooks.cs（Core，新增）：无订阅者时只做一次 null 检查</span>
+<span class="kw">public static class</span> <span class="ty">GasDebugHooks</span>
+{
+    <span class="kw">public static event</span> <span class="ty">EffectHook</span> Applied, Removed, Stacked, PeriodExecuted;  <span class="cm">// GameplayEffectContainer.cs:119/234/604/818 一带</span>
+    <span class="kw">public static event</span> <span class="ty">Action</span>&lt;<span class="ty">AbilitySystemComponent</span>, <span class="ty">AbilityDiagnostic</span>&gt; DiagnosticRecorded;
+}
+
+<span class="cm">// 驱动可选实现，供 Live Link 显示</span>
+<span class="kw">public interface</span> <span class="ty">IAnimationDebugInfo</span> { <span class="kw">int</span> CopyWeights(<span class="ty">Span</span>&lt;<span class="ty">ClipWeight</span>&gt; into); }</code></pre>
+
+<h3>2. 事件记录与回看</h3>
+<div class="mock">
+  <div class="titlebar"><span class="tab">单位</span><span class="tab on">事件</span><span class="tab">监视</span><span class="muted">运行时调试 · 骑士</span></div>
+  <div class="toolbar"><span class="btn on">动作</span><span class="btn on">效果</span><span class="btn on">标签</span><span class="btn">属性</span><span class="btn on">Cue</span><span class="btn">事件</span><span style="flex:1"></span><span class="btn">技能：全部 ▾</span><span class="btn">⏸ 冻结</span></div>
+  <svg viewBox="0 0 900 170" width="100%">
+    <rect width="900" height="170" fill="#1d2026"/>
+    <g font-size="11" fill="#8d939c"><text x="10" y="30">动作</text><text x="10" y="62">效果</text><text x="10" y="94">标签</text><text x="10" y="126">Cue</text><text x="10" y="158">帧</text></g>
+    <g font-size="10" fill="#8d939c"><text x="90" y="158">1200</text><text x="290" y="158">1210</text><text x="490" y="158">1220</text><text x="690" y="158">1230</text></g>
+    <rect x="100" y="18" width="40" height="18" rx="3" fill="#9a6ce0"/><text x="104" y="31" fill="#fff" font-size="10">条件→满足</text>
+    <rect x="145" y="18" width="80" height="18" rx="3" fill="#46b36d"/><text x="149" y="31" fill="#fff" font-size="10">施加效果 ×3 目标</text>
+    <rect x="420" y="18" width="70" height="18" rx="3" fill="#e5604f"/><text x="424" y="31" fill="#fff" font-size="10">生成 ✕ 失败</text>
+    <rect x="80" y="50" width="380" height="18" rx="3" fill="#2f6b4a"/><text x="84" y="63" fill="#fff" font-size="10">冷却 · 斩击（0.6s）</text>
+    <rect x="145" y="50" width="10" height="18" fill="#e0803a"/>
+    <rect x="110" y="82" width="300" height="18" rx="3" fill="#355a8a"/><text x="114" y="95" fill="#fff" font-size="10">State.SuperArmor</text>
+    <rect x="300" y="82" width="200" height="18" rx="3" fill="#2a4a6e"/><text x="304" y="95" fill="#fff" font-size="10">State.ComboWindow</text>
+    <rect x="160" y="114" width="180" height="18" rx="3" fill="#27a596"/><text x="164" y="127" fill="#fff" font-size="10">Cue.Sword.Trail</text>
+    <path d="M420 10 L420 145" stroke="#e5604f" stroke-dasharray="3 3"/>
+  </svg>
+</div>
+<ul>
+  <li><code>Editor/Debug/SkillEventRecorder.cs</code>：每个单位一个环形缓冲（4096 条结构体），记录动作开始/结束（含分支）、效果、标签、Cue、属性、Gameplay 事件、失败，带帧号和时间。</li>
+  <li>运行时调试窗口新增「事件」页：泳道视图，按单位、类型、技能过滤；点击条目跳到流程节点或时间轴元素；「冻结」后可以拖动回看。</li>
+</ul>
+
+<h3>3. 断点、监视与执行路径</h3>
+<div class="grid g3">
+  <div class="card"><h4>断点</h4><ul>
+    <li>持久化到 ProjectSettings。</li>
+    <li>入口：流程节点 F9 / 点击边缘、时间轴标记右键、Details 标题栏。</li>
+    <li>修复 ID 不匹配：同时匹配原始 id 和 <code>NavigationId</code>，模块内也能命中。</li></ul></div>
+  <div class="card"><h4>暂停时监视</h4><ul>
+    <li>命中时捕获 <code>PausedFrame</code>：已解析参数、等级、目标、目标点、事件负载、通道值、最近一次查询命中的目标。</li>
+    <li>显示在「监视」页和流程节点悬浮提示。</li>
+    <li>操作：继续、下一个动作、逐帧。</li></ul></div>
+  <div class="card"><h4>执行路径与 Live Link</h4><ul>
+    <li>从事件记录还原最近一次施放，点亮走过的节点和分支连线并逐渐淡出。</li>
+    <li><code>TaskStrip</code> 画出段带、当前段、排队段和实时混合权重，对标 State Machine Live Link。</li>
+    <li>可选：开发版本的游戏内悬浮面板 <code>GasDebugOverlay</code>。</li></ul></div>
+</div>
+<div class="card ok" style="margin-top:14px"><h4>测试</h4>
+  钩子在无订阅时零分配（Core 十万次激活断言）；记录器环形覆盖正确；模块内断点命中；暂停帧数据与运行时一致；路径高亮在条件两支分别正确。</div>
+
+<!-- ============================ P4 ============================ -->
+<h2 id="p4"><span class="n">P4</span>预览与内容能力</h2>
+<div class="phase-head"><span class="tag p2">优先级 4</span><span class="tag">约 2–3 周</span><span class="tag rt">运行期轨道</span><span class="tag ed">预览</span></div>
+
+<h3>1. 多目标预览与投射物／区域模拟</h3>
+<div class="mock">
+  <div class="toolbar"><span class="btn">假人 5</span><span class="btn">排布：扇形 ▾</span><span class="btn">距离 2.5</span><span class="btn on">模拟投射物/区域</span><span class="btn">替换表：斧 ▾</span></div>
+  <svg viewBox="0 0 900 200" width="100%">
+    <rect width="900" height="200" fill="#1d2026"/>
+    <ellipse cx="450" cy="170" rx="380" ry="26" fill="#262b33"/>
+    <path d="M450 160 L330 60 A160 110 0 0 1 570 60 Z" fill="rgba(229,96,79,.18)" stroke="#e5604f"/>
+    <circle cx="450" cy="150" r="14" fill="#4f9cf5"/><text x="438" y="190" fill="#9ab" font-size="11">施法者</text>
+    <g><circle cx="360" cy="80" r="11" fill="#e5604f"/><circle cx="450" cy="62" r="11" fill="#e5604f"/><circle cx="540" cy="80" r="11" fill="#e5604f"/><circle cx="260" cy="120" r="11" fill="#666"/><circle cx="640" cy="120" r="11" fill="#666"/></g>
+    <text x="580" y="40" fill="#e5604f" font-size="11">命中标记 0.42s：3 / 5 命中，播放受击</text>
+    <path d="M700 150 Q760 60 830 120" stroke="#e7b24a" stroke-dasharray="5 4" fill="none"/><circle cx="830" cy="120" r="7" fill="#e7b24a"/><text x="720" y="185" fill="#e7b24a" font-size="11">投射物模拟轨迹（速度/弧度/寿命）</text>
+  </svg>
+</div>
+<ul>
+  <li>假人是真实实例（可选预制体），排布可选直线、扇形、随机。到命中标记时刻按 <code>TargetQuery</code> 在编辑器里做几何判定（不走物理），高亮命中者并播放受击片段。</li>
+  <li>范围只在生效时段显示；<code>SkillPreviewTools.Queries</code> 补上 <code>onHit</code>、<code>onPeriod</code>、Wait 超时/取消分支的遍历。</li>
+  <li>编辑器内确定性模拟 <code>LaunchProjectileAction</code>（速度、弧度、半径、寿命）和 <code>CreateAreaAction</code>（时长、周期）。时间轴在动画结束后显示一段「后续」区域，用来拖动查看。</li>
+</ul>
+
+<h3>2. 新增运行期轨道</h3>
+<p>全部按 <code>CurveSkillTrack</code> 的三段式实现：<code>SkillRuntimeTrack</code> → <code>RuntimeTrackDefinition</code> → <code>IRuntimeTrackHandler</code> <span class="ref">SkillRuntimeTracks.cs:27-74</span>，服务通过 <code>TimelineTaskContext</code> 获取，未配置服务时轨道无副作用。</p>
+<table>
+  <tr><th style="width:20%">轨道</th><th>行为</th><th style="width:22%">服务</th></tr>
+  <tr><td>CameraShakeTrack</td><td>按曲线强度震屏，支持方向与频率</td><td><code>ISkillCameraService</code></td></tr>
+  <tr><td>HitStopTrack</td><td>施法者和命中目标的局部时间缩放，同时影响 AnimationTask 推进和驱动速度</td><td><code>ISkillTimeService</code></td></tr>
+  <tr><td>TimeScaleTrack</td><td>全局时间缩放，按曲线变化，结束或取消时恢复</td><td><code>ISkillTimeService</code></td></tr>
+  <tr><td>LookAtTrack</td><td>Aim Offset：Playable 用 IAnimationJob 按权重曲线把脊柱、头部链转向目标；其他后端用 LateUpdate 骨骼适配器兜底</td><td>驱动 / <code>ISkillRigService</code></td></tr>
+  <tr><td>BoneWeightMask</td><td>按骨骼加权的遮罩（对标 Avatar Weight Mask），与 LookAtTrack 共用作业基础设施</td><td>Playable 驱动</td></tr>
+</table>
+
+<h3>3. 片段替换表与帧数据</h3>
+<div class="grid g2">
+  <div class="card"><h4>SkillClipOverrideSet</h4>
+    <ul><li>资产内容：「片段名 → 替换项」，替换项可以是 AnimationClip、Animator 状态名或 Spine 动画名。</li>
+    <li><code>SkillAnimator</code> 维护替换栈，装备时压入；AnimationTask 在 Play 前解析片段名 <span class="ref">AnimationTask.cs:119</span>。</li>
+    <li>参数变体可覆盖使用哪张替换表；预览可选择替换表。同一个「斩击」配剑和斧不再需要复制技能。</li></ul></div>
+  <div class="card"><h4>帧数据行</h4>
+    <ul><li>时间轴新增只读行，按帧率显示前摇（到第一个命中标记）、持续、后摇和可取消窗口（来自连招窗口与输入缓冲区间）。</li>
+    <li>随攻速缩放实时更新，便于对照格斗游戏式的帧数据表。</li></ul></div>
+</div>
+
+<!-- ============================ P5 ============================ -->
+<h2 id="p5"><span class="n">P5</span>编辑体验、性能、平台</h2>
+<div class="phase-head"><span class="tag p3">优先级 5</span><span class="tag">约 2 周</span><span class="tag ed">编辑器</span><span class="tag rt">运行时</span></div>
+<table>
+  <tr><th style="width:20%">项目</th><th>方案</th></tr>
+  <tr><td>全局查找 Ctrl+Shift+F</td><td>扩展 <code>SkillIndex</code> <span class="ref">LibraryPanel.cs:14</span>，按动作类型、显示名、标签、效果引用、参数 id 建索引；结果经 <code>SkillActionNavigation</code> 跳转。</td></tr>
+  <tr><td>参数面板</td><td>技能库新增「参数」页：技能参数和参数集参数、各自引用次数；查找引用、改名、拖到 SkillNumber 字段直接绑定。</td></tr>
+  <tr><td>多标签与并排对比</td><td>一个窗口开多个文档标签；「并排对比」打开第二个窗口并停靠。</td></tr>
+  <tr><td>布局 Undo</td><td>布局元数据通过代理 ScriptableObject 接入 Undo。</td></tr>
+  <tr><td>快捷键</td><td>ShortcutManager 注册 F9、Ctrl+D、F、Ctrl+G 等；搜索窗口支持收藏和最近使用。</td></tr>
+  <tr><td>语义三方合并</td><td><code>SkillSemanticDiff</code> 按 id 做 base/ours/theirs 合并，冲突单独列出。</td></tr>
+  <tr><td>动画降频</td><td><code>SkillAnimationManager</code> 统一 Evaluate，Playable 图改 <code>DirectorUpdateMode.Manual</code>。档位：每帧 / 每 N 帧 / 每 N 秒，PhaseOffset 错开求值帧，跳过的时间累加补上。<code>ISkillAnimationLodPolicy</code> 决定档位；时间轴逻辑仍由 <code>ASC.Tick</code> 每帧推进，降频不影响玩法；去掉每单位的 <code>SkillPlayableClock</code>。</td></tr>
+  <tr><td>运行时性能基线</td><td>PlayMode 基准：200 个单位持续施放，统计每帧耗时和 GC，写入 <code>SkillPerformanceBaseline.json</code> 的 runtime 段。</td></tr>
+  <tr><td>IL2CPP</td><td>新增 <code>Runtime/link.xml</code> 保留运行时程序集（防止 SerializeReference 子类被裁剪）；Windows IL2CPP 冒烟构建跑 BasicCombat 五个技能并检查日志；Android、小游戏手动验证。</td></tr>
+</table>
+
+<h2 id="risk"><span class="n">03</span>风险与对策</h2>
+<table>
+  <tr><th style="width:24%">风险</th><th style="width:10%">等级</th><th>对策</th></tr>
+  <tr><td>Inertialize 作业实现难度（骨骼偏移衰减、根运动一致性）</td><td class="part">高</td><td>P1 先交付曲线、Freeze、SeekBlend；Inertialize 作为第二步，只在 Playable 后端提供，失败时降级 CrossFade。</td></tr>
+  <tr><td>GraphView 是实验性 API</td><td class="part">中</td><td>流程图与结构图共用一层封装；数据仍是数组，视图可替换，不会锁死数据格式。</td></tr>
+  <tr><td>双技能层改变 Playable 图结构</td><td class="part">中</td><td>保留现有测试（权重守恒、Trigger 交接、根运动归属），新增遮罩交替测试后再替换。</td></tr>
+  <tr><td>IL2CPP 裁剪 SerializeReference 子类</td><td class="part">中</td><td>link.xml + 冒烟构建；项目自定义动作需在文档中说明加入 link.xml。</td></tr>
+  <tr><td>调试钩子影响热路径</td><td class="yes">低</td><td>静态事件 null 检查；Core 零分配断言覆盖。</td></tr>
+  <tr><td>预览模拟与运行时不一致</td><td class="yes">低</td><td>几何判定复用 <code>TargetQuery</code> 定义；模拟参数取自同一份动作定义；差异在文档中标注为「近似」。</td></tr>
+</table>
+
+<h2 id="accept"><span class="n">04</span>验收与测试清单</h2>
+<table>
+  <tr><th style="width:10%">阶段</th><th>验收标准</th><th style="width:30%">自动化测试</th></tr>
+  <tr><td>P1</td><td>连招段落跳转无姿态跳变；混入混出可选曲线和模式；上半身技能接全身技能遮罩平滑过渡；不支持的后端有警告。</td><td>EditMode 权重/遮罩/SeekBlend；PlayMode 跳转帧骨骼位移阈值。</td></tr>
+  <tr><td>P2a</td><td>BasicCombat 五个技能的所有标记都能在流程图中完整显示；消息面板点击定位到动作节点。</td><td>投影往返；问题定位；模块面包屑。</td></tr>
+  <tr><td>P3</td><td>在流程节点设断点，运行时命中并显示监视值；事件页能回看一次完整施放；执行路径高亮正确。</td><td>零分配；记录器；模块内断点；路径高亮。</td></tr>
+  <tr><td>P2b</td><td>只用流程图即可从空技能搭出 BasicCombat 的「斩击」命中逻辑；提取/内联模块 Undo 往返。</td><td>重排、跨分支移动、提取、内联、粘贴 id 唯一。</td></tr>
+  <tr><td>P4</td><td>预览中看到命中哪些假人、投射物轨迹、区域周期；新轨道在 BasicCombat 中各有示例；同一技能用替换表切换武器动作。</td><td>几何判定；轨道 Enter/Exit/Cancel；替换解析。</td></tr>
+  <tr><td>P5</td><td>全局查找 500 技能内 p95 &lt; 200ms；200 单位降频后动画 CPU 明显下降且玩法帧逻辑不变；IL2CPP 冒烟通过。</td><td>查找性能；运行时基线；冒烟构建日志。</td></tr>
+</table>
+<div class="callout">每个阶段实施时：Core、EditMode、PlayMode 三套测试全部通过，加上该阶段新增的专项测试；需要看画面的项（混合观感、流程图、预览）用编辑器截图核对，并写入 <code>Docs~/</code> 验证记录。</div>
+
+<h2 id="reuse"><span class="n">05</span>复用清单</h2>
+<div class="grid g2">
+  <div class="card"><h4>编辑器</h4><ul>
+    <li>编辑与撤销：<code>EditCommand.Run/Transaction</code>、<code>SkillDocument.Notify/ChangeSet</code>、<code>SelectionModel</code>。</li>
+    <li>布局：<code>LayoutStore.Position/SetPosition</code>（接受任意字符串键）。</li>
+    <li>动作：<code>StrategyDrawer</code> 类型选择与克隆 <span class="ref">AuthoringDrawers.cs:143</span>、<code>SkillActionNavigation.Select</code>。</li>
+    <li>轨道：<code>TrackTypeRegistry</code>、<code>BlendRamps</code>。</li>
+    <li>预览：<code>ICuePreview</code>、<code>PreviewStage</code>、<code>SkillPreviewTools.Query</code>、<code>IPoseSampler</code>。</li>
+    <li>调试：<code>RuntimeDebugSession.Publish/Changed</code>、<code>RuntimeSnapshot</code>、<code>TaskStrip</code>。</li></ul></div>
+  <div class="card"><h4>运行时与测试</h4><ul>
+    <li>错误定位：<code>SkillActionException.ActionId</code>、<code>SkillExecutionContext.NavigationId</code>。</li>
+    <li>轨道：<code>SkillRuntimeTrack</code> → <code>RuntimeTrackDefinition</code> → <code>IRuntimeTrackHandler</code>。</li>
+    <li>驱动：<code>IBlendingAnimationDriver</code>、<code>ISeekableAnimationDriver</code>、<code>IAnimationDriverLifetime</code>、<code>PreviousPose</code> 作业钩子。</li>
+    <li>测试：<code>RuntimeDebugTests</code> 的 Setup/Edit/TearDown 模式、<code>AllocationMeter</code>、Core 的 <code>Run(nameof(X), X)</code>。</li></ul></div>
+</div>
+</main>
+</body>
+</html>

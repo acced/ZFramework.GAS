@@ -64,6 +64,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                     so.FindProperty("hero").objectReferenceValue = heroUnit;
                     so.FindProperty("dummy").objectReferenceValue = dummyUnit;
                     so.FindProperty("abilitySet").objectReferenceValue = AssetDatabase.LoadAssetAtPath<AbilitySetAsset>(BasicCombatSample.Folder + "/BasicCombatAbilities.asset");
+                    so.FindProperty("axeOverride").objectReferenceValue = AssetDatabase.LoadAssetAtPath<SkillClipOverrideSet>(BasicCombatSample.Folder + "/Skills/Shared/斧劈替换表.asset");
                     so.FindProperty("castPoint").objectReferenceValue = Find(hero.transform, "SwordTip");
                     so.FindProperty("aimPoint").objectReferenceValue = aim;
                     so.FindProperty("burstMaterial").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Material>(art.Folder + "/Vfx_Glow.mat");

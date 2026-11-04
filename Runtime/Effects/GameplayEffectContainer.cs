@@ -111,14 +111,11 @@ namespace ZFramework.GAS
                 return EffectApplicationResult.Blocked;
             }
 
-            // Only retained effects/chains need a caller snapshot. Blocked and simple instant hits
-            // keep their allocation-free path; descendants share one frozen dictionary/comparer.
-            if (definition.DurationPolicy != EffectDurationPolicy.Instant || definition.ConditionalEffects.Length != 0)
-                spec = spec.Snapshot();
-
             if (definition.DurationPolicy == EffectDurationPolicy.Instant)
             {
+                if (definition.ConditionalEffects.Length != 0) spec = spec.Snapshot();
                 ApplyInstant(spec, stackCount: 1);
+                GasDebugHooks.Apply(_owner, definition, spec.Source, 1);
                 RemoveEffectsWithAnyTag(tags.RemoveEffectsWith);
                 DispatchCues(definition, GameplayCueEvent.Executed, spec.Source, 1);
                 ApplyConditional(spec, EffectTrigger.Applied);
@@ -141,15 +138,19 @@ namespace ZFramework.GAS
                     }
 
                     RefreshTimers(existing);
+                    GasDebugHooks.Refresh(_owner, definition, spec.Source, existing.StackCount);
                     return EffectApplicationResult.Refreshed;
                 }
 
                 existing.StackCount++;
                 PushStackCount(existing);
                 RefreshTimers(existing);
+                GasDebugHooks.Stack(_owner, definition, spec.Source, existing.StackCount);
                 return EffectApplicationResult.Stacked;
             }
 
+            // Reapplications use the retained spec. Copy caller values only when publishing a new effect.
+            spec = spec.Snapshot();
             ActiveGameplayEffect active = RentEffect(
                 definition, spec.Source, spec.SourceAttributes, period, duration);
             active.Spec = spec;
@@ -228,6 +229,7 @@ namespace ZFramework.GAS
                 }
             }
 
+            GasDebugHooks.Apply(_owner, definition, spec.Source, active.StackCount);
             tags.Granted.AddTo(_ownedTags);
 
             RemoveEffectsWithAnyTag(tags.RemoveEffectsWith);
@@ -309,6 +311,7 @@ namespace ZFramework.GAS
         /// <summary>按定义与来源引用查找；用于多个同定义光环并存时只移除自己的效果。</summary>
         public ActiveGameplayEffectHandle FindFrom(GameplayEffectDefinition definition, object source)
         {
+            if (source is AbilitySystemComponent owner) source = owner.SourceIdentity;
             for (int i = 0; i < _active.Count; i++)
             {
                 ActiveGameplayEffect effect = _active[i];
@@ -602,6 +605,7 @@ namespace ZFramework.GAS
 
             try
             {
+                GasDebugHooks.Remove(_owner, effect.Definition, effect.Source, effect.StackCount);
                 DispatchCues(effect.Definition, GameplayCueEvent.Removed, effect.Source, effect.StackCount);
             }
             catch (Exception error)
@@ -816,6 +820,7 @@ namespace ZFramework.GAS
                 }
             }
 
+            GasDebugHooks.Period(_owner, effect.Definition, effect.Source, effect.StackCount);
             DispatchCues(effect.Definition, GameplayCueEvent.Executed, effect.Source, effect.StackCount);
             ApplyConditional(effect.Spec, EffectTrigger.Periodic);
         }

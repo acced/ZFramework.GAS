@@ -16,9 +16,9 @@ namespace ZFramework.GAS.Unity
         public SkillWaitKind kind;
         public SkillNumber timeout = new SkillNumber(1);
         public GameplayTag eventTag;
-        [SerializeReference] public SkillAction[] onSuccess = Array.Empty<SkillAction>();
-        [SerializeReference] public SkillAction[] onTimeout = Array.Empty<SkillAction>();
-        [SerializeReference] public SkillAction[] onCancel = Array.Empty<SkillAction>();
+        [SerializeReference, FlowBranch("成功")] public SkillAction[] onSuccess = Array.Empty<SkillAction>();
+        [SerializeReference, FlowBranch("超时")] public SkillAction[] onTimeout = Array.Empty<SkillAction>();
+        [SerializeReference, FlowBranch("取消")] public SkillAction[] onCancel = Array.Empty<SkillAction>();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             builder.RequireAbilityTask(Id);
@@ -49,7 +49,7 @@ namespace ZFramework.GAS.Unity
         public SkillWaitTask(SkillExecutionContext context, string id, SkillWaitKind kind, float timeout, GameplayTag tag,
             SkillActionDefinition[] success, SkillActionDefinition[] timedOut, SkillActionDefinition[] cancel) : base(context, id)
         { _kind = kind; _remaining = timeout; _tag = tag; _success = success; _timeout = timedOut; _cancel = cancel; _result = Execution; }
-        protected override void OnBegin()
+        protected override void BeginAction()
         {
             if (_kind == SkillWaitKind.GameplayEvent)
             { _events = Execution.Source.Events; _events.Received += Receive; }

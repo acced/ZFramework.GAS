@@ -13,7 +13,7 @@ namespace ZFramework.GAS.Editor
             generateVisualContent += Draw;
             tooltip = "从上到下：动画 / 混入、效果标记点、Cue 区间、标签窗口、任务事件。竖线为授权时间播放头。";
         }
-        public void SetTask(RuntimeSnapshot.Animation task) { _task = task; MarkDirtyRepaint(); }
+        public void SetTask(RuntimeSnapshot.Animation task) { _task = task; tooltip=task==null?null:string.Join(" · ",System.Array.ConvertAll(task.Weights,w=>w.Name+" "+w.Weight.ToString("P0"))); MarkDirtyRepaint(); }
         private void Draw(MeshGenerationContext context)
         {
             if (_task == null || contentRect.width <= 16) return;
@@ -38,6 +38,8 @@ namespace ZFramework.GAS.Editor
                 p.fillColor = new Color(0, 0, 0, .45f); p.BeginPath(); p.MoveTo(new Vector2(6, 5));
                 p.LineTo(new Vector2(X(definition.BlendIn), 5)); p.LineTo(new Vector2(6, 19)); p.ClosePath(); p.Fill();
             }
+            foreach(var s in definition.Sections)
+                Rect(X(s.Start),19,Mathf.Max(1,X(s.End)-X(s.Start)-1),3,s.Id==_task.SectionId?Color.green:s.Id==_task.QueuedSectionId?Color.yellow:Color.gray);
             foreach (var marker in definition.Markers) Diamond(marker.Time, 28, SkillColors.Ability);
             foreach (var region in definition.CueRegions)
                 Rect(X(region.Start), 37, Mathf.Max(1, X(region.End < 0 ? duration : region.End) - X(region.Start)), 7, SkillColors.Cue);

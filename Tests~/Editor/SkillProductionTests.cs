@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using NUnit.Framework;
 using UnityEditor;
@@ -46,6 +47,95 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.AreEqual("activationActions.Array.data[0]", issue.PropertyPath);
             Assert.IsTrue(SkillActionNavigation.Select(document, action.Id)); Assert.AreEqual(issue.PropertyPath, document.Selection.ElementId);
         }
+        [Test] public void NestedModuleBuildErrorLocatesTheCallInEachOwningAsset()
+        {
+            var inner = SkillAssetFactory.AddEmbedded<SkillActionModuleAsset>(_skill, "Inner"); inner.actions = new SkillAction[] { new SpawnPrefabAction() };
+            var outer = SkillAssetFactory.AddEmbedded<SkillActionModuleAsset>(_skill, "Outer"); var nested = new CallModuleAction { module = inner }; outer.actions = new SkillAction[] { nested };
+            var call = new CallModuleAction { module = outer }; _skill.activationActions = new SkillAction[] { call };
+            var error = Assert.Throws<SkillActionException>(() => _skill.BuildActions()); Assert.AreEqual(call.Id, error.ActionId);
+            Assert.AreEqual(nested.Id, (error.InnerException as SkillActionException)?.ActionId);
+            using var document = new SkillDocument(); document.Open(_skill); using var validation = new ValidationService(document); validation.ValidateNow();
+            var issue = validation.Issues.Single(i => i.Id == "GAS_ACTION" && i.Asset == _skill);
+            Assert.AreEqual("activationActions.Array.data[0]", issue.PropertyPath); StringAssert.Contains("Inner", issue.Message);
+            Assert.IsTrue(SkillActionNavigation.Select(document, call.Id));
+        }
+        [Test] public void TerminalSectionEndMarkerHasANavigableWarning()
+        {
+            var animation = SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(_skill, "Animation");
+            animation.sections = new[] { new AnimationSection { displayName = "结束段", start = 0, end = 1 } };
+            using (var so = new SerializedObject(animation))
+            { so.FindProperty("clipName").stringValue = "a"; var markers = so.FindProperty("markers"); markers.arraySize = 1; markers.GetArrayElementAtIndex(0).FindPropertyRelative("time").floatValue = 1; so.ApplyModifiedPropertiesWithoutUndo(); }
+            using var document = new SkillDocument(); document.Open(_skill); var issues = new List<Issue>();
+            new SectionEndRule().Validate(new ValidationContext(document), animation, issues);
+            Assert.AreEqual(1, issues.Count); Assert.AreEqual(IssueSeverity.Warning, issues[0].Severity);
+            Assert.AreEqual("markers.Array.data[0]", issues[0].PropertyPath); Assert.IsNotEmpty(issues[0].ElementId);
+        }
+        [Serializable] private sealed class FaultAction : SkillAction
+        {
+            public bool DuringValidation;
+            public override SkillActionDefinition Build(SkillActionBuildContext builder)
+                => Define("fault", (_, _) => { if (DuringValidation) throw new ArgumentException("validation probe"); },
+                    _ => throw new InvalidOperationException("execution probe"));
+        }
+        [TestCase(true, false), TestCase(false, false), TestCase(false, true)]
+        public void NestedModuleCastFailuresLocateTheOuterCall(bool validate, bool delayed)
+        {
+            var fault = new FaultAction { DuringValidation = validate };
+            var inner = SkillAssetFactory.AddEmbedded<SkillActionModuleAsset>(_skill, "Inner");
+            inner.actions = delayed ? new SkillAction[] { new WaitSkillAction { timeout = new SkillNumber(.1f), onSuccess = new SkillAction[] { fault } } }
+                : new SkillAction[] { fault };
+            var outer = SkillAssetFactory.AddEmbedded<SkillActionModuleAsset>(_skill, "Outer");
+            outer.actions = new SkillAction[] { new CallModuleAction { module = inner } };
+            var call = new CallModuleAction { module = outer }; _skill.activationActions = new SkillAction[] { call };
+            var owner = new AbilitySystemComponent(); var runner = new SkillRunner(owner, null);
+            try
+            {
+                if (delayed)
+                {
+                    runner.TryCast(_skill);
+                    Assert.IsTrue(RuntimeSnapshot.Capture(owner, null).Actions.All(a => a.Id == call.Id));
+                    Assert.Throws<InvalidOperationException>(() => owner.Tick(.2f));
+                }
+                else Assert.AreEqual(validate ? AbilityActivationResult.InvalidConfiguration : AbilityActivationResult.ExecutionFailed, runner.TryCast(_skill));
+                var failure = runner.GetSpec(_skill).LastExecutionFailure;
+                Assert.AreEqual(call.Id, failure.SourceId); Assert.IsFalse(runner.IsActive(_skill));
+                StringAssert.Contains("Inner", failure.Message); StringAssert.Contains("Outer", failure.Message);
+                if (!validate)
+                {
+                    StringAssert.Contains(fault.Id, failure.Message);
+                    Assert.AreEqual(call.Id, owner.GetDiagnostic(0).SourceId);
+                    Assert.AreEqual("执行失败", runner.GetExecution(_skill).Status);
+                }
+                using var document = new SkillDocument(); document.Open(_skill);
+                Assert.IsTrue(SkillActionNavigation.Select(document, failure.SourceId));
+                Assert.AreEqual("activationActions.Array.data[0]", document.Selection.ElementId);
+            }
+            finally { owner.Clear(); }
+        }
+        [TestCase(0, 0), TestCase(1, 0), TestCase(2, 0), TestCase(3, 0), TestCase(3, -1), TestCase(3, 1)]
+        public void SectionEndWarningsIncludeLoopsJumpsQueuedSuccessorsAndRounding(int successor, int ulp)
+        {
+            var animation = SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(_skill, "Animation");
+            var a = new AnimationSection { displayName = "A", start = 0, end = .5f };
+            var b = new AnimationSection { displayName = "B", start = successor == 2 ? .75f : .5f, end = 1 };
+            a.nextSectionId = successor == 0 ? null : successor == 1 ? a.Id : b.Id;
+            animation.sections = new[] { a, b };
+            float time = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(.5f) + ulp);
+            using (var so = new SerializedObject(animation))
+            {
+                so.FindProperty("clipName").stringValue = "a";
+                foreach (var name in new[] { "markers", "taskEvents" })
+                {
+                    var events = so.FindProperty(name); events.arraySize = 1;
+                    events.GetArrayElementAtIndex(0).FindPropertyRelative("time").floatValue = time;
+                }
+                so.ApplyModifiedPropertiesWithoutUndo();
+            }
+            using var document = new SkillDocument(); document.Open(_skill); var issues = new List<Issue>();
+            new SectionEndRule().Validate(new ValidationContext(document), animation, issues);
+            Assert.AreEqual(ulp == 0 && b.start == time ? 0 : 2, issues.Count);
+            foreach (var issue in issues) { StringAssert.Contains("排他终点", issue.Message); Assert.IsNotEmpty(issue.ElementId); }
+        }
         [Test] public void BatchCooldownWritesVariantOverrideAndReferenceResultsLocateField()
         {
             var parameter = new SkillParameter { defaultValue = 2, displayName = "冷却" }; _skill.parameters = new[] { parameter };
@@ -62,6 +152,38 @@ namespace ZFramework.GAS.Editor.Tests
             string before = EditorJsonUtility.ToJson(cooldown); SkillBatchWindow.SetCooldown(_skill, 7);
             Assert.AreEqual(7, _skill.ResolveParameters(1).Get(parameter.Id).Number); Assert.AreEqual(before, EditorJsonUtility.ToJson(cooldown));
             Assert.IsTrue(SkillReferenceWindow.Find(cooldown).Any(r => r.Asset == _skill && r.Path == "cooldown"));
+        }
+        private sealed class DurationDriver : IAnimationDriver
+        {
+            public float Play(string clip, float duration, bool loop) => duration;
+            public void Advance(float time) { }
+            public void Stop() { }
+        }
+        [Test] public void RoundedExclusiveEndWarningPredictsAnActualSkippedMarkerOnlyWhenStretched()
+        {
+            const float marker = .7500001192092896f, end = .7500001788139343f, authored = 1f, stretched = .75f;
+            Assert.Less(marker, end);
+            Assert.AreEqual(BitConverter.SingleToInt32Bits(marker * (stretched / authored)), BitConverter.SingleToInt32Bits(end * (stretched / authored)));
+            var animation = SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(_skill, "Animation");
+            animation.sections = new[] { new AnimationSection { start = 0, end = end, inputBufferEnd = end } };
+            using (var so = new SerializedObject(animation))
+            {
+                so.FindProperty("clipName").stringValue = "a"; so.FindProperty("duration").floatValue = authored;
+                var markers = so.FindProperty("markers"); markers.arraySize = 1;
+                markers.GetArrayElementAtIndex(0).FindPropertyRelative("time").floatValue = marker; so.ApplyModifiedPropertiesWithoutUndo();
+            }
+            using var document = new SkillDocument(); document.Open(_skill); var issues = new List<Issue>();
+            new SectionEndRule().Validate(new ValidationContext(document), animation, issues);
+            Assert.AreEqual("markers.Array.data[0]", issues.Single().PropertyPath);
+            Assert.AreEqual(BitConverter.SingleToInt32Bits(marker), BitConverter.SingleToInt32Bits(animation.Definition.Markers[0].Time));
+            Assert.AreEqual(BitConverter.SingleToInt32Bits(end), BitConverter.SingleToInt32Bits(animation.Definition.Sections[0].End));
+            int Hits(float actual)
+            {
+                var owner = new AbilitySystemComponent(); var spec = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(spec);
+                int hits = 0; owner.StartTask(spec, new AnimationTask(animation.Definition, new DurationDriver(), durationOverride: actual, onMarker: (_, _) => hits++));
+                owner.Tick(actual); owner.Clear(); return hits;
+            }
+            Assert.AreEqual(1, Hits(authored)); Assert.AreEqual(0, Hits(stretched));
         }
         [UnityTest] public IEnumerator ReroutesAndCollapsedNodesPersistWithoutChangingRuntimeReferences()
         {

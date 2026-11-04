@@ -100,13 +100,12 @@ namespace ZFramework.GAS
         /// <summary>下一次施放的等级；执行中的求值上下文不随此值改变。</summary>
         public int Level { get; set; }
         private EffectEvaluationContext _levelContext;
-        private static readonly EffectEvaluationContext LevelOne = new EffectEvaluationContext(1);
         internal EffectEvaluationContext DefaultContext
         {
             get
             {
-                if (Level <= 1) return LevelOne;
-                if (_levelContext == null || _levelContext.Level != Level) _levelContext = new EffectEvaluationContext(Level);
+                int level = Math.Max(1, Level);
+                if (_levelContext == null || _levelContext.Level != level) _levelContext = EffectEvaluationContext.Live(level, Owner.Attributes);
                 return _levelContext;
             }
         }
@@ -117,6 +116,7 @@ namespace ZFramework.GAS
         public string LastCleanupActionId { get; set; }
 
         public bool IsActive { get; internal set; }
+        internal bool Committing, Granted = true;
 
         internal GameplayAbilitySpec(GameplayAbilityDefinition definition, AbilitySystemComponent owner, int level)
         {

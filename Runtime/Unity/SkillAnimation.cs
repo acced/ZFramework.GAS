@@ -131,10 +131,16 @@ namespace ZFramework.GAS.Unity
         /// 混入时长：从施放前的动画过渡到本动画所用的秒数（时间轴时间，与标记点一样随实际时长缩放）。
         /// 不能超过 <see cref="Duration"/>。
         /// </summary>
-        public float BlendIn { get; }
+        public float BlendIn => BlendInSpec.duration;
+        public SkillBlend BlendInSpec { get; }
+        public SkillBlend BlendOutSpec { get; }
+        public UnityEngine.AvatarMask Mask { get; }
+        public bool Additive { get; }
+        public BoneWeightMask.Definition BoneWeights {get;}
+        public float LayerWeight { get; }
 
         /// <summary>混出时长：动画结束或被打断后过渡回施放前动画所用的实际秒数。</summary>
-        public float BlendOut { get; }
+        public float BlendOut => BlendOutSpec.duration;
 
         /// <summary>是否存在「作用于固定目标」的效果标记点——任务据此在构造时就要求传入目标。</summary>
         public bool RequiresTarget { get; }
@@ -148,7 +154,8 @@ namespace ZFramework.GAS.Unity
             AnimationTagWindow[] tagWindows = null,
             AnimationTaskEvent[] taskEvents = null,
             float blendIn = 0f,
-            float blendOut = 0f, AnimationSectionDefinition[] sections = null, RuntimeTrackDefinition[] runtimeTracks = null)
+            float blendOut = 0f, AnimationSectionDefinition[] sections = null, RuntimeTrackDefinition[] runtimeTracks = null,
+            SkillBlend? blendInSpec = null, SkillBlend? blendOutSpec = null, UnityEngine.AvatarMask mask = null, bool additive = false, float layerWeight = 1, BoneWeightMask.Definition boneWeights=null)
         {
             if (string.IsNullOrEmpty(clipName))
             {
@@ -160,6 +167,11 @@ namespace ZFramework.GAS.Unity
                 throw new ArgumentOutOfRangeException(nameof(duration), duration, "Animation duration must be positive.");
             }
 
+            BlendInSpec = (blendInSpec ?? new SkillBlend(blendIn)).Snapshot();
+            BlendOutSpec = (blendOutSpec ?? new SkillBlend(blendOut)).Snapshot();
+            blendIn = BlendIn; blendOut = BlendOut;
+            if (!(layerWeight >= 0 && layerWeight <= 1)) throw new ArgumentOutOfRangeException(nameof(layerWeight));
+            BoneWeights=boneWeights; Mask = mask; Additive = additive; LayerWeight = layerWeight;
             if (!(blendIn >= 0f) || blendIn > duration)
             {
                 throw new ArgumentOutOfRangeException(nameof(blendIn), blendIn, $"Blend-in must lie within [0, {duration}] seconds.");
@@ -173,8 +185,7 @@ namespace ZFramework.GAS.Unity
             ClipName = clipName;
             Duration = duration;
             Loop = loop;
-            BlendIn = blendIn;
-            BlendOut = blendOut;
+
             var sectionCopy = sections == null ? Array.Empty<AnimationSectionDefinition>() : (AnimationSectionDefinition[])sections.Clone();
             var trackCopy = runtimeTracks == null ? Array.Empty<RuntimeTrackDefinition>() : (RuntimeTrackDefinition[])runtimeTracks.Clone();
             var ids = new System.Collections.Generic.HashSet<string>();

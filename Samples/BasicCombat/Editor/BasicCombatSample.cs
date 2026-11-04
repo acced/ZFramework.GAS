@@ -66,7 +66,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             // 文件名即片段名：Unity 导入时会把对象名改成文件名。
             foreach (var pair in clips) AssetDatabase.CreateAsset(pair.Value, folder + "/Animations/Knight/" + pair.Key + ".anim");
             var knightController = BuildController(folder + "/Animations/Knight/Knight.controller", clips["Idle"],
-                new[] { "Slash", "Bolt", "Warcry", "Sanctuary", "Summon" }, clips, false);
+                new[] { "Slash", "AxeSlash", "Bolt", "Warcry", "Sanctuary", "Summon" }, clips, false);
             knight.AddComponent<Animator>().runtimeAnimatorController = knightController;
             knight.AddComponent<SkillAnimator>();
             var cueLibrary = SampleVfx.Build(art, knight, clips["Slash"], folder);

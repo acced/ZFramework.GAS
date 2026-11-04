@@ -5,6 +5,13 @@ using UnityEngine;
 
 namespace ZFramework.GAS.Unity
 {
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class FlowBranchAttribute : Attribute
+    {
+        public string Label { get; }
+        public FlowBranchAttribute(string label) => Label = label;
+    }
+
     [Serializable]
     public abstract class SkillAction
     {
@@ -15,6 +22,20 @@ namespace ZFramework.GAS.Unity
         protected SkillActionDefinition Define(string label, Action<SkillExecutionContext, bool> validate,
             Action<SkillExecutionContext> execute) => new DelegateSkillAction(id,
                 string.IsNullOrEmpty(displayName) ? label : displayName, validate, execute);
+    }
+
+    [Serializable]
+    public sealed class RunSpawnerAction : SkillAction
+    {
+        [SerializeReference] public TaskSpawner spawner;
+        public override SkillActionDefinition Build(SkillActionBuildContext builder)
+        {
+            // An arbitrary project spawner can start ability-owned work.
+            builder.RequireAbilityTask(Id);
+            if(spawner==null)throw new InvalidOperationException("缺少任务执行器。");
+            var delegateAction=spawner.Build();
+            return Define("执行任务",delegateAction.Validate,delegateAction.Execute);
+        }
     }
 
     public abstract class SkillActionDefinition
@@ -39,21 +60,26 @@ namespace ZFramework.GAS.Unity
         }
         public override void Execute(SkillExecutionContext context) => _execute(context);
     }
-    public sealed class SkillActionException : InvalidOperationException
+    public class SkillActionException : InvalidOperationException
     {
         public string ActionId { get; }
         public SkillActionException(string id, string message, Exception inner = null) : base(message, inner) { ActionId = id; }
     }
+    public sealed class SkillOwnershipException : SkillActionException
+    { public SkillOwnershipException(string id) : base(id,"独立任务回调或取消分支不能启动技能所属任务；请选择 Scene 归属或同步动作。") {} }
     public sealed class SkillActionBuildContext
     {
         private readonly ScriptableObject _owner;
+        private readonly HashSet<string> _entryIds;
         public SkillActionBuildContext(ScriptableObject owner = null) { _owner = owner; }
+        internal SkillActionBuildContext(ScriptableObject owner,HashSet<string> entryIds) { _owner=owner;_entryIds=entryIds; }
         public void DependsOn(ScriptableObject asset) => DefinitionSource.DependsOn(_owner, asset);
         private readonly HashSet<SkillActionModuleAsset> _modules = new();
         private int _depth;
+        private HashSet<string> _scopeIds;
         private bool _allowsAbilityTasks = true;
         public void RequireAbilityTask(string id)
-        { if (!_allowsAbilityTasks) throw new SkillActionException(id, "独立任务回调或取消分支不能启动技能所属任务；请选择 Scene 归属或同步动作。"); }
+        { if (!_allowsAbilityTasks) throw new SkillOwnershipException(id); }
         public SkillActionDefinition[] BuildDetached(SkillAction[] actions)
         {
             bool previous = _allowsAbilityTasks; _allowsAbilityTasks = false;
@@ -66,7 +92,8 @@ namespace ZFramework.GAS.Unity
             try
             {
                 var built = new SkillActionDefinition[actions.Length];
-                var ids = new HashSet<string>();
+                if(_depth==1 || _scopeIds==null) _scopeIds=_depth==1 && _entryIds!=null?_entryIds:new HashSet<string>();
+                var ids = _scopeIds;
                 for (int i = 0; i < actions.Length; i++)
                 {
                     var action = actions[i] ?? throw new InvalidOperationException("动作列表包含空项。");
@@ -84,8 +111,9 @@ namespace ZFramework.GAS.Unity
             if (module == null) throw new InvalidOperationException("缺少动作模块。");
             DependsOn(module); DependsOn(module.parameters);
             if (!_modules.Add(module)) throw new InvalidOperationException($"模块循环引用：{module.name}");
+            var parentIds=_scopeIds; _scopeIds=new HashSet<string>();
             try { return Build(module.actions); }
-            finally { _modules.Remove(module); }
+            finally { _scopeIds=parentIds; _modules.Remove(module); }
         }
         public static void Validate(IReadOnlyList<SkillActionDefinition> actions, SkillExecutionContext context, bool deferred = false)
         { for (int i = 0; i < actions.Count; i++) actions[i].Validate(context, deferred); }
@@ -135,6 +163,9 @@ namespace ZFramework.GAS.Unity
     [Serializable]
     public sealed class ConditionalAction : SkillAction
     {
+        public static bool Compare(SkillComparison op,float a,float b) => op switch { SkillComparison.Greater => a > b, SkillComparison.GreaterOrEqual => a >= b,
+                    SkillComparison.Less => a < b, SkillComparison.LessOrEqual => a <= b,
+                    SkillComparison.Equal => a == b, _ => a != b };
         public bool requireTarget;
         [SkillParameterReference] public string booleanParameterId;
         public bool testTarget;
@@ -144,8 +175,8 @@ namespace ZFramework.GAS.Unity
         [AttributeIdField] public int attribute;
         public SkillComparison comparison;
         public SkillNumber value = new SkillNumber(0);
-        [SerializeReference] public SkillAction[] whenTrue = Array.Empty<SkillAction>();
-        [SerializeReference] public SkillAction[] whenFalse = Array.Empty<SkillAction>();
+        [SerializeReference, FlowBranch("满足")] public SkillAction[] whenTrue = Array.Empty<SkillAction>();
+        [SerializeReference, FlowBranch("不满足")] public SkillAction[] whenFalse = Array.Empty<SkillAction>();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             var required = TagAssetUtility.ToSet(requiredTags); var blocked = TagAssetUtility.ToSet(blockedTags);
@@ -153,6 +184,7 @@ namespace ZFramework.GAS.Unity
             bool needTarget = requireTarget, target = testTarget, compare = compareAttribute;
             var id = new AttributeId(attribute); var op = comparison; var number = value;
             string booleanId = booleanParameterId;
+            string branchId = Id;
             var yes = builder.Build(whenTrue); var no = builder.Build(whenFalse);
             bool Test(SkillExecutionContext context)
             {
@@ -162,9 +194,7 @@ namespace ZFramework.GAS.Unity
                 if (unit == null || !requirements.Matches(unit.OwnedTags)) return false;
                 if (!compare) return true;
                 float a = unit.Attributes.GetCurrent(id), b = number.Resolve(context.Values);
-                return op switch { SkillComparison.Greater => a > b, SkillComparison.GreaterOrEqual => a >= b,
-                    SkillComparison.Less => a < b, SkillComparison.LessOrEqual => a <= b,
-                    SkillComparison.Equal => a == b, _ => a != b };
+                return Compare(op,a,b);
             }
             return Define("条件分支", (context, deferred) =>
             {
@@ -173,7 +203,7 @@ namespace ZFramework.GAS.Unity
                 if (compare) number.Resolve(context.Values);
                 SkillActionBuildContext.Validate(yes, context, true); SkillActionBuildContext.Validate(no, context, true);
                 if (!deferred) SkillActionBuildContext.Validate(Test(context) ? yes : no, context);
-            }, context => context.Execute(Test(context) ? yes : no));
+            }, context => {bool taken=Test(context); SkillActionDebug.Branch(context,branchId,taken);context.Execute(taken ? yes : no);});
         }
     }
 
@@ -215,18 +245,36 @@ namespace ZFramework.GAS.Unity
         public string callerParameterId;
     }
     [Serializable]
-    public sealed class CallModuleAction : SkillAction
+    public sealed class CallModuleAction : ParameterScopeAction
     {
         public SkillActionModuleAsset module;
-        public ModuleParameterBinding[] bindings = Array.Empty<ModuleParameterBinding>();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
-            var actions = builder.Module(module);
+            SkillActionDefinition[] actions;
+            try { actions = builder.Module(module); }
+            catch (Exception error) { throw new SkillActionException(Id, "模块 " + (module != null ? module.name : "<缺失>") + ": " + error.Message, error); }
             // Resolve level tables at cast start, never hold mutable authoring data in running definitions.
             var parameters = module.parameters == null ? Array.Empty<SkillParameter>() : module.parameters.parameters;
+            return Bind(actions,parameters,module.name);
+        }
+    }
+    [Serializable]
+    public sealed class InlineParameterScopeAction : ParameterScopeAction
+    {
+        public SkillParameter[] parameters=Array.Empty<SkillParameter>();
+        [SerializeReference, FlowBranch("动作")] public SkillAction[] actions=Array.Empty<SkillAction>();
+        public override SkillActionDefinition Build(SkillActionBuildContext builder)=>Bind(builder.Build(actions),parameters,"内联参数");
+    }
+    [Serializable]
+    public abstract class ParameterScopeAction : SkillAction
+    {
+        public ModuleParameterBinding[] bindings = Array.Empty<ModuleParameterBinding>();
+        protected SkillActionDefinition Bind(SkillActionDefinition[] actions,SkillParameter[] parameters,string moduleName)
+        {
             var defaults = new ModuleDefaults(parameters);
             var mapped = (ModuleParameterBinding[])bindings.Clone();
             var cacheKey = new object();
+            string callId = Id;
             SkillParameterValues BindNew(SkillExecutionContext context)
             {
                 var values = defaults.Resolve(context.Values.Level);
@@ -240,11 +288,12 @@ namespace ZFramework.GAS.Unity
                 return new SkillParameterValues(values);
             }
             Func<SkillExecutionContext, SkillParameterValues> createScope = BindNew;
-            SkillExecutionContext Bind(SkillExecutionContext context) => context.ModuleScope(cacheKey, createScope);
+            SkillExecutionContext Bind(SkillExecutionContext context) => context.ModuleScope(cacheKey, createScope, callId, moduleName);
             return Define("调用动作模块", (context, deferred) =>
             {
                 var scope = Bind(context);
                 try { SkillActionBuildContext.Validate(actions, scope, deferred); }
+                catch (Exception error) { throw new SkillActionException(callId, "模块 " + moduleName + ": " + error.Message, error); }
                 finally { context.ReleaseModule(cacheKey, scope); }
             }, context =>
             {

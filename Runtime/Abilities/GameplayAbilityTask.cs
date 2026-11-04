@@ -19,6 +19,8 @@ namespace ZFramework.GAS
         internal long RunVersion { get; private set; }
 
         public bool IsActive { get; private set; }
+        /// <summary>Optional authoring identity for failure diagnostics.</summary>
+        public virtual string DiagnosticId => null;
 
         /// <summary>本次运行是否以取消告终（而非自行完成）。</summary>
         public bool WasCancelled { get; private set; }
@@ -41,12 +43,12 @@ namespace ZFramework.GAS
             }
         }
 
-        internal void Begin(GameplayAbilitySpec ability)
+        internal void Begin(GameplayAbilitySpec ability, int activationVersion)
         {
             if (IsActive) throw new InvalidOperationException("Task is already running.");
             Ability = ability;
             RunVersion++;
-            ActivationVersion = ability?.ActivationVersion ?? 0;
+            ActivationVersion = activationVersion;
             IsActive = true;
             WasCancelled = false;
             OnBegin();

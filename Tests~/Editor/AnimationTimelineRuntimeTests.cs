@@ -143,7 +143,8 @@ namespace ZFramework.GAS.Editor.Tests
             var definition = new SkillAnimationDefinition("Attack", 1, tagWindows: new[] { new AnimationTagWindow(0, -1, new GameplayTagSet(_window)), new AnimationTagWindow(0, -1, new GameplayTagSet(_other)) });
             owner.StartTask(ability, new AnimationTask(definition, driver)); owner.Tick(.1f);
             owner.OwnedTags.RegisterTagEventCallback(_window, GameplayTagEventType.NewOrRemoved, (_, count) => { if (count == 0) throw new InvalidOperationException("test"); });
-            Assert.Throws<InvalidOperationException>(() => owner.EndAbility(ability));
+            Assert.DoesNotThrow(() => owner.EndAbility(ability));
+            StringAssert.Contains("test", ability.LastCleanupError);
             Assert.IsFalse(owner.OwnedTags.HasTag(_window)); Assert.IsFalse(owner.OwnedTags.HasTag(_other)); Assert.AreEqual(1, driver.Stops);
         }
         [Test]

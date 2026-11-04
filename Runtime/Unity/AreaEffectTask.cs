@@ -43,6 +43,7 @@ namespace ZFramework.GAS.Unity
         private readonly object _source;
         private readonly AbilitySystemComponent _caster;
         private readonly int _casterGeneration;
+        private readonly EffectEvaluationContext _configuredValues;
         private EffectEvaluationContext _values;
         private readonly AbilitySystemComponent[] _buffer;
         private readonly List<AbilitySystemComponent> _occupants = new();
@@ -76,10 +77,10 @@ namespace ZFramework.GAS.Unity
             _caster = source as AbilitySystemComponent ?? (source as AbilitySourceIdentity)?.Owner;
             _casterGeneration = _caster?.Generation ?? 0;
             _source = _caster?.SourceIdentity ?? source;
-            _values = context;
+            _configuredValues = context;
             _buffer = new AbilitySystemComponent[maxOccupants];
         }
-        protected override void OnBegin() => _values = (_values ?? Ability.EvaluationContext ?? new EffectEvaluationContext(Ability.Level)).CaptureSource(_sourceAttributes);
+        protected override void OnBegin() => _values = _configuredValues ?? Ability?.EvaluationContext;
 
         protected override void OnTick(float deltaTime)
         {

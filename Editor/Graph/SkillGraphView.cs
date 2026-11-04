@@ -84,7 +84,7 @@ namespace ZFramework.GAS.Editor
             _syncing = true;
             try
             {
-                bool rootChanged = _root != _doc.Root;
+                bool rootChanged = _root != _doc.Root || Array.IndexOf(change.Paths,"@layout")>=0;
                 if (rootChanged)
                 {
                     _root = _doc.Root;
@@ -330,8 +330,8 @@ namespace ZFramework.GAS.Editor
             _layoutPositions.Clear();
             foreach (var pair in _nodes) _layoutPositions[pair.Key] = pair.Value.GetPosition().position;
             if (_arrangeRequested) ArrangeMeasured(); else PlaceNewNodes();
+            _doc.Layout.Save(recordUndo:_arrangeRequested);
             _arrangeRequested = false; _pendingPlacement.Clear(); _preferredPositions.Clear();
-            _doc.Layout.Save();
             if (_frameRequested) _framing = true; else _layoutWork.Pause();
         }
         private Rect Bounds(ScriptableObject asset) => new(_layoutPositions[asset], _measuredSizes[asset]);
@@ -397,7 +397,7 @@ namespace ZFramework.GAS.Editor
             foreach (var group in _groups) _doc.Layout.Comments.Add(new LayoutStore.CommentLayout { title = group.title, rect = group.GetPosition() });
             _doc.Layout.MarkDirty();
         }
-        private void AddComment()
+        internal void AddComment()
         {
             var group = new Group { title = "注释" }; group.SetPosition(new Rect(contentViewContainer.WorldToLocal(_mouse), new Vector2(300, 200)));
             AddElement(group); _groups.Add(group);
@@ -408,17 +408,22 @@ namespace ZFramework.GAS.Editor
         {
             if (e.target is TextField || e.target is TextElement) return;
             if (e.keyCode == KeyCode.Space) { Search(GUIUtility.GUIToScreenPoint(_mouse)); e.StopPropagation(); }
-            else if (e.keyCode == KeyCode.F) { FrameSelection(); e.StopPropagation(); }
             else if (e.keyCode == KeyCode.A && !e.ctrlKey) { FrameAll(); e.StopPropagation(); }
             else if (e.keyCode == KeyCode.C && !e.ctrlKey) { AddComment(); e.StopPropagation(); }
             else if (e.ctrlKey && e.keyCode == KeyCode.C) { _clipboard = selection.OfType<SkillNode>().Select(n => n.Asset).Where(a => a != _doc.Root).ToArray(); e.StopPropagation(); }
-            else if (e.ctrlKey && (e.keyCode == KeyCode.D || e.keyCode == KeyCode.V))
+            else if (e.ctrlKey && e.keyCode == KeyCode.V)
             {
-                var assets = e.keyCode == KeyCode.D ? selection.OfType<SkillNode>().Select(n => n.Asset).ToArray() : _clipboard;
-                EditCommand.Transaction(_doc, "复制选中节点", _doc.Root, () =>
-                { foreach (var source in assets) if (source != null && source != _doc.Root) SkillAssetFactory.CopyNode(_doc, source); });
+                Duplicate(_clipboard);
                 e.StopPropagation();
             }
+        }
+        internal void DuplicateSelection()=>Duplicate(selection.OfType<SkillNode>().Select(n=>n.Asset).ToArray());
+        private void Duplicate(IEnumerable<ScriptableObject> assets)
+        {
+            if(_doc.Root==null || assets==null)return;
+            EditCommand.Transaction(_doc,"复制选中节点",_doc.Root,()=>{
+                foreach(var asset in assets)if(asset!=null && asset!=_doc.Root)SkillAssetFactory.CopyNode(_doc,asset);
+            });
         }
         public override void BuildContextualMenu(ContextualMenuPopulateEvent e)
         {
@@ -602,7 +607,7 @@ namespace ZFramework.GAS.Editor
                         foreach (var asset in DragAndDrop.objectReferences.OfType<ScriptableObject>()) if (id.AcceptedType.IsInstanceOfType(asset)) PortRules.Attach(_doc, Asset, id, asset);
                         DragAndDrop.AcceptDrag(); e.StopPropagation();
                     });
-                    port.RegisterCallback<MouseDownEvent>(e => { if (id.Kind == PortKind.Marker) _doc.Selection.Select(Asset, "markers", id.ElementId); });
+                    port.RegisterCallback<MouseDownEvent>(e => { if (id.Kind == PortKind.Marker) { _doc.Selection.Select(Asset, "markers", id.ElementId); if (e.clickCount == 2) { _doc.OpenFlow(); e.StopPropagation(); } } });
                     _outputs[id] = port; outputContainer.Add(port);
                 }
                 port.portName = pair.Value; port.portColor = color;

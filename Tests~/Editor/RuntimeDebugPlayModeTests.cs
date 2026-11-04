@@ -67,6 +67,32 @@ namespace ZFramework.GAS.Editor.Tests
                 RuntimeDebugSession.Observe(hero);
                 Selection.activeGameObject = null; RuntimeDebugSession.Refresh();
                 Assert.AreSame(hero, RuntimeDebugSession.Observed, "Pinned unit is independent of selection");
+                var marker=editor.Document.Serialized(slash.Animation).FindProperty("markers.Array.data[0]");
+                var call=(CallModuleAction)marker.FindPropertyRelative("actions.Array.data[0]").managedReferenceValue;
+                var condition=(ConditionalAction)call.module.actions[0];string normalId=condition.whenFalse[0].Id,strongId=condition.whenTrue[0].Id;
+                editor.Document.Selection.Select(call.module);editor.Document.OpenFlow();
+                bool existing=SkillActionDebugger.Has(normalId);
+                try
+                {
+                    if(!existing)SkillActionDebugger.Toggle(normalId);
+                    hero.AbilitySystem.Tick(.2f);RuntimeDebugSession.Refresh();
+                    var frame=SkillActionDebugger.Frame; Assert.IsNotNull(frame);
+                    Assert.AreEqual(normalId,frame.RawId);Assert.AreEqual(call.Id,frame.NavigationId);
+                    StringAssert.Contains("Lv.1",frame.Summary);
+                    var flow=editor.rootVisualElement.Q<SkillFlowView>();
+                    Assert.IsTrue(flow.Query(className:"flow-live").ToList().Any(n=>Equals(n.userData,normalId)));
+                    Assert.IsFalse(flow.Query(className:"flow-live").ToList().Any(n=>Equals(n.userData,strongId)));
+                    var events=SkillEventRecorder.Of(hero.AbilitySystem);Assert.IsNotNull(events);
+                    Assert.IsTrue(Enumerable.Range(0,events.Count).Any(i=>events[i].Kind==TraceKind.条件分支 && events[i].Label=="不满足"));
+                    EditorApplication.isPaused=false;
+                    hero.SkillRunner.Cancel(slash);hero.AbilitySystem.Tick(1);
+                    var empowered=GameplayTags.GameplayTagManager.RequestTag(SampleTags.Empowered);
+                    hero.AbilitySystem.OwnedTags.AddTag(empowered);
+                    Assert.IsTrue(arena.TryCast(0));hero.AbilitySystem.Tick(.4f);RuntimeDebugSession.Refresh();
+                    Assert.IsTrue(flow.Query(className:"flow-live").ToList().Any(n=>Equals(n.userData,strongId)));
+                    Assert.IsFalse(flow.Query(className:"flow-live").ToList().Any(n=>Equals(n.userData,normalId)));
+                }
+                finally{EditorApplication.isPaused=false;if(!existing)SkillActionDebugger.Toggle(normalId);}
                 hero.SkillRunner.Cancel(slash); RuntimeDebugSession.Refresh(); Assert.IsEmpty(RuntimeDebugSession.Current.Tasks);
                 Object.DestroyImmediate(hero.gameObject); RuntimeDebugSession.Refresh();
                 Assert.IsNull(RuntimeDebugSession.Current); Assert.IsFalse(editor.Document.Playback.Live);

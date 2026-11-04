@@ -12,9 +12,17 @@ namespace ZFramework.GAS.Unity
     {
         public SkillExecutionContext Execution { get; private set; }
         public string ActionId { get; }
+        public override string DiagnosticId => Execution.NavigationId(ActionId);
+        string ISkillTaskState.ActionId => DiagnosticId;
         public abstract string State { get; }
         protected SkillActionTask(SkillExecutionContext context, string id) { Execution = context.ForTask(); ActionId = id; }
         internal void Detach() => Execution = Execution.Independent();
+        protected sealed override void OnBegin()
+        {
+            try { BeginAction(); }
+            catch (Exception error) { Execution.Fail(error, ActionId); throw; }
+        }
+        protected virtual void BeginAction() { }
         protected sealed override void OnTick(float deltaTime)
         {
             try { Tick(deltaTime); }
@@ -140,7 +148,7 @@ namespace ZFramework.GAS.Unity
         public int maxHits = 1;
         public TargetQuery collision = new TargetQuery { kind = TargetQueryKind.Circle };
         public SkillTaskOwnership ownership;
-        [SerializeReference] public SkillAction[] onHit = Array.Empty<SkillAction>();
+        [SerializeReference, FlowBranch("命中时")] public SkillAction[] onHit = Array.Empty<SkillAction>();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             var visual = prefab; var velocity = speed; var duration = lifetime; float size = radius, arc = arcHeight;
@@ -238,7 +246,7 @@ namespace ZFramework.GAS.Unity
         public GameplayEffectAsset exitEffect;
         public bool removeOnExit = true;
         public SkillTaskOwnership ownership;
-        [SerializeReference] public SkillAction[] onPeriod = Array.Empty<SkillAction>();
+        [SerializeReference, FlowBranch("每个周期")] public SkillAction[] onPeriod = Array.Empty<SkillAction>();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             var visual = prefab; var query = targets.Build(); var life = duration; var interval = period;

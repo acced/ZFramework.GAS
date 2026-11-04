@@ -19,6 +19,8 @@ namespace ZFramework.GAS.Editor
         public IReadOnlyList<Attribute> Attributes { get; }
         public IReadOnlyList<Effect> Effects { get; }
         public IReadOnlyList<ActionState> Actions { get; }
+        public IReadOnlyList<AbilityDiagnostic> Diagnostics { get; }
+        public long DroppedDiagnosticCount { get; }
 
         public sealed class ActionState
         {
@@ -58,12 +60,14 @@ namespace ZFramework.GAS.Editor
             public readonly GameplayAbilityAsset AbilityAsset;
             public readonly SkillAnimationAsset Asset;
             public readonly SkillAnimationDefinition Definition;
-            public readonly string AbilityName;
+            public readonly string AbilityName, SectionId, QueuedSectionId;
+            public readonly ClipWeight[] Weights;
             public readonly float Duration, NormalizedTime, AuthoredTime;
             public bool Loop => Definition.Loop;
             internal Animation(AnimationTask task)
             {
-                Definition = task.Definition;
+                Definition = task.Definition; SectionId=task.SectionId; QueuedSectionId=task.QueuedSectionId;
+                var weights=new ClipWeight[8]; int count=task.CopyWeights(weights); Array.Resize(ref weights,count); Weights=weights;
                 AbilityAsset = DefinitionSource.Of(task.Ability.Definition) as GameplayAbilityAsset;
                 Asset = DefinitionSource.Of(Definition) as SkillAnimationAsset;
                 AbilityName = AbilityAsset != null ? AbilityAsset.name : Definition.ClipName;
@@ -121,6 +125,10 @@ namespace ZFramework.GAS.Editor
         private RuntimeSnapshot(AbilitySystemComponent owner, Func<object, string> unitName, RuntimeSnapshot previous, double capturedAt)
         {
             Owner = owner; UnitName = unitName?.Invoke(owner) ?? "未命名单位"; CapturedAt = capturedAt;
+            DroppedDiagnosticCount = owner.DroppedDiagnosticCount;
+            var diagnostics = new AbilityDiagnostic[owner.DiagnosticCount];
+            for (int i = 0; i < diagnostics.Length; i++) diagnostics[i] = owner.GetDiagnostic(i);
+            Diagnostics = Array.AsReadOnly(diagnostics);
             var abilities = new List<Ability>(owner.GrantedAbilityCount);
             for (int i = 0; i < owner.GrantedAbilityCount; i++) abilities.Add(new Ability(owner.GetGrantedAbility(i), i));
             Abilities = abilities.AsReadOnly();

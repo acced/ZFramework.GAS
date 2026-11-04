@@ -85,5 +85,6 @@ internal static class AuditRegressionTests
         host.Start(ability, restarted); host.Start(ability, restart); host.Tick(1);
         Check(restarted.Ticks == 0, "New task runs must wait for the next frame."); host.Tick(1); Check(restarted.Ticks == 1, "Restarted task must progress next frame."); host.Clear();
         Console.WriteLine("PASS ActivationPreflightAtomicInstantAndStableTaskScheduling");
+        ReentryRegressionTests.Run();
     }
 }

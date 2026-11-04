@@ -47,6 +47,7 @@ namespace ZFramework.GAS.Editor
         {
             var touched = new HashSet<string>(imported.Concat(deleted).Concat(moved).Concat(oldPaths).Where(p => p.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)));
             if (touched.Count == 0) return;
+            SkillContentIndex.InvalidatePaths(touched);
             foreach (var key in SearchCache.Keys.ToArray()) if (key == null || touched.Contains(AssetDatabase.GetAssetPath(key))) SearchCache.Remove(key);
             if (_abilities != null || _effects != null)
             {
@@ -56,7 +57,7 @@ namespace ZFramework.GAS.Editor
             }
             _keys = null; AttributeCatalog.Invalidate(); Changed?.Invoke();
         }
-        public static void Invalidate() { _abilities = null; _effects = null; _keys = null; SearchCache.Clear(); AttributeCatalog.Invalidate(); Changed?.Invoke(); }
+        public static void Invalidate() { SkillContentIndex.Clear(); _abilities = null; _effects = null; _keys = null; SearchCache.Clear(); AttributeCatalog.Invalidate(); Changed?.Invoke(); }
     }
     public sealed class SkillIndexPostprocessor : AssetPostprocessor
     {
@@ -65,6 +66,13 @@ namespace ZFramework.GAS.Editor
         private static void OnPostprocessAllAssets(string[] imported, string[] deleted, string[] moved, string[] oldPaths)
         {
             if (AssetDatabase.IsAssetImportWorkerProcess()) return;
+            // Queries may run in the same editor update as a synchronous reimport. Dropping
+            // cached documents only uses recorded paths; defer asset enumeration/UI refresh.
+            SkillReferenceGuard.Changed(imported.Concat(deleted).Concat(moved).Concat(oldPaths));
+            var touched=new HashSet<string>(imported.Concat(deleted).Concat(moved).Concat(oldPaths)
+                .Where(p=>p.EndsWith(".asset",StringComparison.OrdinalIgnoreCase)));
+            if(touched.Count==0)return;
+            SkillContentIndex.InvalidatePaths(touched);ModuleCallIndex.Invalidate(touched);
             Imported.UnionWith(imported); Imported.UnionWith(moved); Deleted.UnionWith(deleted); Deleted.UnionWith(oldPaths);
             if (_queued) return; _queued = true;
             EditorApplication.delayCall += () =>
@@ -81,11 +89,18 @@ namespace ZFramework.GAS.Editor
         private readonly ToolbarSearchField _search;
         private readonly ScrollView _library, _outline;
         private readonly ListView _largeLibrary;
+        private bool _parameters;
+        private GameplayAbilityAsset _parameterOwner;
+        private readonly Dictionary<string, int> _parameterUses = new(StringComparer.Ordinal);
+        private readonly ScrollView _paramView=new();
         private readonly List<ScriptableObject> _visible = new();
         public LibraryPanel(SkillDocument doc, Action<GameplayAbilityAsset> open)
         {
             _doc = doc; _open = open; AddToClassList("library-panel");
             var heading = new Label("技能库"); heading.AddToClassList("panel-heading"); Add(heading);
+            var tabs=new Toolbar(); tabs.Add(new ToolbarButton(()=>{_parameters=false;Refresh();}){text="资产"});
+            tabs.Add(new ToolbarButton(()=>{_parameters=true;Refresh();}){text="参数"}); Add(tabs);
+            _paramView.style.display=DisplayStyle.None;Add(_paramView);
             _search = new ToolbarSearchField(); _search.AddToClassList("library-search"); _search.RegisterValueChangedCallback(_ => Refresh()); Add(_search);
             _library = new ScrollView { style = { flexGrow = 1, minHeight = 100 } }; Add(_library);
             _largeLibrary = new ListView { itemsSource = _visible, fixedItemHeight = 30, selectionType = SelectionType.None,
@@ -99,10 +114,7 @@ namespace ZFramework.GAS.Editor
                     e.menu.AppendAction("查找引用", _ => SkillReferenceWindow.Show(row.userData as UnityEngine.Object));
                     e.menu.AppendAction("在 Project 中定位", _ => EditorGUIUtility.PingObject(row.userData as UnityEngine.Object));
                 }));
-                Vector2 down = default;
-                row.RegisterCallback<PointerDownEvent>(e => down = e.position);
-                row.RegisterCallback<PointerMoveEvent>(e => { if (e.pressedButtons == 1 && Vector2.Distance(down, e.position) > 7 && row.userData is UnityEngine.Object asset)
-                    { DragAndDrop.PrepareStartDrag(); DragAndDrop.objectReferences = new[] { asset }; DragAndDrop.StartDrag(asset.name); e.StopPropagation(); } });
+                InstallAssetDrag(row);
                 return row;
             };
             _largeLibrary.bindItem = (element, i) =>
@@ -118,7 +130,8 @@ namespace ZFramework.GAS.Editor
         public void FocusSearch() => _search.Focus();
         public void Search(string query) => _search.value = query;
         private void Changed(ChangeSet change)
-        { if (change.Structure || change.Paths.Any(p => p == "m_Name" || p.Contains("displayName") || p.Contains("cue"))) RefreshOutline(); }
+        { if (_parameters) RefreshParameters();
+          if (change.Structure || change.Paths.Any(p => p == "m_Name" || p.Contains("displayName") || p.Contains("cue"))) RefreshOutline(); }
         private bool Matches(UnityEngine.Object asset)
         {
             string query = _search.value?.Trim(); if (string.IsNullOrEmpty(query)) return true;
@@ -126,6 +139,8 @@ namespace ZFramework.GAS.Editor
         }
         public void Refresh()
         {
+            _paramView.style.display=_parameters?DisplayStyle.Flex:DisplayStyle.None;
+            if(_parameters){_largeLibrary.style.display=_library.style.display=DisplayStyle.None; RefreshParameters(); return;}
             bool large = SkillIndex.Abilities.Count >= 150;
             _library.style.display = large ? DisplayStyle.None : DisplayStyle.Flex;
             _largeLibrary.style.display = large ? DisplayStyle.Flex : DisplayStyle.None;
@@ -162,18 +177,60 @@ namespace ZFramework.GAS.Editor
                 _library.Add(new HelpBox("还没有技能。点击「新建技能」选择模板开始。", HelpBoxMessageType.Info));
             RefreshOutline();
         }
+        private void RefreshParameters()
+        {
+            _paramView.Clear(); _parameterOwner=_doc.Root;if(_parameterOwner==null)return;
+            SkillContentIndex.CountParameterUses(_parameterOwner, _parameterUses);
+            foreach(var p in SkillNumberDrawer.Parameters(_parameterOwner).Where(p=>p!=null))
+            {
+                if(!string.IsNullOrEmpty(_search?.value) && p.displayName?.IndexOf(_search.value,StringComparison.OrdinalIgnoreCase)<0)continue;
+                _parameterUses.TryGetValue(p.Id, out int refs);
+                var button=new Button(()=>SkillGlobalSearch.ShowQuery(p.Id)){text=p.displayName+" · "+p.kind+"  ("+refs+")",tooltip="点击查找引用，拖到数值字段以绑定"};
+                button.userData=p;InstallParameterDrag(button);
+                button.AddManipulator(new ContextualMenuManipulator(e=>e.menu.AppendAction("定位声明 / 改名",_=>{
+                    var set=_parameterOwner.parameterSet;bool shared=set!=null && set.parameters.Contains(p);
+                    ScriptableObject owner=shared?(ScriptableObject)set:_parameterOwner;
+                    int index=Array.IndexOf(shared?set.parameters:_parameterOwner.parameters,p);
+                    _doc.Selection.Select(owner,"@field",$"parameters.Array.data[{index}]");})));
+                _paramView.Add(button);
+            }
+        }
         private VisualElement Row(UnityEngine.Object asset, string icon, Color color, Action click)
         {
             var button = new Button(click) { text = icon + "  " + asset.name, userData = asset, tooltip = AssetDatabase.GetAssetPath(asset) };
             button.AddToClassList("library-row"); button.style.borderLeftColor = color;
-            Vector2 down = default;
-            button.RegisterCallback<PointerDownEvent>(e => down = e.position);
-            button.RegisterCallback<PointerMoveEvent>(e =>
-            {
-                if (e.pressedButtons == 1 && Vector2.Distance(down, e.position) > 7)
-                { DragAndDrop.PrepareStartDrag(); DragAndDrop.objectReferences = new[] { asset }; DragAndDrop.StartDrag(asset.name); e.StopPropagation(); }
-            });
+            InstallAssetDrag(button);
             return button;
+        }
+        // Clickable captures the same pointer for clicks. Listen before Clickable and only
+        // promote the gesture we own. A virtualized row may be rebound while pressed.
+        internal static void InstallAssetDrag(Button row,Action<UnityEngine.Object> begin=null)
+            => InstallRowDrag<UnityEngine.Object>(row,begin??(asset=>{
+                DragAndDrop.PrepareStartDrag();DragAndDrop.objectReferences=new[]{asset};DragAndDrop.StartDrag(asset.name);
+            }));
+        internal static void InstallParameterDrag(Button row,Action<SkillParameter> begin=null)
+            => InstallRowDrag<SkillParameter>(row,begin??(p=>{
+                DragAndDrop.PrepareStartDrag();DragAndDrop.SetGenericData("GAS.SkillParameter",p.Id);DragAndDrop.StartDrag(p.displayName);
+            }));
+        private static void InstallRowDrag<T>(Button row,Action<T> begin) where T:class
+        {
+            int pointer=-1;Vector2 down=default;T item=null;
+            void Reset(){int id=pointer;pointer=-1;item=null;if(id>=0 && row.HasPointerCapture(id))row.ReleasePointer(id);}
+            row.RegisterCallback<PointerDownEvent>(e=>{
+                if(e.button!=0 || pointer>=0 || row.userData is not T asset || asset is UnityEngine.Object o && o==null)return;
+                pointer=e.pointerId;down=e.position;item=asset;row.CapturePointer(pointer);
+            },TrickleDown.TrickleDown);
+            row.RegisterCallback<PointerMoveEvent>(e=>{
+                if(e.pointerId!=pointer)return;
+                if((e.pressedButtons&1)==0 || !row.HasPointerCapture(pointer) || !ReferenceEquals(row.userData,item) || item is UnityEngine.Object o && o==null){Reset();return;}
+                if(((Vector2)e.position-down).sqrMagnitude<=49)return;
+                var dragged=item;Reset();e.StopImmediatePropagation();
+                begin(dragged);
+            },TrickleDown.TrickleDown);
+            row.RegisterCallback<PointerUpEvent>(e=>{if(e.pointerId==pointer && e.button==0){pointer=-1;item=null;}},TrickleDown.TrickleDown);
+            row.RegisterCallback<PointerCaptureOutEvent>(e=>{if(e.pointerId==pointer){pointer=-1;item=null;}});
+            row.RegisterCallback<PointerCancelEvent>(e=>{if(e.pointerId==pointer)Reset();},TrickleDown.TrickleDown);
+            row.RegisterCallback<DetachFromPanelEvent>(_=>Reset());
         }
         private void RefreshOutline()
         {

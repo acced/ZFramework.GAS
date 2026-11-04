@@ -14,6 +14,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
     internal static class SampleSkills
     {
         public const int Health = 1, MaxHealth = 2, Attack = 3, Stamina = 4;
+        private const string CooldownParameter = "冷却", NormalDamage = "普通伤害系数", EmpoweredDamage = "强化伤害系数";
 
         public static GameplayAbilityAsset[] Create(string folder, GameObject projectileVisual, GameObject guardianPrefab)
         {
@@ -26,9 +27,11 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         private static void ShareSlashModule(string folder, GameplayAbilityAsset slash)
         {
             string sharedFolder = folder + "/Shared"; SampleArt.EnsureFolder(sharedFolder);
-            var parameters = ScriptableObject.CreateInstance<SkillParameterSetAsset>(); parameters.parameters = slash.parameters;
+            // 冷却属于技能自身，留在斩击上；其余是命中模块用到的伤害与范围，抽成共享参数集。
+            var parameters = ScriptableObject.CreateInstance<SkillParameterSetAsset>();
+            parameters.parameters = Array.FindAll(slash.parameters, p => p.displayName != CooldownParameter);
             AssetDatabase.CreateAsset(parameters, sharedFolder + "/斩击参数.asset");
-            slash.parameters = Array.Empty<SkillParameter>(); slash.parameterSet = parameters;
+            slash.parameters = Array.FindAll(slash.parameters, p => p.displayName == CooldownParameter); slash.parameterSet = parameters;
             var module = ScriptableObject.CreateInstance<SkillActionModuleAsset>(); module.parameters = parameters;
             using (var so = new SerializedObject(slash.Animation))
             {
@@ -36,6 +39,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 module.actions = new SkillAction[actions.arraySize];
                 for (int i = 0; i < actions.arraySize; i++) module.actions[i] = (SkillAction)actions.GetArrayElementAtIndex(i).managedReferenceValue;
                 AssetDatabase.CreateAsset(module, sharedFolder + "/扇形斩击动作.asset");
+                // 共享集只含模块用到的参数，逐个绑定，让变体的覆盖传进模块。
                 var bindings = Array.ConvertAll(parameters.parameters, p => new ModuleParameterBinding { moduleParameterId = p.Id, callerParameterId = p.Id });
                 actions.arraySize = 1; actions.GetArrayElementAtIndex(0).managedReferenceValue = new CallModuleAction { module = module, bindings = bindings };
                 so.ApplyModifiedPropertiesWithoutUndo();
@@ -43,8 +47,12 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var variant = UnityEngine.Object.Instantiate(slash); variant.displayName = "重斩（共享模块变体）";
             var overrides = new System.Collections.Generic.List<SkillParameterOverride>();
             foreach (var parameter in parameters.parameters)
-                if (parameter.displayName == "伤害系数") overrides.Add(new SkillParameterOverride { parameterId = parameter.Id, value = parameter.defaultValue * 1.5f });
+                if (parameter.displayName is NormalDamage or EmpoweredDamage) overrides.Add(new SkillParameterOverride { parameterId = parameter.Id, value = parameter.defaultValue * 1.5f });
             variant.parameterOverrides = overrides.ToArray();
+            var axe = ScriptableObject.CreateInstance<SkillClipOverrideSet>();
+            axe.clips = new[] { new SkillClipOverrideSet.Entry { original = slash.Animation.ClipName, replacement = "Base Layer.AxeSlash" } };
+            AssetDatabase.CreateAsset(axe, sharedFolder + "/斧劈替换表.asset");
+            variant.clipOverrides = axe;
             AssetDatabase.CreateAsset(variant, sharedFolder + "/重斩变体.asset"); EditorUtility.SetDirty(slash);
         }
 
@@ -53,8 +61,8 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var ability = Ability(folder, "斩击", SampleTags.AbilitySlash);
             var cost = Effect(ability, "消耗 · 体力", EffectDurationPolicy.Instant, 0, so => Modifier(so, Stamina, -10));
             var cooldown = Cooldown(ability, .6f, SampleTags.CooldownSlash);
-            var damage = Effect(ability, "伤害 · 斩击", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 1.2f), SampleTags.CueHit);
-            var empowered = Effect(ability, "伤害 · 强化斩击", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 2), SampleTags.CueHit);
+            var damage = Effect(ability, "伤害 · 斩击", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 1.2f, NormalDamage), SampleTags.CueHit);
+            var empowered = Effect(ability, "伤害 · 强化斩击", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 2, EmpoweredDamage), SampleTags.CueHit);
             var animation = Animation(ability, "动画 · 斩击", "Slash", T.SlashLength, so =>
             {
                 Actions(so, T.SlashHit, "命中", new ConditionalAction {
@@ -182,7 +190,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         private static SkillNumber Number(GameplayAbilityAsset owner, string name, float value)
         {
             var parameter = new SkillParameter { displayName = name, defaultValue = value };
-            if (name == "伤害系数") parameter.levels = new[] { value, value * 1.25f, value * 1.5f };
+            if (name.EndsWith("伤害系数")) parameter.levels = new[] { value, value * 1.25f, value * 1.5f };
             var list = new System.Collections.Generic.List<SkillParameter>(owner.parameters) { parameter };
             owner.parameters = list.ToArray(); EditorUtility.SetDirty(owner);
             return new SkillNumber(value) { parameterId = parameter.Id };
@@ -195,9 +203,9 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             for (int i = 0; i < actions.Length; i++) item.GetArrayElementAtIndex(i).managedReferenceValue = actions[i];
         }
 
-        private static void Damage(SerializedObject so, GameplayAbilityAsset ability, float scale)
+        private static void Damage(SerializedObject so, GameplayAbilityAsset ability, float scale, string parameterName = "伤害系数")
         {
-            var number = Number(ability, "伤害系数", scale);
+            var number = Number(ability, parameterName, scale);
             Modifier(so, Health, 0, Attack, 1);
             var magnitude = so.FindProperty("modifiers").GetArrayElementAtIndex(0).FindPropertyRelative("magnitude");
             magnitude.FindPropertyRelative("kind").enumValueIndex = (int)MagnitudeKind.Calculation;
@@ -236,6 +244,15 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 so.FindProperty("blendOut").floatValue = blendOut;
                 timeline(so);
             });
+            // Presentation samples are authored on the same timeline as project-defined tracks.
+            if(state=="Slash") animation.runtimeTracks=new SkillRuntimeTrack[]{
+                new CameraShakeTrack{start=T.SlashHit,end=T.SlashHit+.09f,direction=Vector3.right,amount=AnimationCurve.Linear(0,.025f,1,0)},
+                new HitStopTrack{start=T.SlashHit,end=T.SlashHit+.04f,realSeconds=.035f}};
+            if(state=="Bolt") animation.runtimeTracks=new SkillRuntimeTrack[]{
+                new LookAtTrack{start=.02f,end=T.BoltRelease,boneChain="Head",amount=AnimationCurve.Linear(0,0,1,.3f)}};
+            if(state=="Warcry") animation.runtimeTracks=new SkillRuntimeTrack[]{
+                new TimeScaleTrack{start=.1f,end=.28f,amount=AnimationCurve.Linear(0,.9f,1,1)}};
+            EditorUtility.SetDirty(animation);
             TimelineCommands.EnsureIds(animation);
             return animation;
         }

@@ -117,7 +117,9 @@ namespace ZFramework.GAS.Editor
         public override Color Color => SkillColors.Task;
         public override string PropertyPath => "runtimeTracks";
         public override TrackElementShape Shape => TrackElementShape.Range;
-        public override string Label(SerializedProperty element) => element.managedReferenceValue is CurveSkillTrack curve ? curve.channelId : element.managedReferenceValue?.GetType().Name ?? "未配置";
+        public override string Label(SerializedProperty element) => element.managedReferenceValue switch {
+            CurveSkillTrack curve=>string.IsNullOrEmpty(curve.channelId)?"曲线":curve.channelId, CameraShakeTrack=>"震屏",
+            HitStopTrack=>"顿帧",TimeScaleTrack=>"全局变速",LookAtTrack=>"瞄准",null=>"未配置",var track=>track.GetType().Name };
         public override void InitializeNew(SerializedProperty element, float time, Object dropped)
         { element.managedReferenceValue = new CurveSkillTrack { start = time, end = time + .25f }; base.InitializeNew(element, time, dropped); element.FindPropertyRelative("end").floatValue = time + .25f; }
     }

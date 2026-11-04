@@ -15,6 +15,9 @@ namespace ZFramework.GAS.Editor
                 so.Update(); edit(so); so.ApplyModifiedProperties();
             }, structure, paths);
 
+        internal static void Cleanup(Action step){
+            try{step();}catch(Exception error){Debug.LogException(error);}
+        }
         public static void Transaction(SkillDocument document, string name, UnityEngine.Object asset,
             Action action, bool structure = true, params string[] paths)
         {
@@ -23,9 +26,20 @@ namespace ZFramework.GAS.Editor
             Undo.IncrementCurrentGroup(); int group = Undo.GetCurrentGroup();
             Undo.SetCurrentGroupName(name);
             _depth++;
-            try { action(); document?.Notify(new ChangeSet(asset, structure, paths)); Undo.FlushUndoRecordObjects(); }
-            catch { Undo.RevertAllDownToGroup(group); document?.Notify(new ChangeSet(asset, true)); throw; }
-            finally { _depth--; Undo.SetCurrentGroupName(name); Undo.CollapseUndoOperations(group); }
+            bool succeeded=false;
+            try { action(); document?.Notify(new ChangeSet(asset, structure, paths)); Undo.FlushUndoRecordObjects(); succeeded=true; }
+            catch
+            {
+                // Keep the authoring error as the primary exception, even when cleanup fails.
+                Cleanup(()=>ModuleFileUndo.RevertTransaction(group));
+                Cleanup(()=>document?.Notify(new ChangeSet(asset,true)));
+                throw;
+            }
+            finally {
+                _depth--;
+                void Finish(){Undo.SetCurrentGroupName(name);Undo.CollapseUndoOperations(group);}
+                if(succeeded)Finish();else Cleanup(Finish);
+            }
         }
     }
 }

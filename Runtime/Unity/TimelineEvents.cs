@@ -59,6 +59,7 @@ namespace ZFramework.GAS.Unity
         private Vector3 _targetPosition;
         public bool HasTargetPosition { get; private set; }
         public Vector3 TargetPosition { get => _targetPosition; set { _targetPosition = value; HasTargetPosition = true; } }
+        public void ClearTargetPosition() { _targetPosition = default; HasTargetPosition = false; }
         public Vector3 RequireTargetPosition()
         {
             if (!HasTargetPosition || !float.IsFinite(_targetPosition.x) || !float.IsFinite(_targetPosition.y) || !float.IsFinite(_targetPosition.z))
@@ -73,18 +74,21 @@ namespace ZFramework.GAS.Unity
         public ISkillObjectService Objects;
         public ISkillTargetSelection TargetSelection;
         public ISkillAudioService Audio;
+        public ISkillCameraService Camera;
+        public ISkillTimeService Time;
+        public ISkillRigService Rig;
         public GameplayTaskHost SceneTasks;
         public UnityEngine.SceneManagement.Scene Scene;
         public SkillExecutionContext Execution { get; internal set; }
         public TimelineTaskContext Snapshot() => (TimelineTaskContext)MemberwiseClone();
         internal void RebindTarget(Transform target)
-        { Target = target; HasTargetPosition = target != null; _targetPosition = target != null ? target.position : default; }
+        { Target = target; if (target != null) TargetPosition = target.position; }
         internal void CopyFrom(TimelineTaskContext source)
         {
             Origin = source.Origin; Target = source.Target; _targetPosition = source._targetPosition; HasTargetPosition = source.HasTargetPosition;
             Searcher = source.Searcher; RentVisual = source.RentVisual; ReturnVisual = source.ReturnVisual;
             TargetFilter = source.TargetFilter; FilterHasSnapshot = source.FilterHasSnapshot; Objects = source.Objects;
-            TargetSelection = source.TargetSelection; Audio = source.Audio; SceneTasks = source.SceneTasks; Scene = source.Scene;
+            TargetSelection = source.TargetSelection; Audio = source.Audio; Camera=source.Camera; Time=source.Time; Rig=source.Rig; SceneTasks = source.SceneTasks; Scene = source.Scene;
         }
     }
 
@@ -111,14 +115,15 @@ namespace ZFramework.GAS.Unity
         public LayerMask collisionMask = -1;
         public float curveHeight;
         public float maxDistance = 30;
-        public override SkillActionDefinition Build() => new LaunchProjectileAction
+        public LaunchProjectileAction ToAction() => new LaunchProjectileAction
         {
             prefab = visualPrefab, speed = new SkillNumber(speed), radius = radius, arcHeight = curveHeight,
             lifetime = new SkillNumber(maxDistance > 0 ? maxDistance / Math.Max(.01f, speed) : 10),
             ownership = SkillTaskOwnership.Ability,
             collision = new TargetQuery { kind = TargetQueryKind.Circle, layerMask = collisionMask },
             onHit = impactEffect != null ? new SkillAction[] { new ApplyEffectAction { effect = impactEffect } } : Array.Empty<SkillAction>()
-        }.Build(new SkillActionBuildContext());
+        };
+        public override SkillActionDefinition Build()=>ToAction().Build(new SkillActionBuildContext());
         public override void Spawn(GameplayAbilitySpec ability, TimelineTaskContext context)
         {
             if (context?.Execution != null) { context.Execution.ExecuteAction(Build()); return; }

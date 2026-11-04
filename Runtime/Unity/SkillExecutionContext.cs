@@ -17,17 +17,23 @@ namespace ZFramework.GAS.Unity
         private sealed class CastState { public int Version; public string Error; }
         private readonly CastState _state = new();
         private readonly bool _independent, _cleanup;
+        private string _moduleCallId, _modulePath;
+        public string NavigationId(string actionId) => _moduleCallId ?? actionId;
         private sealed class ModuleCache
         {
             public EffectEvaluationContext Values;
+            public string Path;
             public readonly Stack<SkillExecutionContext> Idle = new();
         }
         private readonly Dictionary<object, ModuleCache> _modules = new();
-        internal SkillExecutionContext ModuleScope(object key, Func<SkillExecutionContext, SkillParameterValues> bind)
+        internal SkillExecutionContext ModuleScope(object key, Func<SkillExecutionContext, SkillParameterValues> bind, string callId, string moduleName)
         {
             if (!_modules.TryGetValue(key, out var cache))
-                _modules.Add(key, cache = new ModuleCache { Values = Values.WithParameters(bind(this)) });
+                _modules.Add(key, cache = new ModuleCache { Values = Values.WithParameters(bind(this)),
+                    Path = (_modulePath == null ? "" : _modulePath + " → ") + moduleName + " [" + callId + "]" });
             var scope = cache.Idle.Count > 0 ? cache.Idle.Pop() : new SkillExecutionContext(this, Target, cache.Values);
+            scope._moduleCallId = NavigationId(callId);
+            scope._modulePath = cache.Path;
             // Only parameter bindings are frozen. A leased synchronous frame gets fresh aim/event data.
             scope.Services.CopyFrom(Services); scope.Event = Event; scope._target = _target; scope._targetGeneration = _targetGeneration;
             scope._position = Position; scope._forward = Forward;
@@ -42,11 +48,13 @@ namespace ZFramework.GAS.Unity
         public GameplayEvent? Event { get; private set; }
         public TimelineTaskContext Services { get; }
         public string CurrentActionId { get; internal set; }
-        public string Status { get; internal set; } = "就绪";
+        private string _status = "就绪";
+        public string Status { get => Error != null ? (_cleanup ? "取消清理失败" : "执行失败") : _status; internal set => _status = value; }
         public string Error => _state.Error;
         public bool IsCastActive => Source != null && Ability.IsActive && Ability.ActivationVersion == _state.Version;
         internal bool CanContinue => Error == null && (_independent || _cleanup || IsCastActive);
         internal void BindActivation() => _state.Version = Ability.ActivationVersion;
+        public int Version => _state.Version;
         private readonly Dictionary<string, float> _channels = new();
         public IReadOnlyDictionary<string, float> Channels => _channels;
         public void SetChannel(string id, float value) => _channels[id] = value;
@@ -106,6 +114,7 @@ namespace ZFramework.GAS.Unity
             _independent = independent || parent._independent; _cleanup = cleanup || parent._cleanup;
             _channels = parent._channels;
             Event = parent.Event;
+            _moduleCallId = parent._moduleCallId; _modulePath = parent._modulePath;
         }
         public SkillExecutionContext WithTarget(AbilitySystemComponent target, Transform transform = null)
         {
@@ -147,7 +156,7 @@ namespace ZFramework.GAS.Unity
                 host = SceneSkillTaskHost.For(scene).Tasks;
             }
             if (task is SkillActionTask actionTask) actionTask.Detach();
-            host.Start(Ability, task);
+            host.Start(Ability, task, _state.Version);
             _detached.RemoveAll(static item => !item.task.IsActive);
             _detached.Add((host, task));
         }
@@ -162,30 +171,34 @@ namespace ZFramework.GAS.Unity
         public bool ExecuteAction(SkillActionDefinition action)
         {
             if (!CanContinue) return false;
-            CurrentActionId = action.Id; Status = action.Label;
-            SkillActionDebug.Boundary?.Invoke(this, action);
-            if (!CanContinue) return false;
-            try { action.Execute(this); }
-            catch (Exception exception) { Fail(exception, action.Id); if (!_cleanup) throw; }
+            CurrentActionId = NavigationId(action.Id); Status = action.Label;
+            Exception fault = null;
+            try { SkillActionDebug.Begin(this, action); if (CanContinue) action.Execute(this); }
+            catch (Exception exception) { fault = exception; Fail(exception, action.Id); if (!_cleanup) throw; }
+            finally { SkillActionDebug.End(this, action, fault); }
             return CanContinue;
         }
         internal void ExecuteModule(IReadOnlyList<SkillActionDefinition> actions, SkillExecutionContext module)
         {
             try { module.Execute(actions); }
-            finally { CurrentActionId = module.CurrentActionId; Status = module.Status; }
+            finally { Status = module.Status; }
         }
-        internal void Fail(Exception exception, string actionId)
+        internal void Fail(Exception exception, string actionId, bool alreadyRecorded = false)
         {
             if (Error != null) return;
+            // A raw project task can fail during StartTask, before the lifetime observer is installed.
+            // Its ASC already ended and diagnosed this run; unwinding the enclosing action isn't another fault.
+            alreadyRecorded |= !_cleanup && !IsCastActive && Ability.ActivationVersion == Version
+                && ReferenceEquals(Ability.LastExecutionFailure.Error, exception);
+            if (_modulePath != null) exception = new SkillActionException(NavigationId(actionId), _modulePath + " / 动作 [" + actionId + "]: " + exception.Message, exception);
+            actionId = NavigationId(actionId);
             _state.Error = exception.Message; Status = _cleanup ? "取消清理失败" : "执行失败"; CurrentActionId = actionId;
-            if (_cleanup && Ability.ActivationVersion == _state.Version)
+            if (_cleanup)
             {
-                Ability.LastCleanupError = string.IsNullOrEmpty(Ability.LastCleanupError) ? exception.Message : Ability.LastCleanupError + "\n" + exception.Message;
-                Ability.LastCleanupActionId = actionId;
+                _source.RecordCleanupError(Ability, _state.Version, exception, actionId);
             }
-            else if (!_cleanup && Ability.ActivationVersion == _state.Version)
-                Ability.LastExecutionFailure = new AbilityActivationCheck(AbilityActivationResult.ExecutionFailed,
-                    exception.Message, sourceId: actionId);
+            else if (!alreadyRecorded)
+                _source.RecordExecutionFailure(Ability, _state.Version, exception, actionId);
             // Cancel all resources created by this cast, including work detached before the failed action.
             for (int i = _detached.Count - 1; i >= 0; i--)
                 try { _detached[i].host.Cancel(_detached[i].task); } catch (Exception cleanup) { Debug.LogException(cleanup); }

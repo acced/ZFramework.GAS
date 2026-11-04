@@ -7,7 +7,9 @@ Unity 的 Gameplay Ability System 实现。属性、标签、效果、能力、C
 
 技能资产支持类型化动作、共享模块、Float / Int / Bool 参数与等级表。时间轴事件配置动作列表，无动画技能配置激活动作。投射物、区域和召唤默认由场景宿主调度；引导与等待属于施放实例。运行时调试已有五类快照、编辑器联动，并扩展了失败来源、参数和动作状态。
 
-动画已有混入／混出，可选 Playables 后端提供独立速度与 AvatarMask。Section 使用稳定 ID，曲线和自定义运行期轨道有进入／采样／退出／取消契约。
+双击时间轴标记可进入动作流程；在分支上创建、重排动作，或将连续动作提取为共享模块。Play 时可在流程节点按 F9，然后在运行时调试窗口查看单位的事件历史、参数和实际走过的分支。
+
+动画支持曲线混合、Section 跳入过渡和片段替换。Playables 后端支持独立变速、按技能遮罩和按单位降频；玩法标记仍由 ASC 逐步推进。多目标预演和各后端的支持范围见 [编辑器指南](Docs~/EditorGuide.md)，真实窗口截图、规模数据和平台验证结果见 [五阶段改进验证](Docs~/EditorImprovementVerification.md)。
 
 接入、生命周期、参数覆盖规则与配置示例见 [可配置技能工作流](Docs~/ConfigurableSkills.md)，本轮测试及限制见 [实施验证记录](Docs~/SkillImplementationVerification.md)。不提供旧版本迁移功能；示例由 BasicCombat 生成器统一更新。
 
@@ -327,6 +329,8 @@ var result = runner.TryCast(abilityAsset, targetAsc, taskContext);
 
 `Grant` 按资产去重，各角色拥有独立 Spec。`TryCast` 返回 Core 的激活结果；成功后内部创建 `AnimationTask`。技能等待所有能力所属任务完成后结束；场景所属任务不阻止技能结束或下一次施放。循环技能由 `Cancel(asset)` 或 ASC 的取消逻辑终止。`Revoke(asset)` 只撤销直接／临时授予；套组通过 `RevokeFrom` 撤销自身贡献，`RevokeAll(asset)` 明确撤销全部来源。HUD 使用 `IsActive(asset)`、`CooldownRemaining(asset)` 和 `CooldownDuration(asset)` 查询状态。
 
+同步预检与提交失败请检查返回值，完整异常在 `runner.LastCastCheck.Error`（Core：`spec.LastActivationCheck.Error`）；直接启动／推进任务仍会报告异常。只读预检不会写入错误历史。调试窗口可右键复制完整堆栈，最近 64 条执行／清理错误以外的覆盖数见 `DroppedDiagnosticCount`。
+
 宿主负责推进 `owner.Tick(dt)`，提供目标与 `TimelineTaskContext`。召唤、选敌、条件、投射物等配置在动作中。技能正常结束会等待动画及所属等待任务完成；场景宿主调度的投射物、区域和召唤独立存活，不阻止下一次施放。运行期状态不写回共享资产；后续执行失败不自动退还已提交的消耗和冷却。
 
 重复显式 Grant 更新下一次施放的等级／参数；套组撤销只移除自身的授予贡献。显式授予会替代首次 TryCast 的临时来源。独立任务回调与取消分支禁止启动技能所属等待任务，构建时会报告动作位置。Section、取消重入、Playable 和参数快照的修复记录见 [边界与生命周期验证](Docs~/SkillHardeningVerification.md)。
@@ -443,7 +447,7 @@ owner.StartTask(spec, task);
 | 能量弹 | 蓄能 Cue、`LaunchProjectileAction`、独立投射物与命中效果 |
 | 战吼 | 作用于自身的持续增益、光环 Cue、霸体窗口 |
 | 圣域引导 | 周期治疗、引导标签窗口阻断其他技能、法阵 Cue |
-| 召唤 | 纯回调事件，由宿主生成守护灵 |
+| 召唤 | 时间轴动作生成守护灵与持续区域，按配置寿命独立存活 |
 
 训练场场景 `BasicCombat.unity` 中的 `TrainingArena` 演示宿主接线：创建 Cue 路由与 ASC、通过 `hero.SkillRunner.TryCast(skill.asset, target, context)` 按资产施放、固定步长推进，以及为投射物提供场景服务。`CombatUnit` 初始化时调用 `CueVfxPlayer.Bind(asc)`，随后时间轴特效由共享配置驱动。训练场不再创建动画任务、持有 Spec 或逐标签管理时间轴特效。
 
@@ -473,7 +477,7 @@ owner.StartTask(spec, task);
 | 子效果链成环 | 深度超过 8 层抛异常；容器状态不受影响，后续调用正常 |
 | 标签窗口开启回调取消能力 | 回滚本窗口已授予的计数，不移除其他来源的标签 |
 | 单帧跨过完整标签窗口和命中事件 | 按时间边界依次开窗、命中、关窗；命中观察到正确标签状态 |
-| 关闭窗口期间标签回调抛异常 | 继续清理其余窗口，再报告首个异常 |
+| 关闭窗口期间标签回调抛异常 | 继续清理其余窗口；由 EndAbility 取消时记录 LastCleanupError，不阻断其他技能的打断流程 |
 
 > 效果持有来源的 `AttributeSet` 引用（用于按来源缩放数值）。
 > 来源单位被回收时，该引用会让其属性集存活到效果被移除为止——这是有意的，
@@ -519,14 +523,12 @@ Unity 6000.3 批处理编译和集成检查通过：Core 实际程序集不引�
 - Unity Mono：时间轴每圈经过标签窗口及无分配测试生成器的任务事件，1,000 圈测得 **0 字节**；序列帧驱动预热 Play/Advance/Stop 测得 0 字节。该结果不覆盖内置 ProjectileSpawner / AreaEffectSpawner 创建新任务的分配。
 - Runtime + Editor 对实际 Unity API 的额外编译检查：0 错误、0 警告。第三方 Tags / Spine Editor 在 Unity 6 存在弃用提示。
 
-该日期尚未执行两名新策划的正式可用性测试、五个样例的完整战斗端到端验收和 IL2CPP 构建。2026-11-02 已新增生成示例五技能的 PlayMode 验证；独立人员可用性验收和 IL2CPP 构建仍未执行。历史 46 项图编辑断言没有现成测试源可逐条迁移；可重复执行的测试源码在 `Tests~/Editor`、`Tests~/PlayMode`、`Tests~/Spine`。当前结果见 `Docs~/SkillImplementationVerification.md`。
+该日期尚未执行两名新策划的正式可用性测试、五个样例的完整战斗端到端验收和 IL2CPP 构建。之后已补充五技能 PlayMode 验证、Windows 独立 Mono 冒烟、Android IL2CPP 构建及 UnityLinker 描述文件注入验证。尚未进行 Android 真机施放或独立人员可用性验收。可重复执行的测试源码在 `Tests~/Editor`、`Tests~/PlayMode`、`Tests~/Spine`。当前结果和平台限制见[五阶段改进验证](Docs~/EditorImprovementVerification.md)。
 
 
 ### 测量的边界
-- GC 测量在 **Editor + Mono** 下进行，**IL2CPP 未验证**——
-  当前机器未安装 IL2CPP 构建支持模块，装上后一次构建即可判定（见 `REFACTOR.md` 31.6）。
-  静态审计已做到元数据层面：源码零反射 API，两个运行期程序集**零自定义泛型、零 P/Invoke、
-  零泛型虚方法**，所用 BCL 泛型的值类型实例化全部写在字段声明里、静态可见
+- GC 测量在 **Editor + Mono** 下进行，**不代表 IL2CPP 真机的 GC 或帧耗时**。运行时骨骼识别／惯性混合已在 Android ARM64 IL2CPP 模拟器跑过功能回归；本机未安装此 Unity 版本的 Windows IL2CPP 构建模块。
+  构建处理器为具体的动作、轨道、后端及执行器生成裁剪描述；运行期不通过反射发现或调用动作。
 - 检出下限取决于迭代次数：百万次约 2–3 B/次，六十万次约 25 B/次。
   因此结论是「无可测量的分配」而非「绝对 0 字节」
 - **持续效果创建采用容器级复用**：外部只持有单调递增的 `ActiveGameplayEffectHandle`；
@@ -552,6 +554,12 @@ Unity 6000.3 批处理编译和集成检查通过：Core 实际程序集不引�
 
 ### 来源标识与取消诊断
 
-Unity 任务／动作的效果与 Cue `Source` 可为 `AbilitySourceIdentity`。使用 `identity.Owner` 获取当前仍有效的原 ASC，`Clear()` 后返回 null；直接 `as AbilitySystemComponent` 不再适用于这些来源。Core 手工构造 Spec 的 source 仍按调用方原样传递。代码示例见 [Source 接入说明](Docs~/ConfigurableSkills.md#授予来源与-source-身份)。
+Core 与 Unity 的技能效果统一使用 `AbilitySourceIdentity`。`GameplayEffectSpec(source: asc)` 也会捕获该 ASC 当次身份，按来源叠层不再因入口不同而分开；`Effects.FindFrom(definition, asc)` 同样归一到当前身份，原来的查询入口继续可用。查询旧单位化身留下的效果时需保留并传入旧身份。自定义的非 ASC 来源对象仍原样保留。使用 `identity.Owner` 获取当前仍有效的原 ASC，`Clear()` 后返回 null；直接 `as AbilitySystemComponent` 不再适用于这些来源。代码示例见 [Source 接入说明](Docs~/ConfigurableSkills.md#授予来源与-source-身份)。
 
-取消回调失败单独记入 `LastCleanupError`／`LastCleanupActionId`，显示为调试窗口中的取消清理警告。它不传播到 `EndAbility`，也不清理此前已独立存活的任务；失败的清理分支自行创建的资源仍会回收。消耗／冷却的完整效果树在取消其他技能、扣费之前预检；瞬时效果先解析全部数值再写入属性。
+取消回调及任务 OnEnd 失败记入 `LastCleanupError`（配置动作另有 `LastCleanupActionId`），显示为调试窗口中的取消清理警告。它不传播到 `EndAbility`，仍继续结束其余任务和技能，也不清理此前已独立存活的任务；失败的清理分支自行创建的资源仍会回收。消耗／冷却的完整效果树在取消其他技能、扣费之前预检；瞬时效果先解析全部数值再写入属性。
+
+ASC 与场景宿主都按本帧的任务运行版本推进，回调删除或重启任务不会重复 Tick。同一宿主的嵌套 Tick 明确抛出 `InvalidOperationException`，由外层循环统一推进时间。任务推进失败会记入 `LastExecutionFailure` 并结束该次技能，其他技能继续完成本帧，多个异常聚合报告。取消清理异常不从 `EndAbility` 逃逸。
+
+ASC 另保留最近 64 条执行／清理错误，可用 `DiagnosticCount`、`GetDiagnostic(index)` 读取；移除技能、`Clear()` 或对象池回收不会丢失记录，宿主显式 `ClearDiagnostics()` 清除。调试窗口提供错误记录及动作定位。模块的构建、施放预检和延迟失败都定位到技能内的 CallModule，消息保留内层模块路径与动作 ID。
+
+Core 默认 `TryActivateAbility(spec)` 固定本次等级，来源属性仍实时读取；需要冻结来源值时调用 `TryActivateAbility(spec, captureSource: true)`。`SkillRunner` 始终冻结等级、参数和来源属性供独立任务使用。快照是不可变数据，属性变化后重新捕获会分配；本轮已验证预热后 10,000 次 Core 施放（消耗、冷却、DoT、资源恢复及攻击力变化）为 0 字节分配。该结果不覆盖快照捕获、Unity 施放构建、新任务或编辑器刷新，历史的 100,000 次无消耗激活测量也不代表整套系统零 GC。

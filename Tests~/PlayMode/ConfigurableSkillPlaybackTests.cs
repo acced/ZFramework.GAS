@@ -29,7 +29,9 @@ namespace ZFramework.GAS.Tests
             try
             {
                 var health = target.Get(CombatUnit.Health);
-                arena.Cast(0); yield return new WaitForSeconds(.6f);
+                arena.ToggleWeaponMotion();arena.Cast(0); yield return new WaitForSeconds(.3f);
+                Assert.IsTrue(hero.GetComponentInChildren<Animator>().GetCurrentAnimatorStateInfo(0).IsName("Base Layer.AxeSlash"));
+                yield return new WaitForSeconds(.3f);arena.ToggleWeaponMotion();
                 Assert.Less(target.Get(CombatUnit.Health), health, "Generated sector damage should hit the dummy without business callbacks");
                 arena.Cast(2); yield return new WaitForSeconds(1.3f);
                 Assert.IsTrue(hero.AbilitySystem.OwnedTags.HasTag(GameplayTags.GameplayTagManager.RequestTag(SampleTags.Empowered)));

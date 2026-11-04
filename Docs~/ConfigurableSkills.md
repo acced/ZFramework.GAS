@@ -14,7 +14,7 @@
 
 参数包括稳定 ID、显示名、说明、类型（Float / Int / Bool）、默认值和可选等级表。等级从 1 开始，超过表长使用末项。绑定时选择参数；改显示名不改变 ID。
 
-解析顺序：共享参数集默认值 → 当前技能覆盖 → 授予时覆盖 → 本次施放覆盖。授予时覆盖属于当前技能在该单位上的配置。施放开始后冻结等级、参数和来源属性；执行中的投射物不读取后来升级的数值。
+解析顺序：共享参数集默认值 → 当前技能覆盖 → 授予时覆盖 → 本次施放覆盖。授予时覆盖属于当前技能在该单位上的配置。SkillRunner 施放开始后冻结等级、参数和来源属性；执行中的投射物不读取后来升级的数值。低层 Core 的实时／快照选择见下文。
 
 数值框选择「固定值」或者参数。参数绑定的数值是 `参数 × 系数`。效果数值还可选择等级表、来源／目标属性和受限伤害公式：
 
@@ -85,11 +85,11 @@ Int 参数必须是 Int32 范围内的整数，Bool 的数值配置只接受 0�
 
 可选 Playables 后端独立控制技能片段的速度，基础 Animator Controller 继续运行。LayerMixer 可配置 AvatarMask 与叠加层。现有 Animator、Legacy、序列帧等后端保留。运行期根运动通过 `ISkillMovementAdapter` 交给项目角色移动逻辑。
 
-Playable 混合中再次 Play 会保留当前混合权重；Stop 立即停止向技能移动适配器提交根运动并恢复原设置，混出仍可继续。Seek 仅采样姿势，不提交根运动。Unity 6000.3.14f1 中已验证普通 Animator.SetFloat／SetTrigger 可操作实际控制器，并验证接管前的当前状态与播放进度；项目自定义 StateMachineBehaviour、复杂过渡及其他 Unity 版本仍应进行接入验证。
+Playable 混合中再次 Play 会保留当前混合权重；Stop 立即停止向技能移动适配器提交根运动并恢复原设置，混出仍可继续。Seek 仅采样技能姿势，不提交根运动。带基础控制器的 Animator 保留项目原有状态机，技能输出以排序 100 读取前序动画流（PreviousInputs）并叠加技能层。Dispose 解绑并销毁自己的图，不用 Update(0) 重采样默认状态，也不用重放 Trigger 或写回参数。使用其他动画输出／Rig 的项目应检查所需执行顺序。
 
 时间轴「＋轨道 / 动画段」创建 Section，Details 的下一段下拉显示名称但保存稳定 ID。曲线／扩展轨道的类型菜单可选择 `AudioSkillTrack`：拖入 AudioClip，设置区间、音量、空间化与循环；退出或取消轨道时停止声音。项目可通过 `ISkillAudioService` 替换默认 AudioSource。
 
-预览上方可打开范围、假人、前后帧、根位移和音效。范围直接读取动作查询及模块参数；等级和目标距离只影响预览。假人是尺寸参照线框，不执行伤害与阵营过滤；最终命中以物理碰撞体为准。前后帧显示当前时间前后各三帧；根位移显示片段采样的轨迹，原地动画或已烘焙到姿态的根运动可能没有位移。音效使用窗口独立持有的 AudioSource 通道，重叠音轨可以同时播放；退出区间只停止对应通道，关闭窗口只释放自身资源。拖动或循环回到起点会显式跳转，普通慢帧不会重启声音。预览为居中试听，不模拟运行期空间音频混音。
+预览上方可打开范围、假人、前后帧、根位移和音效。范围直接读取动作查询及模块参数；等级和目标距离只影响预览。假人是尺寸参照线框，不执行伤害与阵营过滤；最终命中以物理碰撞体为准。前后帧显示当前时间前后各三帧；根位移显示片段采样的轨迹，原地动画或已烘焙到姿态的根运动可能没有位移。音效使用窗口独立持有的 AudioSource 通道，重叠音轨可以同时播放；退出区间只停止对应通道，关闭窗口只释放自身资源。暂停立即停止试听，恢复从当前播放头继续。时间轴按真实编辑器时间推进，慢帧不再截成 0.1 秒；拖动或循环回到起点才显式跳转。预览为居中试听，不模拟运行期空间音频混音。
 
 ## 不写业务回调的五个配置练习
 
@@ -120,9 +120,9 @@ Core 的旧零分配断言继续保留。施放构建和编辑器刷新允许分
 
 ## 授予来源与 Source 身份
 
-`TryCast` 首次使用的隐式授予是临时来源，之后显式 `Grant` 或套组授予会替代它。`Revoke(asset)` 只撤销直接／临时授予，不撤销套组的贡献；套组通过 `RevokeFrom` 撤销自身贡献。需要彻底删除所有来源时显式调用 `RevokeAll(asset)`。剩余来源恢复最近一次授予的等级和参数。
+`TryCast` 首次使用的隐式授予是临时来源，之后显式 `Grant` 或套组授予会替代它。`Revoke(asset)` 只撤销直接／临时授予，不撤销套组的贡献；套组通过 `RevokeFrom` 撤销自身贡献。需要彻底删除所有来源时显式调用 `RevokeAll(asset)`。剩余来源恢复最近一次授予的等级和参数。`ASC.Clear()` 清理运行状态，仍持有的 SkillRunner 保留授予记录；下次施放或授予会用原等级和参数重建 Spec，套组仍能正确撤销。只读查询和撤销操作不会重新创建 Spec。需要换成全新单位配置时应撤销旧授予或新建 Runner。
 
-Unity 动作及直接动画／投射物／区域任务发出的效果和 Cue，`Source` 可以是 `AbilitySourceIdentity`，不再保证是 ASC。直接写 `info.Source as AbilitySystemComponent` 可能得到 null。接入代码应兼容身份对象与调用方自行传入的来源：
+Core 消耗／冷却、Unity 动作及直接动画／投射物／区域任务的效果与 Cue 使用 `AbilitySourceIdentity`。`GameplayEffectSpec` 收到 ASC 来源时在构造时归一为当次身份，两个入口按来源叠层保持一致。直接写 `info.Source as AbilitySystemComponent` 可能得到 null。接入代码应兼容身份对象与调用方自行传入的来源：
 
 ```csharp
 AbilitySystemComponent ResolveSource(object source) => source switch
@@ -133,4 +133,22 @@ AbilitySystemComponent ResolveSource(object source) => source switch
 };
 ```
 
-`Owner` 在原 ASC 调用 `Clear()`、被回收复用后返回 null，避免把旧投射物归属给新单位。不要把 Source 改回裸 ASC；同一实例的新旧 incarnation 需要不同的来源身份。独立任务继续用捕获的等级、参数和来源属性求值，无须从回收后的 Owner 取值。Core 的低层 `GameplayEffectSpec(source: ...)` 仍保留调用方提供的来源对象。
+`Owner` 在原 ASC 调用 `Clear()`、被回收复用后返回 null，避免把旧投射物归属给新单位。同一实例的新旧 incarnation 使用不同身份；Core 的低层 `GameplayEffectSpec(source: ...)` 仅对 ASC 做归一，其他自定义来源对象原样保留。`Effects.FindFrom(definition, asc)` 接受原 ASC，按其当前身份查询；要查回收前的来源效果，应传入此前保存的 `SourceIdentity`。
+
+Core 默认激活只冻结等级，`spec.EvaluationContext` 的来源属性继续实时读取，避免普通扣费或回血触发每次施放复制属性。需要同次施放所有任务使用同一来源值时，显式 `asc.TryActivateAbility(spec, captureSource: true)`；也可以传入自行构造的冻结 `EffectEvaluationContext`。SkillRunner 始终捕获施放快照，独立任务不依赖回收后的 Owner。显式快照在属性变化后需要新内存，不承诺零分配。低层 Core 的实时上下文不应供回收后仍存活的独立工作使用。
+
+复用 `TimelineTaskContext` 时可以调用 `ClearTargetPosition()` 撤销上次的显式落点，世界原点仍是合法落点。`WithTarget(unit)` 没有传 Transform 时保留现有目标点；传入新 Transform 才用它的位置重绑。修改宿主上下文不会改变已经创建的施放快照。
+
+## 执行失败、清理与时间推进
+
+`CheckActivation` 把自定义效果计算失败作为 InvalidConfiguration 返回，`AbilityActivationCheck.Error` 保留原异常、堆栈及 InnerException。只读检查不会向 ASC 错误记录追加条目。意外的非配置异常返回 ExecutionFailed；传入其他 ASC 的 Spec 等 API 误用仍抛出参数异常。
+
+`TryActivateAbility` 和 `SkillRunner.TryCast` 都返回施放结果。同步资产预检失败不再要求捕获异常；即使首次构建资产失败、尚未产生 Spec，也能读取 `runner.LastCastCheck.Error`。打断其他技能的回调可能改变资源和条件，发生打断后会在扣费前复查；提交或启动回调抛错返回 ExecutionFailed，清除本次已授予的激活标签，已经发生的打断、扣费、冷却不自动撤销。直接使用 StartTask 或手动 Tick 的调用方仍可收到任务异常。
+
+CallModule 的构建、预检和运行失败统一定位到技能中的调用动作。消息保留模块路径和内部动作 ID，等待任务、独立区域及取消分支也继承该定位。ASC 任务推进抛错时结束对应施放并记为执行失败，不会显示正常完成；其他技能的任务完成本帧后再报告异常。
+
+ASC 所属任务的 OnBegin 和 Tick 失败都会结束对应的施放。Spec 保留这次施放的首个执行失败；ASC 的 64 条环形记录另保留各个独立错误和清理错误，同一异常沿调用栈传播只记一次。场景宿主记录失败所属的施放版本，不中断新一轮施放。错误不立即格式化堆栈；右击调试窗口中的失败项可复制完整异常。条目被覆盖的数量见 `DroppedDiagnosticCount`；`ClearDiagnostics()` 同时清除记录与覆盖计数，`ASC.Clear()` 和移除技能则不会清空诊断。
+
+ASC 和 GameplayTaskHost 都禁止同一实例嵌套 Tick，直接抛出 InvalidOperationException；不要在任务、效果或事件回调里推进该宿主。由游戏主循环每帧统一传入一次 delta。不同宿主分别推进不受此限制。
+
+Section 使用 `[start,end)`。事件精确对齐任意段的起点时属于该段，进入时触发，不报终点警告；没进入该段就不触发。只有靠近排他终点且不属于任何段起点的标记／任务事件才警告（含缩放可能导致重合的一个浮点步长）。属于上一段的事件可以提早，属于下一段的事件应保留在起点。

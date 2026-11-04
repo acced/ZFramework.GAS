@@ -25,12 +25,13 @@ namespace ZFramework.GAS.Editor.Tests
             public int nodes = 100, skills = 500;
             public List<Metric> metrics = new();
         }
-        private static Metric Measure(string name, Action<int> action, int count = 40)
+        private static Metric Measure(string name, Action<int> action, int count = 40,Action<int> before=null)
         {
             var samples = new double[count]; long allocation = 0;
             bool canMeasure = AllocationMeter.Works();
             for (int i = 0; i < count; i++)
             {
+                before?.Invoke(i);
                 using var meter = canMeasure ? new AllocationMeter() : null;
                 long start = Stopwatch.GetTimestamp(); action(i);
                 samples[i] = (Stopwatch.GetTimestamp() - start) * 1000d / Stopwatch.Frequency;
@@ -51,6 +52,8 @@ namespace ZFramework.GAS.Editor.Tests
             {
                 var root = ScriptableObject.CreateInstance<GameplayAbilityAsset>(); root.displayName = "Scale 0";
                 AssetDatabase.CreateAsset(root, Folder + "/Skill000.asset");
+                var module=ScriptableObject.CreateInstance<SkillActionModuleAsset>();module.actions=new SkillAction[]{new ConditionalAction()};
+                AssetDatabase.CreateAsset(module,Folder+"/SharedAction.asset");
                 GameplayEffectAsset first = null;
                 AssetDatabase.StartAssetEditing();
                 try
@@ -58,6 +61,10 @@ namespace ZFramework.GAS.Editor.Tests
                     for (int i = 1; i < 500; i++)
                     {
                         var skill = ScriptableObject.CreateInstance<GameplayAbilityAsset>(); skill.displayName = "Scale " + i;
+                        SkillAction call=new CallModuleAction{module=module};
+                        if(i%3==1)call=new ConditionalAction{whenFalse=new[]{call}};
+                        if(i%3==2)call=new WaitSkillAction{onCancel=new SkillAction[]{new ConditionalAction{whenTrue=new[]{call}}}};
+                        skill.activationActions=new[]{call};
                         AssetDatabase.CreateAsset(skill, Folder + "/Skill" + i.ToString("D3") + ".asset");
                     }
                     var actions = new List<SkillAction>();
@@ -74,6 +81,30 @@ namespace ZFramework.GAS.Editor.Tests
                 report.metrics.Add(Measure("cold search 500", _ => SkillIndex.Search("Scale", matches), 1));
                 Assert.GreaterOrEqual(matches.Count, 500);
                 var search = Measure("warm search 500", i => SkillIndex.Search("Scale " + (i % 10), matches)); report.metrics.Add(search);
+                var hits=new List<SkillContentIndex.Hit>();
+                report.metrics.Add(Measure("cold global content search 500",_=>SkillContentIndex.Search("Scale",hits),1));
+                var global=Measure("warm global content search 500",i=>SkillContentIndex.Search("Scale "+(i%10),hits));report.metrics.Add(global);
+                Assert.Less(global.p95Milliseconds,200);
+                var touched=Folder+"/Skill001.asset";var single=AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(touched);
+                IEnumerator AfterChange(string name,bool undo)
+                {
+                    var times=new double[20];
+                    for(int i=0;i<times.Length;i++){
+                        Undo.IncrementCurrentGroup();Undo.RecordObject(single,"Search invalidation");
+                        string token=(undo?"UndoToken":"ImportToken")+i.ToString("D3");single.displayName=token;EditorUtility.SetDirty(single);Undo.FlushUndoRecordObjects();
+                        AssetDatabase.SaveAssetIfDirty(single);AssetDatabase.ImportAsset(touched,ImportAssetOptions.ForceUpdate|ImportAssetOptions.ForceSynchronousImport);
+                        yield return null; // Let the actual postprocessor deliver its batched path notification.
+                        if(undo){SkillContentIndex.Search(token,hits);Assert.IsTrue(hits.Any(h=>h.Asset==single),$"Saved token {token}, actual asset value {single.displayName}, matching hits {hits.Count}.");Undo.PerformUndo();}
+                        var start=Stopwatch.GetTimestamp();SkillContentIndex.Search(token,hits);
+                        times[i]=(Stopwatch.GetTimestamp()-start)*1000d/Stopwatch.Frequency;
+                        Assert.AreEqual(!undo,hits.Any(h=>h.Asset==single),"Search must see a saved edit and its Undo immediately.");
+                        if(!undo)Undo.PerformUndo();
+                    }
+                    Array.Sort(times);report.metrics.Add(new Metric{name=name,p95Milliseconds=times[18],allocationCallsPerOperation=-1});
+                    Assert.Less(times[18],200);
+                }
+                yield return AfterChange("global search after one skill reimport",false);
+                yield return AfterChange("global search after one skill undo",true);
                 report.metrics.Add(Measure("cold window open 100 nodes", _ => { window = SkillEditorWindow.Open(); window.Show(root); }, 1));
                 for (int i = 0; i < 35; i++) yield return null;
                 var graph = window.rootVisualElement.Q<SkillGraphView>(); Assert.AreEqual(100, graph.NodeCount);
@@ -87,6 +118,33 @@ namespace ZFramework.GAS.Editor.Tests
                 Assert.IsNotNull(repaint);
                 var drag = Measure("warm drag update and repaint 100 nodes", i => { var rect = bounds; rect.position += new Vector2(i % 20, i % 10); node.SetPosition(rect); repaint.Invoke(parent, null); }); report.metrics.Add(drag);
                 report.metrics.Add(Measure("Undo and Redo 100 nodes", _ => { Undo.PerformUndo(); Undo.PerformRedo(); }, 10));
+                window.Show(single);document=window.Document;document.Selection.Select(module);document.OpenFlow();
+                using(var moduleData=new SerializedObject(module))
+                    report.metrics.Add(Measure("first mixed caller index and validation (499 callers)",_=>SkillFlowCommands.ValidateOwner(moduleData,document),1));
+                int revision=0;
+                void FlowEdit(int _) =>EditCommand.Run(document,"修改模块动作",module,so=>{
+                    so.FindProperty("actions.Array.data[0].displayName").stringValue="edit "+(++revision);
+                    so.ApplyModifiedProperties();SkillFlowCommands.ValidateOwner(so,document);
+                },true);
+                var validation=Measure("warm flow edit with Undo and document notification (499 mixed callers)",FlowEdit);
+                report.metrics.Add(validation);Assert.LessOrEqual(validation.p95Milliseconds,50,"Shared module edit budget");
+                report.metrics.Add(Measure("first flow edit after Undo (499 mixed callers)",FlowEdit,20,_=>Undo.PerformUndo()));
+                // Compare the one-time dependency index with a real warm Undo that must
+                // delete the extracted file while 500 skills are present in the project.
+                report.metrics.Add(Measure("cold dependency index for effect ownership (500 skills)",_=>SkillReferenceGuard.Prepare(),1));
+                string unusedPath=Folder+"/UnusedModule.asset";var unused=ScriptableObject.CreateInstance<SkillActionModuleAsset>();
+                AssetDatabase.CreateAsset(unused,unusedPath);SkillReferenceGuard.Prepare();
+                report.metrics.Add(Measure("first exact reference check for unreferenced module (500 skills)",
+                    _=>Assert.IsNull(SkillReferenceGuard.Find(unusedPath,new[]{unused})),1));
+                report.metrics.Add(Measure("warm exact reference check for unreferenced module (500 skills)",
+                    _=>Assert.IsNull(SkillReferenceGuard.Find(unusedPath,new[]{unused})),12));
+                var small=ScriptableObject.CreateInstance<GameplayAbilityAsset>();small.activationActions=new SkillAction[]{new ConditionalAction()};
+                AssetDatabase.CreateAsset(small,Folder+"/FileUndoCaller.asset");
+                string extracted=Folder+"/FileUndoModule.asset";
+                SkillFlowCommands.Extract(null,small,"activationActions",0,1,extracted);
+                report.metrics.Add(Measure("warm Undo extracted module file (500 skills)",_=>{
+                    Undo.PerformUndo();Assert.IsFalse(File.Exists(extracted));
+                },12,i=>{if(i>0)Undo.PerformRedo();}));
                 string directory = Path.Combine(Directory.GetCurrentDirectory(), "GASValidation~"); Directory.CreateDirectory(directory);
                 File.WriteAllText(Path.Combine(directory, "skill-scale.json"), JsonUtility.ToJson(report, true));
                 UnityEngine.Debug.Log(JsonUtility.ToJson(report, true));

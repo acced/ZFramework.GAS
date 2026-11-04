@@ -30,8 +30,13 @@ namespace ZFramework.GAS.Editor
             var so = _doc.Serialized(asset);
             string track = _doc.Selection.Track;
             var element = track == "@field" ? so.FindProperty(_doc.Selection.ElementId) : track != null ? TimelineCommands.Find(so, track, _doc.Selection.ElementId) : null;
+            if (asset is GameplayAbilityAsset || asset is SkillActionModuleAsset || (asset is SkillAnimationAsset && (track == "markers" || track == "@field")))
+                _body.Add(new Button(_doc.OpenFlow) { text = "在流程中打开" });
             if (element != null)
             {
+                string debugId=element.propertyType==SerializedPropertyType.ManagedReference && element.managedReferenceValue is SkillAction action ? action.Id :
+                    track=="markers"?_doc.Selection.ElementId:null;
+                if(!string.IsNullOrEmpty(debugId))_body.Add(new Button(()=>SkillActionDebugger.Toggle(debugId)){text="切换断点"});
                 var field = new PropertyField(element, TrackTypeRegistry.Get(track)?.DisplayName ?? "事件"); _body.Add(field); field.BindProperty(element);
                 var effect = element.FindPropertyRelative("effect")?.objectReferenceValue;
                 if (effect != null)
@@ -39,7 +44,7 @@ namespace ZFramework.GAS.Editor
                     var heading = new Label(effect.name + " · 效果设置"); heading.AddToClassList("panel-heading"); _body.Add(heading);
                     AddInspector(_doc.Serialized(effect));
                 }
-                field.RegisterCallback<SerializedPropertyChangeEvent>(e => { string path = e.changedProperty.propertyPath; schedule.Execute(() => _doc.Notify(new ChangeSet(asset, false, path))); });
+                field.RegisterCallback<SerializedPropertyChangeEvent>(e => _doc.NotifySerializedChange(asset, e.changedProperty.propertyPath));
             }
             else
             {
@@ -74,9 +79,7 @@ namespace ZFramework.GAS.Editor
             var inspector = new InspectorElement(so); _body.Add(inspector);
             inspector.RegisterCallback<SerializedPropertyChangeEvent>(e =>
             {
-                string path = e.changedProperty.propertyPath;
-                var asset = so.targetObject;
-                schedule.Execute(() => _doc.Notify(new ChangeSet(asset, false, path)));
+                _doc.NotifySerializedChange(so.targetObject, e.changedProperty.propertyPath);
             });
         }
         public void Dispose() { _doc.Selection.Changed -= Rebuild; _doc.Changed -= Changed; _body.Unbind(); }
@@ -92,12 +95,12 @@ namespace ZFramework.GAS.Editor
             foreach (string path in new[] { "displayName", "description", "icon", "parameterSet", "parameters", "parameterOverrides", "activationActions" })
             {
                 var field = new PropertyField(so.FindProperty(path)); Add(field); field.BindProperty(so.FindProperty(path));
-                field.RegisterCallback<SerializedPropertyChangeEvent>(e => _doc.Notify(new ChangeSet(_doc.Root, false, e.changedProperty.propertyPath)));
+                field.RegisterCallback<SerializedPropertyChangeEvent>(e => _doc.NotifySerializedChange(so.targetObject, e.changedProperty.propertyPath));
             }
             foreach (var pair in new[] { ("abilityTags", "能力标识"), ("activationRequiredTags", "激活需要"), ("activationBlockedTags", "激活阻断"), ("activationOwnedTags", "激活期间授予"), ("cancelAbilitiesWithTags", "激活时取消"), ("callerParameters", "调用方参数声明") })
             {
                 var field = new PropertyField(so.FindProperty(pair.Item1), pair.Item2); Add(field); field.BindProperty(so.FindProperty(pair.Item1));
-                field.RegisterCallback<SerializedPropertyChangeEvent>(_ => _doc.Notify(new ChangeSet(_doc.Root)));
+                field.RegisterCallback<SerializedPropertyChangeEvent>(e => _doc.NotifySerializedChange(so.targetObject, e.changedProperty.propertyPath));
             }
             var title = new Label("门禁模拟器"); title.AddToClassList("panel-heading"); Add(title);
             var input = new TextField("当前持有标签") { multiline = true, tooltip = "用逗号或换行分隔已注册标签" }; Add(input);

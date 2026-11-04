@@ -1,47 +1,298 @@
 {
-    "utc": "2026-11-02T08:25:27.5336422Z",
+  "utc": "2026-11-04T03:56:39.1009180Z",
+  "unity": "6000.3.14f1",
+  "cpu": "Intel(R) Core(TM) i5-14400F",
+  "os": "Windows 10  (10.0.19045) 64bit",
+  "gpu": "NVIDIA GeForce RTX 5060",
+  "note": "Cold means first index/window access in this editor process. Drag measures position change plus synchronous GUI repaint CPU; OS input latency and GPU presentation are not included.",
+  "nodes": 100,
+  "skills": 500,
+  "metrics": [
+    {
+      "name": "cold search 500",
+      "p95Milliseconds": 182.7012,
+      "allocationCallsPerOperation": 14700
+    },
+    {
+      "name": "warm search 500",
+      "p95Milliseconds": 4.106,
+      "allocationCallsPerOperation": 2
+    },
+    {
+      "name": "cold global content search 500",
+      "p95Milliseconds": 282.0218,
+      "allocationCallsPerOperation": 41930
+    },
+    {
+      "name": "warm global content search 500",
+      "p95Milliseconds": 4.6773,
+      "allocationCallsPerOperation": 3
+    },
+    {
+      "name": "global search after one skill reimport",
+      "p95Milliseconds": 3.8789,
+      "allocationCallsPerOperation": -1
+    },
+    {
+      "name": "global search after one skill undo",
+      "p95Milliseconds": 4.243,
+      "allocationCallsPerOperation": -1
+    },
+    {
+      "name": "cold window open 100 nodes",
+      "p95Milliseconds": 821.7737,
+      "allocationCallsPerOperation": 221890
+    },
+    {
+      "name": "warm library search and visible rows 500",
+      "p95Milliseconds": 43.8927,
+      "allocationCallsPerOperation": 9605
+    },
+    {
+      "name": "warm scalar edit 100 nodes",
+      "p95Milliseconds": 4.0252,
+      "allocationCallsPerOperation": 881
+    },
+    {
+      "name": "warm drag update and repaint 100 nodes",
+      "p95Milliseconds": 14.4479,
+      "allocationCallsPerOperation": 170
+    },
+    {
+      "name": "Undo and Redo 100 nodes",
+      "p95Milliseconds": 492.369,
+      "allocationCallsPerOperation": 89026
+    },
+    {
+      "name": "first mixed caller index and validation (499 callers)",
+      "p95Milliseconds": 103.7313,
+      "allocationCallsPerOperation": 7705
+    },
+    {
+      "name": "warm flow edit with Undo and document notification (499 mixed callers)",
+      "p95Milliseconds": 17.2861,
+      "allocationCallsPerOperation": 5074
+    },
+    {
+      "name": "first flow edit after Undo (499 mixed callers)",
+      "p95Milliseconds": 26.7315,
+      "allocationCallsPerOperation": 5145
+    },
+    {
+      "name": "cold dependency index for effect ownership (500 skills)",
+      "p95Milliseconds": 180.1712,
+      "allocationCallsPerOperation": 10207
+    },
+    {
+      "name": "first exact reference check for unreferenced module (500 skills)",
+      "p95Milliseconds": 467.7094,
+      "allocationCallsPerOperation": 4859
+    },
+    {
+      "name": "warm exact reference check for unreferenced module (500 skills)",
+      "p95Milliseconds": 29.8602,
+      "allocationCallsPerOperation": 2336
+    },
+    {
+      "name": "warm Undo extracted module file (500 skills)",
+      "p95Milliseconds": 78.0315,
+      "allocationCallsPerOperation": 8762
+    }
+  ],
+  "runtime": {
     "unity": "6000.3.14f1",
     "cpu": "Intel(R) Core(TM) i5-14400F",
-    "os": "Windows 10  (10.0.19045) 64bit",
-    "gpu": "NVIDIA GeForce RTX 5060",
-    "note": "Cold means first index/window access in this editor process. Drag measures position change plus synchronous GUI repaint CPU; OS input latency and GPU presentation are not included.",
-    "nodes": 100,
-    "skills": 500,
-    "metrics": [
-        {
-            "name": "cold search 500",
-            "p95Milliseconds": 194.6665,
-            "allocationCallsPerOperation": 14001
-        },
-        {
-            "name": "warm search 500",
-            "p95Milliseconds": 3.4236,
-            "allocationCallsPerOperation": 2
-        },
-        {
-            "name": "cold window open 100 nodes",
-            "p95Milliseconds": 1010.8605,
-            "allocationCallsPerOperation": 215788
-        },
-        {
-            "name": "warm library search and visible rows 500",
-            "p95Milliseconds": 39.5329,
-            "allocationCallsPerOperation": 8329
-        },
-        {
-            "name": "warm scalar edit 100 nodes",
-            "p95Milliseconds": 2.1819,
-            "allocationCallsPerOperation": 257
-        },
-        {
-            "name": "warm drag update and repaint 100 nodes",
-            "p95Milliseconds": 11.3169,
-            "allocationCallsPerOperation": 1175
-        },
-        {
-            "name": "Undo and Redo 100 nodes",
-            "p95Milliseconds": 437.8226,
-            "allocationCallsPerOperation": 83191
-        }
+    "note": "Wall-clock CPU benchmark in Editor PlayMode; measured cohort always contains 200 units. Normal/control frames are paired with alternating first runner; both use the same controller, clip, LOD, Hold and gameplay. p95 is uninstrumented. observe/animator/asc/scheduled are per-stage MEAN ms across 120 separate instrumented frames, including timestamp overhead. Control omits handoff job and its handles. pairedMedianMs is the median within-frame normal minus control wall time. Windows MCycles use QueryThreadCycleTime on the main thread in a separate pass; exclude worker time, include query overhead and are not elapsed ms. Byte/GC.Alloc probes run separately; -1 means unavailable.",
+    "units": 200,
+    "frames": 120,
+    "bonesPerUnit": 84,
+    "peakFourthFrameEvaluations": 50,
+    "animatedTransformsPerUnit": 19,
+    "everyFrameP95": 5.9749,
+    "everyFourthP95": 6.6974,
+    "everyFrameBytes": -1,
+    "everyFourthBytes": -1,
+    "everyFrameAllocations": 0,
+    "everyFourthAllocations": 0,
+    "everyFrameEvaluations": 24000,
+    "everyFourthEvaluations": 6000,
+    "markers": 400,
+    "runs": [
+      {
+        "handoff": true,
+        "rate": 1,
+        "markers": 400,
+        "watchedBones": 0,
+        "connectedHandoffJobs": 0,
+        "evaluations": 24000,
+        "p95": 5.9749,
+        "observe": 0.029586666666666667,
+        "animator": 2.7120099999999994,
+        "asc": 0.3359033333333333,
+        "scheduled": 3.1331108333333324,
+        "observeMCycles": 0.12915321666666665,
+        "animatorMCycles": 7.0074726,
+        "ascMCycles": 0.925087491666667,
+        "scheduledMCycles": 7.835162391666665
+      },
+      {
+        "handoff": true,
+        "rate": 4,
+        "markers": 400,
+        "watchedBones": 0,
+        "connectedHandoffJobs": 0,
+        "evaluations": 6000,
+        "p95": 6.6974,
+        "observe": 0.026805833333333324,
+        "animator": 2.3711850000000005,
+        "asc": 0.29314083333333335,
+        "scheduled": 2.0337849999999995,
+        "observeMCycles": 0.13598124166666664,
+        "animatorMCycles": 6.678870841666669,
+        "ascMCycles": 0.8693027249999998,
+        "scheduledMCycles": 5.580058741666664
+      },
+      {
+        "handoff": false,
+        "rate": 1,
+        "markers": 400,
+        "watchedBones": 0,
+        "connectedHandoffJobs": 0,
+        "evaluations": 24000,
+        "p95": 5.9209,
+        "observe": 0.03142583333333333,
+        "animator": 2.706413333333332,
+        "asc": 0.32776250000000007,
+        "scheduled": 3.0412091666666665,
+        "observeMCycles": 0.135203725,
+        "animatorMCycles": 7.080417150000002,
+        "ascMCycles": 0.9351534833333334,
+        "scheduledMCycles": 7.921723616666662
+      },
+      {
+        "handoff": false,
+        "rate": 4,
+        "markers": 400,
+        "watchedBones": 0,
+        "connectedHandoffJobs": 0,
+        "evaluations": 6000,
+        "p95": 6.4113,
+        "observe": 0.02840749999999999,
+        "animator": 2.3875691666666667,
+        "asc": 0.29162999999999983,
+        "scheduled": 2.017288333333333,
+        "observeMCycles": 0.14042734166666665,
+        "animatorMCycles": 6.5461181166666655,
+        "ascMCycles": 0.856880441666667,
+        "scheduledMCycles": 5.452256791666666
+      }
+    ],
+    "pairedMedianMs": [
+      -0.012399999999999967,
+      0.06574999999999998
     ]
+  },
+  "runtimeHistory": [
+    {
+      "everyFrameP95": 7.08,
+      "everyFourthP95": 4.39,
+      "note": "Earlier 200-knight run; no four-stage or paired control data."
+    },
+    {
+      "everyFrameP95": 17.61,
+      "everyFourthP95": 11.3,
+      "note": "Later uninstrumented baseline before the last handoff fixes."
+    },
+    {
+      "everyFrameP95": 17.6651,
+      "everyFourthP95": 10.4343,
+      "note": "Previous delivery; single measured cohort, no phase attribution."
+    }
+  ],
+  "runtimeHandoffBefore": {
+    "unity": "6000.3.14f1",
+    "cpu": "Intel(R) Core(TM) i5-14400F",
+    "note": "Wall-clock CPU benchmark in Editor PlayMode; measured cohort always contains 200 units. Normal/control frames are paired with alternating first runner; both use the same controller, clip, LOD, Hold and gameplay. p95 is uninstrumented. observe/animator/asc/scheduled are per-stage MEAN ms across 120 separate instrumented frames, including timestamp overhead. Control omits handoff job and its handles. pairedMedianMs is the median within-frame normal minus control wall time. Windows MCycles use QueryThreadCycleTime on the main thread in a separate pass; exclude worker time, include query overhead and are not elapsed ms. Byte/GC.Alloc probes run separately; -1 means unavailable.",
+    "units": 200,
+    "frames": 120,
+    "bonesPerUnit": 84,
+    "peakFourthFrameEvaluations": 50,
+    "animatedTransformsPerUnit": 19,
+    "everyFrameP95": 29.5396,
+    "everyFourthP95": 16.3861,
+    "everyFrameBytes": -1,
+    "everyFourthBytes": -1,
+    "everyFrameAllocations": 0,
+    "everyFourthAllocations": 0,
+    "everyFrameEvaluations": 24000,
+    "everyFourthEvaluations": 6000,
+    "markers": 400,
+    "runs": [
+      {
+        "handoff": true,
+        "rate": 1,
+        "markers": 400,
+        "evaluations": 24000,
+        "p95": 29.5396,
+        "observe": 4.680043333333331,
+        "animator": 4.357419999999999,
+        "asc": 0.7947233333333333,
+        "scheduled": 16.40024916666667,
+        "observeMCycles": 11.12858904166666,
+        "animatorMCycles": 9.957972691666667,
+        "ascMCycles": 1.9240915416666664,
+        "scheduledMCycles": 37.40115705833334
+      },
+      {
+        "handoff": true,
+        "rate": 4,
+        "markers": 400,
+        "evaluations": 6000,
+        "p95": 16.3861,
+        "observe": 4.6373541666666656,
+        "animator": 4.351583333333334,
+        "asc": 0.6950108333333335,
+        "scheduled": 5.937380000000001,
+        "observeMCycles": 10.875035724999991,
+        "animatorMCycles": 9.720160400000001,
+        "ascMCycles": 1.6301092416666674,
+        "scheduledMCycles": 13.535078100000002
+      },
+      {
+        "handoff": false,
+        "rate": 1,
+        "markers": 400,
+        "evaluations": 24000,
+        "p95": 20.8042,
+        "observe": 0.17563666666666672,
+        "animator": 3.8141116666666655,
+        "asc": 0.6308983333333333,
+        "scheduled": 5.280764999999998,
+        "observeMCycles": 0.41896493333333346,
+        "animatorMCycles": 8.18281566666667,
+        "ascMCycles": 1.2958334416666666,
+        "scheduledMCycles": 10.993871049999997
+      },
+      {
+        "handoff": false,
+        "rate": 4,
+        "markers": 400,
+        "evaluations": 6000,
+        "p95": 12.7861,
+        "observe": 0.16947500000000004,
+        "animator": 4.594446666666666,
+        "asc": 0.750455,
+        "scheduled": 4.154837499999999,
+        "observeMCycles": 0.44065209166666647,
+        "animatorMCycles": 9.607244108333335,
+        "ascMCycles": 1.5684186166666665,
+        "scheduledMCycles": 8.627702566666667
+      }
+    ],
+    "pairedMedianMs": [
+      17.7224,
+      6.3260000000000005
+    ]
+  },
+  "runtimeMeasurementUtc": "2026-11-04T07:19:10.919122+00:00"
 }

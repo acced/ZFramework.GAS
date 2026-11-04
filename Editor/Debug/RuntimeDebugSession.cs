@@ -11,10 +11,12 @@ namespace ZFramework.GAS.Editor
     {
         private static readonly List<MonoBehaviour> Units = new();
         private static readonly Dictionary<AbilitySystemComponent, string> Names = new();
-        private static double _nextCapture, _nextScan;
+        private static double _nextCapture, _nextScan, _nextObserverReport;
+        private static long _reportedObserverErrors;
         private static MonoBehaviour _observed;
         private static bool _followSelection = true;
-        public static event Action<RuntimeSnapshot> Changed;
+        private static readonly DebugSubscribers<Action<RuntimeSnapshot>> Observers=new();
+        public static event Action<RuntimeSnapshot> Changed {add=>Observers.Add(value);remove=>Observers.Remove(value);}
         public static RuntimeSnapshot Current { get; private set; }
         public static MonoBehaviour Observed => _observed != null ? _observed : null;
         public static IReadOnlyList<MonoBehaviour> Providers => Units;
@@ -40,6 +42,12 @@ namespace ZFramework.GAS.Editor
         {
             if (!EditorApplication.isPlaying || EditorApplication.isCompiling) return;
             double now = EditorApplication.timeSinceStartup;
+            long errors=DebugObserverErrors.Count;
+            if(errors!=_reportedObserverErrors && now>=_nextObserverReport)
+            {
+                Debug.LogWarning($"[GAS 调试观察者] 新增 {errors-_reportedObserverErrors} 次异常（累计 {errors} 次）。最近异常：\n{DebugObserverErrors.Last}");
+                _reportedObserverErrors=errors;_nextObserverReport=now+5;
+            }
             if (now < _nextCapture) return;
             _nextCapture = now + .1;
             Refresh();
@@ -97,10 +105,10 @@ namespace ZFramework.GAS.Editor
             Publish(RuntimeSnapshot.Capture(provider.AbilitySystem, SourceName, Current, EditorApplication.timeSinceStartup));
         }
         /// <summary>同一入口供编辑器刷新和自动化测试发布快照；不会推进或改变单位。</summary>
-        public static void Publish(RuntimeSnapshot snapshot) { Current = snapshot; Changed?.Invoke(snapshot); }
+        public static void Publish(RuntimeSnapshot snapshot) { Current = snapshot; SkillEventRecorder.Observe(snapshot?.Owner); foreach(var observer in Observers.Snapshot)try{observer(snapshot);}catch(Exception error){Debug.LogException(error);} }
         public static void Clear()
         {
-            _observed = null; Units.Clear(); Names.Clear(); _nextCapture = _nextScan = 0;
+            SkillEventRecorder.Clear(); _observed = null; Units.Clear(); Names.Clear(); _nextCapture = _nextScan = 0;
             Publish(null);
         }
     }

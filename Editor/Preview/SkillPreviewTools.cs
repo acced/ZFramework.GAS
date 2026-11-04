@@ -25,7 +25,7 @@ namespace ZFramework.GAS.Editor
             _material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
             _material.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off); _material.SetInt("_ZWrite", 0);
         }
-        public void Rebuild(GameObject instance, SkillDocument doc, Action<float> pose, bool ghosts, bool trajectory, bool ranges, bool dummy, float distance, int level)
+        public void Rebuild(GameObject instance, SkillDocument doc, Action<float> pose, bool ghosts, bool trajectory, bool ranges, bool dummy, float distance, int level, Action simulation=null)
         {
             ClearGhosts(); _vertices.Clear(); _colors.Clear();
             float duration = doc.Root?.Animation?.Duration ?? 1;
@@ -52,18 +52,21 @@ namespace ZFramework.GAS.Editor
             if (ranges)
             {
                 var values = new EffectEvaluationContext(level, doc.Root.ResolveParameters(level));
-                Queries(doc.Root.activationActions, values, instance.transform, distance, 0);
+                if(doc.Playback.Time<.15f) Queries(doc.Root.activationActions, values, instance.transform, distance, 0);
                 if (doc.Root.Animation != null)
                 {
                     var markers = doc.Serialized(doc.Root.Animation).FindProperty("markers");
                     for (int i = 0; i < markers.arraySize; i++)
                     {
-                        var actions = markers.GetArrayElementAtIndex(i).FindPropertyRelative("actions");
+                        var marker=markers.GetArrayElementAtIndex(i);float age=doc.Playback.Time-marker.FindPropertyRelative("time").floatValue;
+                        if(age<0 || age>.15f) continue;
+                        var actions = marker.FindPropertyRelative("actions");
                         for (int j = 0; j < actions.arraySize; j++)
                             if (actions.GetArrayElementAtIndex(j).managedReferenceValue is SkillAction action) Queries(new[] { action }, values, instance.transform, distance, 0);
                     }
                 }
             }
+            simulation?.Invoke();
             _lines.Clear(); _lines.SetVertices(_vertices); _lines.SetColors(_colors);
             var indices = new int[_vertices.Count]; for (int i = 0; i < indices.Length; i++) indices[i] = i;
             _lines.SetIndices(indices, MeshTopology.Lines, 0); _lines.RecalculateBounds();
@@ -89,7 +92,9 @@ namespace ZFramework.GAS.Editor
                 if (action is ApplyEffectAction apply) Query(apply.targets.Build(), values, source, distance);
                 if (action is CreateAreaAction area) Query(area.targets.Build(), values, source, distance);
                 if (action is ConditionalAction condition) { Queries(condition.whenTrue, values, source, distance, depth + 1); Queries(condition.whenFalse, values, source, distance, depth + 1); }
-                if (action is WaitSkillAction wait) Queries(wait.onSuccess, values, source, distance, depth + 1);
+                if (action is LaunchProjectileAction shot) { Query(shot.collision.Build(),values,source,distance); Queries(shot.onHit,values,source,distance,depth+1); }
+                if (action is CreateAreaAction zone) Queries(zone.onPeriod,values,source,distance,depth+1);
+                if (action is WaitSkillAction wait) { Queries(wait.onSuccess, values, source, distance, depth + 1); Queries(wait.onCancel,values,source,distance,depth+1); Queries(wait.onTimeout,values,source,distance,depth+1); }
                 if (action is CallModuleAction call && call.module != null)
                 {
                     var parameters = new Dictionary<string, SkillParameterValue>();
@@ -99,11 +104,11 @@ namespace ZFramework.GAS.Editor
                 }
             }
         }
-        private void Query(TargetQueryDefinition query, EffectEvaluationContext values, Transform source, float distance)
+        internal void Query(TargetQueryDefinition query, EffectEvaluationContext values, Transform source, float distance,Vector3? at=null)
         {
             if (query.Kind < TargetQueryKind.TargetPoint) return;
             float radius = query.Radius.Resolve(values), angle = query.Kind == TargetQueryKind.Sector ? query.Angle.Resolve(values) : 360;
-            var center = source.position + Vector3.up * .04f + (query.Kind == TargetQueryKind.TargetPoint ? source.forward * distance : Vector3.zero);
+            var center = (at??(source.position + (query.Kind == TargetQueryKind.TargetPoint ? source.forward * distance : Vector3.zero)))+Vector3.up*.04f;
             var color = SkillColors.Cue;
             if (query.Kind == TargetQueryKind.Line)
             {
@@ -121,9 +126,9 @@ namespace ZFramework.GAS.Editor
             if (query.Kind != TargetQueryKind.Sector)
                 for (int i = 1; i <= 48; i++) { float a = (i - 1) * Mathf.PI / 24, b = i * Mathf.PI / 24; Line(center + new Vector3(0, Mathf.Sin(a), Mathf.Cos(a)) * radius, center + new Vector3(0, Mathf.Sin(b), Mathf.Cos(b)) * radius, color * new Color(1, 1, 1, .35f)); }
         }
-        private void Circle(Vector3 center, float radius, Color color)
+        internal void Circle(Vector3 center, float radius, Color color)
         { for (int i = 1; i <= 32; i++) { float a = (i - 1) * Mathf.PI / 16, b = i * Mathf.PI / 16; Line(center + new Vector3(Mathf.Sin(a), 0, Mathf.Cos(a)) * radius, center + new Vector3(Mathf.Sin(b), 0, Mathf.Cos(b)) * radius, color); } }
-        private void Line(Vector3 a, Vector3 b, Color color) { _vertices.Add(a); _vertices.Add(b); _colors.Add(color); _colors.Add(color); }
+        internal void Line(Vector3 a, Vector3 b, Color color) { _vertices.Add(a); _vertices.Add(b); _colors.Add(color); _colors.Add(color); }
         public void Draw(PreviewRenderUtility preview)
         {
             if (_material == null) return;

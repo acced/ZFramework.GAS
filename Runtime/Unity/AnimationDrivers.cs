@@ -16,13 +16,28 @@ namespace ZFramework.GAS.Unity
     /// <b>循环由状态自身的 clip 决定</b>，运行期改不了，因此 <c>loop</c> 参数在此实现中不生效；
     /// 时间轴侧的循环语义（标记点每圈重触发）仍由 <see cref="AnimationTask"/> 保证。
     /// </summary>
-    public sealed class AnimatorAnimationDriver : IBlendingAnimationDriver, ISeekableAnimationDriver, IAnimationDriverLifetime
+    public sealed class AnimatorAnimationDriver : ISkillAnimationSpeed, IAdvancedBlendingDriver, ISeekableAnimationDriver, IAnimationDriverLifetime
     {
         private readonly Animator _animator;
         public bool IsValid => _animator != null;
         private readonly int _layer;
 
-        private float _restoreSpeed;
+        private float _restoreSpeed, _natural, _speed=1;
+        public void SetLocalScale(float scale){ if(IsValid && _playing) _animator.speed=_speed*scale; }
+        public AnimationBlendCapabilities Capabilities => AnimationBlendCapabilities.SeekBlend;
+        public float Play(string clip, float duration, bool loop, in SkillBlend blend) => Play(clip, duration, loop, blend.duration);
+        public void Stop(in SkillBlend blend) => Stop(blend.duration);
+        public bool SeekBlend(float normalizedTime, in SkillBlend blend)
+        {
+            if (!IsValid || !_playing || _natural <= 0 || _animator.speed <= 0) return false;
+            if(_animator.IsInTransition(_layer) && Is(_animator.GetNextAnimatorStateInfo(_layer),_playingState))
+            {
+                // Mecanim can swallow a second CrossFade to its pending destination. Prefer the requested time.
+                Seek(normalizedTime);return true;
+            }
+            _animator.CrossFadeInFixedTime(_playingState, blend.duration * _animator.speed, _layer, normalizedTime * _natural);
+            return true;
+        }
         private bool _playing;
         private int _playingState, _returnState;
 
@@ -35,6 +50,11 @@ namespace ZFramework.GAS.Unity
         public float Play(string clipName, float duration, bool loop) => Play(clipName, duration, loop, 0f);
 
         public float Play(string clipName, float duration, bool loop, float blendIn)
+        {
+            return PlayAt(clipName, duration, loop, blendIn, 0);
+        }
+
+        internal float PlayAt(string clipName, float duration, bool loop, float blendIn, float entry)
         {
             int state = Animator.StringToHash(clipName);
             if (!_animator.HasState(_layer, state))
@@ -53,18 +73,28 @@ namespace ZFramework.GAS.Unity
 
             _animator.speed = 1f;
             // 目标就是当前状态时（同一技能再次施放）交叉淡入不会从头开始，直接重播。
-            bool restart = Is(_animator.GetCurrentAnimatorStateInfo(_layer), state) && !_animator.IsInTransition(_layer);
-            if (blendIn > 0f && !restart) _animator.CrossFadeInFixedTime(state, blendIn, _layer, 0f);
-            else _animator.Play(state, _layer, 0f);
+            bool restart = Is(CurrentOrNext(), state);
+            if (blendIn > 0f && !restart)
+            {
+                if (entry == 0) _animator.CrossFadeInFixedTime(state, blendIn, _layer, 0f);
+                else
+                {
+                    // Normalized offset belongs to the destination; transition duration is relative to the source.
+                    float sourceLength = _animator.GetCurrentAnimatorStateInfo(_layer).length;
+                    _animator.CrossFade(state, blendIn / Mathf.Max(.0001f, sourceLength), _layer, entry);
+                }
+            }
+            else _animator.Play(state, _layer, entry);
             _playingState = state;
 
             // 状态切换要等 Animator 下次求值才生效，不推一下就只能读到上一个状态的时长。
             _animator.Update(0f);
             float natural = (_animator.IsInTransition(_layer) ? _animator.GetNextAnimatorStateInfo(_layer) : _animator.GetCurrentAnimatorStateInfo(_layer)).length;
 
+            _natural = natural; _speed=1;
             if (duration > 0f && natural > 0f)
             {
-                _animator.speed = natural / duration;
+                _animator.speed = _speed = natural / duration;
                 return duration;
             }
 

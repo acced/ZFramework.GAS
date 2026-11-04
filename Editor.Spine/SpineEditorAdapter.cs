@@ -24,7 +24,7 @@ namespace ZFramework.GAS.Editor.Spine
         }
         public IPoseSampler BeginPreview(GameObject instance) => new Sampler(instance.GetComponentInChildren<SkeletonAnimation>(true));
         public AnimationBackend CreateDefaultBackend(GameObject preview) => new SpineBackend();
-        private sealed class Sampler : IPoseSampler
+        private sealed class Sampler : IBlendPoseSampler
         {
             private readonly SkeletonAnimation _skeleton;
             public Sampler(SkeletonAnimation skeleton) { _skeleton = skeleton; _skeleton.Initialize(false); _skeleton.AnimationState.ClearTracks(); }
@@ -37,6 +37,14 @@ namespace ZFramework.GAS.Editor.Spine
                 // Spine 4.2 adds a Physics parameter; Update(0) provides the stable 4.x world-transform API.
                 _skeleton.Update(0);
                 _skeleton.LateUpdate();
+            }
+            public void Sample(string from, float fromTime, string to, float toTime, float weight)
+            {
+                Sample(from, fromTime);
+                var animation = _skeleton.Skeleton.Data.FindAnimation(to);
+                if (animation == null) return;
+                animation.Apply(_skeleton.Skeleton, 0, Mathf.Clamp(toTime, 0, animation.Duration), false, null, weight, MixBlend.Replace, MixDirection.In);
+                _skeleton.Update(0); _skeleton.LateUpdate();
             }
             public void Dispose() { if (_skeleton != null && _skeleton.Skeleton != null) _skeleton.Skeleton.SetToSetupPose(); }
         }

@@ -12,17 +12,32 @@ namespace ZFramework.GAS
         public int Count => _tasks.Count;
         public GameplayAbilityTask this[int index] => _tasks[index];
         public void Start(GameplayAbilitySpec origin, GameplayAbilityTask task)
+            => Start(origin, task, origin?.ActivationVersion ?? 0);
+        public void Start(GameplayAbilitySpec origin, GameplayAbilityTask task, int activationVersion)
         {
             if (_clearing) throw new InvalidOperationException("Task host is shutting down.");
             if (task == null) throw new ArgumentNullException(nameof(task));
             if (task.IsActive) throw new InvalidOperationException("Task already has a host.");
+            long before = origin?.Owner.DiagnosticSequence ?? 0, run = task.RunVersion + 1;
             _tasks.Add(task);
-            try { task.Begin(origin); }
-            catch { _tasks.Remove(task); task.CancelInternal(); throw; }
+            try { task.Begin(origin, activationVersion); }
+            catch (Exception error)
+            {
+                string id = task.RunVersion == run ? task.DiagnosticId : null;
+                origin?.Owner.RecordTaskFailureSince(origin, activationVersion, error, id, before, true);
+                if (task.RunVersion == run && _tasks.Remove(task))
+                    try { task.CancelInternal(); }
+                    catch (Exception cleanup)
+                    {
+                        origin?.Owner.RecordCleanupError(origin, activationVersion, cleanup, id);
+                        throw new AggregateException(error, cleanup);
+                    }
+                throw;
+            }
         }
         public void Tick(float deltaTime)
         {
-            if (_ticking) return;
+            if (_ticking) throw new InvalidOperationException("GameplayTaskHost.Tick cannot be called reentrantly. Advance it once from the host loop.");
             _ticking = true;
             List<Exception> errors = null;
             try
@@ -32,12 +47,15 @@ namespace ZFramework.GAS
                 {
                     var task = item.task;
                     if (task.RunVersion != item.run || !_tasks.Contains(task)) continue;
+                    var origin = task.Ability; int version = task.ActivationVersion;
+                    long before = origin?.Owner.DiagnosticSequence ?? 0; string id = task.DiagnosticId;
                     try { task.Advance(deltaTime); }
                     catch (Exception ex)
                     {
                         (errors ??= new List<Exception>()).Add(ex);
+                        origin?.Owner.RecordTaskFailureSince(origin, version, ex, id, before, true);
                         if (task.RunVersion == item.run && _tasks.Remove(task))
-                            try { task.CancelInternal(); } catch (Exception cleanup) { errors.Add(cleanup); }
+                            try { task.CancelInternal(); } catch (Exception cleanup) { origin?.Owner.RecordCleanupError(origin, version, cleanup, id); errors.Add(cleanup); }
                     }
                     if (task.RunVersion == item.run && !task.IsActive) _tasks.Remove(task);
                 }

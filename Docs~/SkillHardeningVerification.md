@@ -2,6 +2,8 @@
 
 日期：2026-11-02。此次修复针对 Section、Playable、动作取消、场景任务和参数快照的审查问题；不增加迁移功能，不手工修改生成示例。
 
+以下各轮保留当时的结果。当前行为见文末第五轮：Core 及其直接启动的旧任务默认实时读来源属性，可以显式冻结；SkillRunner 始终冻结。共享起点不再报终点警告，Playable 使用独立输出叠加到项目控制器。
+
 ## 修复与行为约定
 
 | 问题 | 修复 |
@@ -60,4 +62,86 @@ Playable 参数互通是本机真实 Unity 控制器验证的结果；不是对�
 - PlayMode 根运动测试先执行真实图求值，确认移动适配器确实收到回调；随后 Seek 必须收到实际 OnAnimatorMove，但适配器调用数不增加，避免 EditMode 空断言。
 - 预览音频除通道状态测试外，增加两条重叠通道的实际 PCM 输出验证。
 
-最终运行结果：待本轮验证结束后填写。
+最终运行结果（Unity 6000.3.14f1，验证工程）：
+
+- Core：23 组通过；100,000 次激活／结束 31.40ms、0 分配。另覆盖 10,000 次瞬时 SetByCaller 命中及被门禁拦截的持续效果，均不分配快照。
+- EditMode：158 项通过，0 失败；1 项显式规模测试跳过。本轮未重跑性能规模基线。
+- PlayMode：11 项全部通过，包含真实 OnAnimatorMove 对照／Seek 抑制和 BasicCombat 五技能流程。
+- 合并编译：0 错误、0 警告。
+- Unity ProfilerRecorder：预热的周期区域／模块 Tick 和重复同步模块调用保持 0 次分配；不包含施放启动或新任务创建。
+- 音效：导入真实 WAV 后，两个重叠的独立 AudioSource 都输出非零 PCM；采样接口先建立 DSP 采集缓冲再读值。另检查 0.6 秒慢帧不 Seek、显式跳转、区间退出和窗口间资源隔离。
+
+原始结果：`.build~/audit2-core-final.log`、`.build~/audit2-editor-final.xml`、`.build~/audit2-playmode-final.xml`，Unity 日志同名 `.log`。这些是本机自动回归，不等同于复杂项目动画过渡的手工视觉验收。
+
+预览音频使用独立场景中的原生 AudioSource，不调用全局 StopAllPreviewClips；Unity 6.3 的预览场景音频标志与编辑器音频更新通过编辑器 API 接入。删除动画或预览报错时也停止本窗口音频，避免循环声音残留。
+
+## 第三轮审查：实际时间、重入与状态交接（2026-11-03）
+
+| 核对项目 | 本轮处理 |
+|---|---|
+| 跳转恢复的浮点重合 | 标签窗口、Cue 和已结束轨道均用与边界相同的实际时间比较；回归用两个不同授权值缩放后完全相同的浮点值，验证一次 OnActive、一次 Removed 和零残余标签 |
+| 恢复阶段取消／再次跳段 | 从关闭旧状态前递增跳转版本；每个标签、Cue、轨道和驱动回调后检查版本与存活状态，放弃外层旧目的段的 Seek／采样 |
+| ASC 任务列表在回调中变动 | 复用帧列表，记录任务运行版本；新增／重启留待下一帧；嵌套 Tick 不重复推进；推进异常在其他任务完成本帧后统一报告 |
+| Clear 后丢失授予来源 | Runner 保留来源、等级和覆盖；下次 Grant／TryCast 重建 Spec。查询和撤销不创建 Spec，最后一个来源撤销后删除记录；首次构建失败也不留下无来源条目 |
+| 模块错误无法定位 | 每经过 CallModule 边界，将错误定位到所属资产中的调用动作，内层异常保留具体模块和动作；校验可定位技能里的调用字段 |
+| 暂停后仍有声音 | PlaybackModel.Playing 发出变化通知，时间轴暂停立即释放本窗口试听通道，恢复从当前播放头起播 |
+| 慢帧声音偏移 | 窗口按实际编辑器时间推进，移除 0.1 秒上限；回归直接调用窗口时钟路径，覆盖 0.6 秒慢帧、暂停间隔与恢复 |
+| 堆叠重施丢弃字典副本 | 持续效果通过 FindStackable 后，仅在新建效果之前复制 SetByCaller；新增预热堆叠零分配断言，原比较器与冻结语义保持 |
+| Core 来源属性未冻结 | 激活提交前捕获来源值，晚启动的直接动画任务复用本次上下文；属性版本未变时复用不可变快照，保持原高等级激活零分配用例 |
+| 复用目标点及 WithTarget(null) | 提供 ClearTargetPosition；WithTarget 没有 Transform 时保留显式落点，传入新 Transform 才重绑位置 |
+| OnEnd 异常逃逸打断流程 | EndAbility 逐项清理标签和任务；错误记录在原 Spec.LastCleanupError，继续取消其他匹配技能，不取消早先独立存活对象。原“清理异常应抛出”测试更新为“清理完成并保留诊断” |
+| Playable 交接 | 捕获未消费 Trigger；Dispose 先解绑输出，恢复当前状态、时间、层权重与参数。PlayMode 使用 Animator 的实时进度，编辑器手动 Evaluate 使用 playable 状态，避免真实帧中的进度回零 |
+| Section 最后终点事件 | 保留 [start,end) 规则，新增 GAS_SECTION_END 警告并定位标记／任务事件；不连续进入下一段时，终点事件不执行 |
+| Core／Unity 来源不一致 | GameplayEffectSpec 的 ASC 来源统一转为当次 AbilitySourceIdentity，自定义来源对象不变；动画 Cue 保留启动时的身份，Clear 收尾也不会归属下一次复用 |
+
+原始结果保存在 `.build~/reentry-audit-core.log`、`.build~/reentry-audit-editmode.xml`、`.build~/reentry-audit-playmode.xml`，Unity 日志同名 `.log`。验证使用独立工程，不修改用户当前打开的场景；结果为自动化验证，不是复杂角色过渡的手工视觉验收。
+
+最终验证（Unity 6000.3.14f1）：
+
+- Core：24 组通过。100,000 次预热激活／结束为 34.64ms、0 字节分配；新增 ASC 任务 Tick 和 SetByCaller 堆叠重施的预热零分配断言通过。
+- EditMode：176 项通过、0 失败；1 项显式规模测试跳过。本轮相对参数折叠修复后的 162 项基线新增 14 项用例／参数组合。
+- PlayMode：12 项全部通过，包括生成的 BasicCombat、根运动 Seek 对照，以及 Playable 释放后连续多帧保持状态和继续推进时间。
+- Runtime／Editor／Samples／Tests 合并编译：0 警告、0 错误；git diff --check 通过。
+
+## 第四轮审查：公开入口、错误定位与测试接线（2026-11-03）
+
+| 核对项目 | 本轮处理 |
+|---|---|
+| CallModule 施放／运行失败仍指向内部动作 | 每个模块验证边界包装错误；执行上下文保留最外层技能调用 ID 与模块路径，等待任务、独立区域和取消分支均继承。父上下文不再被内层动作 ID 覆盖，内层 ID 保留在错误消息中 |
+| CheckActivation 只捕获部分计算异常 | 完整效果预检及消耗判断捕获自定义计算异常，返回 InvalidConfiguration，保留异常类型与消息；参数误用仍抛出参数异常 |
+| Section 终点警告遗漏 | 所有 Section 终点附近的标记／任务事件都提示，包含一个浮点步长；覆盖自循环、非相邻 Next 与默认相邻但可能被 QueueSection 改写的情况，保持半开区间规则 |
+| 属性变化后每次 Core 激活都分配快照 | Core 默认只固定等级，来源值实时读取；需要冻结时显式 captureSource:true。Unity SkillRunner 仍捕获施放快照，捕获时直接遍历属性，移除临时 List；不承诺捕获快照零分配 |
+| FindFrom(definition, asc) 失效 | 查询和施加使用相同的 ASC → 当次 SourceIdentity 归一规则；旧身份可显式查询，自定义来源保持引用比较 |
+| 原始任务失败被当作完成 | ASC 记录所属激活的失败并结束它，Runner 生命周期观察者显示执行失败；其他技能继续完成本帧，重启后的激活不被旧任务错误误伤 |
+| 嵌套 Tick 吞时间 | ASC 与场景任务宿主均明确拒绝同实例重入，抛出 InvalidOperationException，并在接入文档中约定单一推进源 |
+| Clear／RemoveAbility 丢失清理错误 | ASC 保留最近 64 条执行与清理诊断，不随授予删除或单位回收清空；调试窗口显示并可定位、显式清除，非通用事件日志 |
+| 停用 Animator 时 Dispose 写回 | 仅对 isActiveAndEnabled 的 Animator 捕获与交还控制器状态，停用时仍释放图、时钟与根运动转发组件 |
+| 开启边界潜在重复计数 | 标签仅补充尚未添加的项并累加持有计数；已开启 Cue 不重复派发 OnActive。强制回放同一开启边界的防御性用例验证最终计数归零 |
+
+测试接线补强：音效回归现在使用 SkillEditorWindow 内实际 PreviewPanel 的预制体、采样器、音效开关及私有通道，直接通过 TimelinePanel.TogglePlay 和窗口 AdvancePlayback 驱动；测试不再手工订阅 Playback.Changed。EditMode 根运动在 Stop 前增加适配器调用正向对照；PlayMode 在 Stop 前再次真实求值，Stop 后必须仍收到 OnAnimatorMove 但不再调用移动适配器。另补不抛错、仅删除任务的 Core 调度用例。
+
+原始结果使用 `.build~/audit4-core.log`、`.build~/audit4-editmode.xml`、`.build~/audit4-playmode.xml`，Unity 日志同名 `.log`。本轮不重跑 100 节点／500 技能显式规模基线；不将这些自动化结果描述为人工逐帧视觉验收。
+
+最终验证（Unity 6000.3.14f1，独立验证工程）：
+
+- Core：25 组通过；预热 10,000 次含消耗、冷却、DoT、资源恢复和变化属性的激活为 0 字节分配。原 100,000 次激活／结束为 32.59ms、0 字节；两个结果均不包含显式快照或 Unity 施放构建。
+- EditMode：191 项通过、0 失败；1 项显式规模测试跳过。较上一轮新增 15 项用例／参数组合，已有音效和根运动测试改为实际接线及正反对照。
+- PlayMode：12 项全部通过，含 Stop 前后的真实 OnAnimatorMove 对照、控制器交接、动画后端与生成 BasicCombat 流程。
+- Runtime／Editor／Samples／Tests 合并编译：0 警告、0 错误；git diff --check 通过。
+
+## 第五轮审查：段起点归属、真实来源读取与状态机回调（2026-11-03）
+
+| 项目 | 验证与处理 |
+|---|---|
+| 共享边界误报 | 精确等于任一 Section 起点的事件属于目标段，免报 GAS_SECTION_END，不因上一段的 Next 或队列分支而改变；只有靠近排他终点、又不在起点时才提示。在 Unity 中用同一标记分别以 1 和 0.75 的比例运行：原速先于终点触发，缩放后两个 float 重合，标记被排他边界跳过。 |
+| 旧任务启动时重复捕获来源 | ProjectileTask、AreaEffectTask 和 AnimationTask 继承本次激活的上下文。六个真实命中用例分别验证默认／冻结策略：攻击力从施放的 5 到启动的 11 再到命中的 17，实际扣除应为 17 或 5，不能是 11。 |
+| 预检、提交与失败定位 | AbilityActivationCheck.Error 保留异常本身，支持堆栈和 InnerException；只读查询不追加诊断。Core、SkillRunner 的同步施放入口返回结果码；取消回调后按需复查，提交或启动失败不再伪装成功。已提交的费用／冷却及已经发生的打断不回滚。 |
+| 任务与诊断 | ASC 任务 Begin、Tick 失败结束对应激活；保留首个主要失败，另外记录不同异常。跨层传播时识别已经记录的同一原因。场景任务保留原施放版本。环形记录保留最近 64 条，额外提供被覆盖数量；普通读取不格式化堆栈，可在调试窗口按需复制完整异常。 |
+| 关闭期间重入 | 关闭回调重新跳段时，外层不再清理新段的状态；已经捕获的回调异常保留原堆栈并报告。回归同时检查异常对象、目标段 ID 和标签计数。 |
+| 预览静音 | 实际 PreviewPanel 在音效关闭时播放不会创建试听通道；播放中关音效会立即释放已有 AudioSource，时间轴继续推进。 |
+
+**Playable 的复现及修复。** 在 Unity 6000.3.14f1 用带 StateMachineBehaviour 的真实控制器测试：旧实现从非默认 Hit 状态交接时没有进入 Idle，但一直处于 Idle 时释放驱动，Idle 的进入次数从 2 变为 3。现在项目状态机始终拥有自己的输出，技能图用 PreviousInputs 读取前序姿势；释放时不执行 Animator.Update(0)、Play 或参数写回。PlayMode 同时核对待消费 Trigger、Float、状态时间持续推进、Idle 回调计数与骨骼位置（基础 2、半混合 4、技能 6、停止后 2）。这是 Unity 6.3 的实测，不代替各项目对自定义 Rig 输出顺序的验证。
+
+原始结果：`.build~/audit5-core.log`、`.build~/audit5-editmode.xml`、`.build~/audit5-playmode.xml`；修复前的默认状态对照见 `.build~/audit5-handoff-idle.xml`。
+
+最终回归：Core **26 组**、EditMode **200 项**、PlayMode **13 项**通过，0 失败；1 项显式编辑器规模测试跳过。Core 的 10,000 次预热施放在每轮用不同攻击力结算消耗，再改变来源攻击力、创建 DoT 并核对周期伤害，测得 0 字节托管分配；不含显式快照或 Unity 施放启动。Runtime、Editor、Samples 与测试代码合并编译 0 警告、0 错误。

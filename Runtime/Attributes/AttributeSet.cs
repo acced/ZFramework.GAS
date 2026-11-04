@@ -12,6 +12,7 @@ namespace ZFramework.GAS
     {
         private readonly Dictionary<AttributeId, GameplayAttribute> _attributes;
         private readonly Action<GameplayAttribute, float, float> _forwardChanged;
+        internal long Version { get; private set; }
 
         /// <summary>集合内任一属性的 CurrentValue 变化时触发。</summary>
         public event Action<GameplayAttribute, float, float> OnAttributeChanged;
@@ -20,10 +21,16 @@ namespace ZFramework.GAS
         {
             _attributes = new Dictionary<AttributeId, GameplayAttribute>(capacity);
             // 缓存转发委托：否则每次 Add 订阅都会新建一个委托对象。
-            _forwardChanged = (attribute, previous, current) => OnAttributeChanged?.Invoke(attribute, previous, current);
+            _forwardChanged = (attribute, previous, current) => { Version++; OnAttributeChanged?.Invoke(attribute, previous, current); };
         }
 
         public int Count => _attributes.Count;
+        internal Dictionary<AttributeId, float> CaptureValues()
+        {
+            var values = new Dictionary<AttributeId, float>(_attributes.Count);
+            foreach (var pair in _attributes) values.Add(pair.Key, pair.Value.CurrentValue);
+            return values;
+        }
 
         /// <summary>清空并填充调用方列表。列表容量足够时不分配；返回的是属性对象的引用。</summary>
         public void CopyTo(List<GameplayAttribute> results)
@@ -47,6 +54,7 @@ namespace ZFramework.GAS
             var attribute = new GameplayAttribute(id, baseValue);
             attribute.OnCurrentValueChanged += _forwardChanged;
             _attributes.Add(id, attribute);
+            Version++;
             return attribute;
         }
 
@@ -70,6 +78,7 @@ namespace ZFramework.GAS
 
             attribute.OnCurrentValueChanged -= _forwardChanged;
             _attributes.Remove(id);
+            Version++;
             return true;
         }
 
@@ -81,6 +90,7 @@ namespace ZFramework.GAS
             }
 
             _attributes.Clear();
+            Version++;
         }
     }
 }

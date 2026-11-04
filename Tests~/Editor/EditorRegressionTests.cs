@@ -353,6 +353,80 @@ namespace ZFramework.GAS.Editor.Tests
             else if (type == EventType.MouseDrag) { using var e = PointerMoveEvent.GetPooled(system); e.target = view; view.SendEvent(e); }
             else { using var e = PointerUpEvent.GetPooled(system); e.target = view; view.SendEvent(e); }
         }
+        [UnityTest] public IEnumerator LibraryDragRequiresAPressOnThatSameBoundRow()
+        {
+            var window=SkillEditorWindow.Open();window.Show(_ability);yield return null;
+            var host=new VisualElement();var other=new Button();var row=new Button{userData=_ability};
+            window.rootVisualElement.Add(host);host.Add(other);host.Add(row);int drags=0;
+            LibraryPanel.InstallAssetDrag(row,asset=>{Assert.AreSame(_ability,asset);drags++;});
+            yield return null;
+            try{
+                Vector2 p=row.worldBound.center;
+                Pointer(other,EventType.MouseDown,other.worldBound.center);Pointer(row,EventType.MouseDrag,p);
+                Pointer(other,EventType.MouseUp,p);Assert.AreEqual(0,drags);
+                Pointer(row,EventType.MouseDown,p);Pointer(row,EventType.MouseDrag,p+Vector2.right*2);Assert.AreEqual(0,drags);
+                Pointer(row,EventType.MouseDrag,p+Vector2.right*12);Pointer(row,EventType.MouseDrag,p+Vector2.right*18);
+                Pointer(row,EventType.MouseUp,p);Assert.AreEqual(1,drags,"one native drag per press");
+                Pointer(row,EventType.MouseDown,p);row.userData=null;Pointer(row,EventType.MouseDrag,p+Vector2.right*12);
+                Pointer(row,EventType.MouseUp,p);Assert.AreEqual(1,drags,"a recycled row cannot start the previous asset's drag");
+            }finally{host.RemoveFromHierarchy();window.Close();}
+        }
+        [UnityTest] public IEnumerator ParameterTabOnlyStartsADragOwnedByItsBoundRow(){
+            var p=new SkillParameter{displayName="拖拽参数"};_ability.parameters=new[]{p};
+            var window=SkillEditorWindow.Open();window.Show(_ability);yield return null;
+            var panel=window.rootVisualElement.Q<LibraryPanel>();var tab=panel.Query<Button>().ToList().Single(b=>b.text=="参数");
+            try{
+                var point=tab.worldBound.center;Pointer(tab,EventType.MouseDown,point);Pointer(tab,EventType.MouseUp,point);yield return null;
+                var real=panel.Query<Button>().ToList().Single(b=>ReferenceEquals(b.userData,p));
+                var other=new Button();window.rootVisualElement.Add(other);
+                var q=real.worldBound.center;Pointer(other,EventType.MouseDown,other.worldBound.center);
+                Pointer(real,EventType.MouseDrag,q);Pointer(real,EventType.MouseDrag,q+Vector2.right*20);
+                Pointer(other,EventType.MouseUp,q);Assert.AreNotEqual(p.Id,DragAndDrop.GetGenericData("GAS.SkillParameter"));
+                var row=new Button{userData=p};window.rootVisualElement.Add(row);int starts=0;
+                LibraryPanel.InstallParameterDrag(row,value=>{Assert.AreSame(p,value);starts++;});
+                yield return null;q=row.worldBound.center;Pointer(row,EventType.MouseDown,q);
+                Pointer(row,EventType.MouseDrag,q+Vector2.right);Assert.Zero(starts);
+                Pointer(row,EventType.MouseDrag,q+Vector2.right*20);Pointer(row,EventType.MouseDrag,q+Vector2.right*30);Pointer(row,EventType.MouseUp,q);
+                Assert.AreEqual(1,starts);
+            }finally{window.Close();}
+        }
+        [UnityTest]
+        public IEnumerator LibraryClicksRecoverAfterReloadAndKeepBackForwardInSync()
+        {
+            GameplayAbilityAsset Create(string name)
+            {
+                var asset = ScriptableObject.CreateInstance<GameplayAbilityAsset>();
+                AssetDatabase.CreateAsset(asset, Folder + "/" + name + ".asset");
+                return asset;
+            }
+            var second = Create("Second"); var third = Create("Third");
+            SkillIndex.Invalidate();
+            var window = SkillEditorWindow.Open(); window.Show(_ability);
+            for (int i = 0; i < 5; i++) yield return null;
+            var library = window.rootVisualElement.Q<LibraryPanel>();
+            void Click(Button button)
+            {
+                var point = button.worldBound.center;
+                Pointer(button, EventType.MouseDown, point); Pointer(button, EventType.MouseUp, point);
+            }
+            void Row(GameplayAbilityAsset skill) => Click(library.Query<Button>(className: "library-row").ToList().Single(b => b.userData as Object == skill));
+            void Arrow(string text) => Click(window.rootVisualElement.Q(className: "main-toolbar").Query<Button>().ToList().Single(b => b.text == text));
+
+            Row(second); Assert.AreSame(second, window.Document.Root, "Control: a normal library click opens the skill.");
+            // A pre-fix window could retain its history cursor across a script reload but lose the readonly list.
+            const System.Reflection.BindingFlags fields = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            ((IList)typeof(SkillEditorWindow).GetField("_history", fields).GetValue(window)).Clear();
+            Row(third); Assert.AreSame(third, window.Document.Root, "A stale cursor must not abort the next click.");
+            Arrow("◀"); Assert.AreSame(second, window.Document.Root);
+            Arrow("▶"); Assert.AreSame(third, window.Document.Root);
+            Arrow("◀"); Row(_ability); Arrow("▶");
+            Assert.AreSame(_ability, window.Document.Root, "Opening from the library starts a new branch of history.");
+            using var saved = new SerializedObject(window);
+            var history = saved.FindProperty("_history");
+            Assert.IsNotNull(history, "The list must survive a reload along with the cursor.");
+            Assert.AreEqual(2, history.arraySize);
+            Assert.AreSame(_ability, history.GetArrayElementAtIndex(saved.FindProperty("_historyIndex").intValue).objectReferenceValue);
+        }
         [UnityTest]
         public IEnumerator TimelineGroupsCuesAndPacksOverlappingRangesWithoutChangingData()
         {
@@ -629,6 +703,38 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.Throws<ArgumentException>(() => _ = _ability.Definition);
             GrantTag(cooldown); _ability.InvalidateDefinition(); _doc.Notify(new ChangeSet(cooldown)); validation.ValidateNow(true);
             Assert.IsFalse(validation.Issues.Any(i => i.Id == "GAS002")); Assert.IsNotNull(_ability.Definition);
+        }
+        [Test]
+        public void MecanimWarnsForRecastAndOnlyForAJumpThatCanOccurDuringEntryBlend()
+        {
+            var animation=Animation();var host=new GameObject("Mecanim preview");host.AddComponent<Animator>();host.AddComponent<SkillAnimator>();
+            try{
+                _doc.PreviewPrefab=host;Edit(animation,so=>so.FindProperty("blendIn").floatValue=.3f);
+                var first=new AnimationSection{start=0,end=.5f,inputBufferEnd=.2f};
+                var second=new AnimationSection{start=.6f,end=1,transition=new SkillBlend(.1f)};
+                animation.sections=new[]{first,second};
+                var issues=new System.Collections.Generic.List<Issue>();var rule=new BlendRule();
+                void Check()=>rule.Validate(new ValidationContext(_doc),animation,issues);
+                Check();Assert.IsTrue(issues.Any(i=>i.Message.Contains("重放同一技能")));
+                Assert.IsFalse(issues.Any(i=>i.Message.Contains("输入连招")),"Early buffered input waits until the late section end.");
+                first.end=.2f;issues.Clear();Check();Assert.IsTrue(issues.Any(i=>i.PropertyPath.Contains("[1]") && i.Message.Contains("输入连招")));
+                second.start=.2f;issues.Clear();Check();Assert.IsFalse(issues.Any(i=>i.PropertyPath.Contains("[1]") && i.Message.Contains("输入连招")));
+                second.start=.6f;second.transition=default;issues.Clear();Check();
+                Assert.IsTrue(issues.Any(i=>i.PropertyPath.Contains("[1]") && i.Message.Contains("输入连招")),"zero-duration entry still cuts");
+                first.start=.15f;first.end=.21f;first.inputBufferStart=first.inputBufferEnd=0;
+                second.start=first.end;second.end=.30f;second.inputBufferStart=second.inputBufferEnd=0;
+                var last=new AnimationSection{start=.7f,end=1};first.nextSectionId=second.Id;second.nextSectionId=last.Id;
+                animation.sections=new[]{first,second,last};issues.Clear();Check();
+                Assert.IsTrue(issues.Any(i=>i.PropertyPath.Contains("[2]") && i.Message.Contains("输入连招")),"adjacent sections can carry the entry blend to a later jump");
+                // A later jump starts its own blend, independent of the original entry.
+                second.start=.6f;
+                Edit(animation,so=>so.FindProperty("blendIn").floatValue=0);
+                first.inputBufferStart=first.inputBufferEnd=0;first.nextSectionId=second.Id;
+                second.end=.68f;second.transition=new SkillBlend(.12f);
+                var third=new AnimationSection{start=.8f,end=1};second.nextSectionId=third.Id;second.inputBufferStart=second.inputBufferEnd=0;
+                animation.sections=new[]{first,second,third};issues.Clear();Check();
+                Assert.IsTrue(issues.Any(i=>i.PropertyPath.Contains("[2]") && i.Message.Contains("输入连招")),"later section transitions must be inspected too");
+            }finally{_doc.PreviewPrefab=null;Object.DestroyImmediate(host);}
         }
         [Test]
         public void BlendLongerThanAnimationIsReportedAndFixed()

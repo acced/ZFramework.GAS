@@ -106,16 +106,21 @@ namespace ZFramework.GAS.Editor
         }
         public static List<string> FindReferences(Object target, string excludePath = null)
         {
-            var found = new List<string>(); var paths = new HashSet<string>();
-            foreach (string filter in new[] { "t:GameplayAbilityAsset", "t:GameplayEffectAsset", "t:SkillAnimationAsset" })
-                foreach (string guid in AssetDatabase.FindAssets(filter)) paths.Add(AssetDatabase.GUIDToAssetPath(guid));
-            foreach (string path in paths)
-            {
-                if (path == excludePath) continue;
-                foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(path).OfType<ScriptableObject>())
+            var found = new List<string>();
+            foreach(var asset in ReferenceOwners()){
+                string path=AssetDatabase.GetAssetPath(asset);
+                if(path==excludePath)continue;
                     if (asset != target && AssetReferences.Children(asset).Contains(target)) found.Add(path + " / " + asset.name);
             }
             return found;
+        }
+        internal static IEnumerable<ScriptableObject> ReferenceOwners()
+        {
+            var paths=new HashSet<string>();
+            foreach(string filter in new[]{"t:GameplayAbilityAsset","t:GameplayEffectAsset","t:SkillAnimationAsset","t:SkillActionModuleAsset"})
+                foreach(string guid in AssetDatabase.FindAssets(filter))paths.Add(AssetDatabase.GUIDToAssetPath(guid));
+            foreach(string path in paths)foreach(var asset in AssetDatabase.LoadAllAssetsAtPath(path))
+                if(asset is ScriptableObject so)yield return so;
         }
         public static void DeleteNode(SkillDocument doc, ScriptableObject asset)
         {
@@ -123,8 +128,8 @@ namespace ZFramework.GAS.Editor
             bool embedded = IsEmbedded(doc.Root, asset);
             if (embedded)
             {
-                var references = FindReferences(asset, AssetDatabase.GetAssetPath(doc.Root));
-                if (references.Count > 0) { doc.Report("仍被 " + references.Count + " 处引用：" + string.Join("，", references)); return; }
+                var reference=SkillReferenceGuard.Find(AssetDatabase.GetAssetPath(doc.Root),new[]{asset});
+                if(reference!=null){doc.Report("仍被引用："+reference);return;}
             }
             else if (doc.Assets.Any(owner => AssetDatabase.GetAssetPath(owner) != AssetDatabase.GetAssetPath(doc.Root) && AssetReferences.Children(owner).Contains(asset)))
             { doc.Report("该节点由共享资产引用；先把上游效果内嵌，再删除此节点。"); return; }
@@ -143,6 +148,10 @@ namespace ZFramework.GAS.Editor
         }
         public static ScriptableObject Convert(SkillDocument doc, ScriptableObject source, bool embed, string externalPath = null)
         {
+            if(!embed){
+                var reference=SkillReferenceGuard.Find(AssetDatabase.GetAssetPath(source),new[]{source});
+                if(reference!=null)throw new InvalidOperationException("外置会拆开正在共享的效果，请先处理引用："+reference);
+            }
             ScriptableObject copy = null;
             EditCommand.Transaction(doc, embed ? "内嵌资产" : "外置资产", doc.Root, () =>
             {

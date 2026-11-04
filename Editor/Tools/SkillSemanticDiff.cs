@@ -63,6 +63,21 @@ namespace ZFramework.GAS.Editor
             }
             return differences;
         }
+        // A conflict never silently wins. The result carries the common base at that key until reviewed.
+        public static Snapshot Merge(Snapshot basis,Snapshot ours,Snapshot theirs,List<string> conflicts)
+        {
+            if(basis.version!=1 || ours.version!=1 || theirs.version!=1) throw new InvalidDataException("不支持的快照版本。");
+            var b=basis.entries.ToDictionary(e=>e.key);var o=ours.entries.ToDictionary(e=>e.key);var t=theirs.entries.ToDictionary(e=>e.key);
+            var result=new Snapshot{skill=ours.skill}; conflicts.Clear();
+            string Choose(string key,string x,string y,string z)
+            {if(y==z || z==x)return y;if(y==x)return z;conflicts.Add(key);return x;}
+            foreach(var key in b.Keys.Union(o.Keys).Union(t.Keys).OrderBy(k=>k,StringComparer.Ordinal))
+            {
+                b.TryGetValue(key,out var be);o.TryGetValue(key,out var oe);t.TryGetValue(key,out var te);
+                string value=Choose(key,be?.value,oe?.value,te?.value); if(value!=null)result.entries.Add(new Entry{key=key,label=(oe??te??be).label,value=value});
+            }
+            result.layout=Choose("@layout",basis.layout,ours.layout,theirs.layout);return result;
+        }
         private static string StablePath(SerializedObject so, string path)
             => Index.Replace(path, match =>
             {

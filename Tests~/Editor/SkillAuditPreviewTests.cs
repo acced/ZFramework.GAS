@@ -1,9 +1,12 @@
 using System;
 using System.Collections;
+using System.Linq;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.TestTools;
+using UnityEngine.UIElements;
 using ZFramework.GAS.Unity;
 using Object = UnityEngine.Object;
 
@@ -27,30 +30,30 @@ namespace ZFramework.GAS.Editor.Tests
             var clip = AssetDatabase.LoadAssetAtPath<AudioClip>(path); clip.LoadAudioData();
             while (clip.loadState == AudioDataLoadState.Loading) yield return null;
             var animation = ScriptableObject.CreateInstance<SkillAnimationAsset>();
-            var first = new AudioSkillTrack { clip = clip, end = 2, loop = true };
-            var second = new AudioSkillTrack { clip = clip, end = 2, loop = true };
+            var first = new AudioSkillTrack { clip = clip, end = 5, loop = true };
+            var second = new AudioSkillTrack { clip = clip, end = 5, loop = true };
             animation.runtimeTracks = new SkillRuntimeTrack[] { first, second };
             using var audio = new SkillPreviewAudio();
             try
             {
-                double start = EditorApplication.timeSinceStartup;
                 audio.Sample(animation, 0, true, 0);
-                // GetOutputData installs the DSP capture tap on its first call. Wait for
-                // audio buffers after installing it before treating zero samples as silence.
-                foreach (var track in new[] { first, second }) audio.Get(track.Id).Source.GetOutputData(new float[1024], 0);
-                while (EditorApplication.timeSinceStartup - start < .5)
-                {
-                    audio.Sample(animation, (float)(EditorApplication.timeSinceStartup - start), true, 0);
-                    yield return null;
+                var a=audio.Get(first.Id).Source;var b=audio.Get(second.Id).Source;
+                // Install the taps first, then wait for observed mixer output instead of assuming
+                // editor frame time is the time the audio device has actually been running.
+                var pcm=new float[1024];
+                bool HasSignal(AudioSource source){
+                    source.GetOutputData(pcm,0);
+                    return source.isPlaying && Array.Exists(pcm,s=>Mathf.Abs(s)>.001f);
                 }
-                foreach (var track in new[] { first, second })
-                {
-                    var source = audio.Get(track.Id).Source;
-                    Assert.IsTrue(source.isPlaying, "Each independent audition source must play.");
-                    var output = new float[1024]; source.GetOutputData(output, 0);
-                    float peak = 0; foreach (var sample in output) peak = Mathf.Max(peak, Mathf.Abs(sample));
-                    Assert.Greater(peak, .001f, "Each overlapping channel must produce actual PCM samples.");
+                HasSignal(a);HasSignal(b);
+                double until=EditorApplication.timeSinceStartup+4; bool simultaneous=false;
+                while(!simultaneous && EditorApplication.timeSinceStartup<until){
+                    float time=(float)(EditorApplication.timeSinceStartup-until+4);
+                    audio.Sample(animation,time,true,0);
+                    simultaneous=HasSignal(a) && HasSignal(b);
+                    if(!simultaneous)yield return null;
                 }
+                Assert.IsTrue(simultaneous,"Both overlapping sources must be playing and supply actual PCM.");
             }
             finally { audio.Dispose(); Object.DestroyImmediate(animation); AssetDatabase.DeleteAsset(path); }
         }
@@ -84,6 +87,50 @@ namespace ZFramework.GAS.Editor.Tests
                 Assert.AreEqual(0, audio.Count); Assert.AreEqual(2, otherWindow.Count); Assert.IsTrue(otherWindow.Get(first.Id).Source != null);
             }
             finally { audio.Dispose(); otherWindow.Dispose(); Object.DestroyImmediate(animation); Object.DestroyImmediate(clip); }
+        }
+        [Test] public void WindowClockAndTimelinePauseKeepPreviewAudioSynchronized()
+        {
+            string path = AssetDatabase.GenerateUniqueAssetPath("Assets/GASPreviewClockTest.asset");
+            var skill = ScriptableObject.CreateInstance<GameplayAbilityAsset>(); AssetDatabase.CreateAsset(skill, path);
+            var animation = ScriptableObject.CreateInstance<SkillAnimationAsset>(); AssetDatabase.AddObjectToAsset(animation, skill);
+            var clip = AudioClip.Create("preview-clock", 48000 * 3, 1, 48000, false);
+            var track = new AudioSkillTrack { clip = clip, end = 3, loop = true }; animation.runtimeTracks = new SkillRuntimeTrack[] { track };
+            using (var so = new SerializedObject(animation)) { so.FindProperty("clipName").stringValue = "a"; so.FindProperty("duration").floatValue = 3; so.ApplyModifiedPropertiesWithoutUndo(); }
+            using (var so = new SerializedObject(skill)) { so.FindProperty("animation").objectReferenceValue = animation; so.ApplyModifiedPropertiesWithoutUndo(); }
+            string prefabPath = AssetDatabase.GenerateUniqueAssetPath("Assets/GASPreviewClockTest.prefab");
+            var motion = new AnimationClip { name = "a", legacy = true };
+            motion.SetCurve("", typeof(Transform), "localPosition.x", AnimationCurve.Linear(0, 0, 3, 1));
+            AssetDatabase.AddObjectToAsset(motion, skill);
+            var source = new GameObject("preview-clock-source"); source.AddComponent<Animation>().AddClip(motion, "a");
+            var prefab = PrefabUtility.SaveAsPrefabAsset(source, prefabPath); Object.DestroyImmediate(source);
+            SkillEditorWindow window = null;
+            try
+            {
+                SkillIndex.Invalidate(); window = SkillEditorWindow.Open(); window.Show(skill);
+                window.Document.PreviewPrefab = prefab;
+                var preview = window.rootVisualElement.Q<PreviewPanel>(); preview.Load();
+                var sound = preview.Query<Toggle>().ToList().Single(t => t.label == "音效");
+                var previewTools = typeof(PreviewPanel).GetField("_tools", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(preview);
+                Assert.IsNotNull(previewTools, "The actual preview must load its sampler and tools.");
+                var audio = (SkillPreviewAudio)typeof(SkillPreviewTools).GetField("_audio", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(previewTools);
+                var playback = window.Document.Playback;
+                var timeline = window.rootVisualElement.Q<TimelinePanel>();
+                window.AdvancePlayback(100); timeline.TogglePlay();
+                Assert.IsTrue(playback.Playing); Assert.AreEqual(0, audio.Count, "No source should be created while muted.");
+                sound.value = true; Assert.AreEqual(1, audio.Count);
+                var channel = audio.Get(track.Id); int seek = playback.SeekVersion;
+                window.AdvancePlayback(100.6);
+                Assert.AreEqual(.6f, playback.Time, .0001f, "Use the window's real clock path; a stalled frame must not be clamped to .1 seconds.");
+                Assert.AreEqual(seek, playback.SeekVersion); Assert.AreEqual(1, channel.SeekCount);
+                timeline.TogglePlay(); Assert.AreEqual(0, audio.Count, "Pause must stop audio immediately without waiting for another Tick or Seek.");
+                window.AdvancePlayback(102); Assert.AreEqual(.6f, playback.Time, .0001f);
+                timeline.TogglePlay(); Assert.AreEqual(1, audio.Count); Assert.AreEqual(.6f, audio.Get(track.Id).Source.time, .05f);
+                window.AdvancePlayback(102.25); Assert.AreEqual(.85f, playback.Time, .0001f);
+                var playingSource = audio.Get(track.Id).Source; sound.value = false;
+                window.AdvancePlayback(102.5); Assert.AreEqual(1.1f, playback.Time, .0001f);
+                Assert.IsTrue(playingSource == null); Assert.AreEqual(0, audio.Count, "Mute releases the active source and stays silent while the timeline advances.");
+            }
+            finally { window?.Close(); AssetDatabase.DeleteAsset(prefabPath); AssetDatabase.DeleteAsset(path); Object.DestroyImmediate(clip); SkillIndex.Invalidate(); }
         }
         [TestCase(false), TestCase(true)] public void DestroyedAnimatorAndLegacyDriversAreRecreated(bool legacy)
         {

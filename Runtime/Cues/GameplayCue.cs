@@ -97,6 +97,7 @@ namespace ZFramework.GAS
         /// <summary>派发给所有注册标签能匹配 <c>parameters.CueTag</c> 的处理器，返回被调用的处理器数量。</summary>
         public int Dispatch(in GameplayCueParameters parameters)
         {
+            GasDebugHooks.NotifyCue(parameters);
             int dispatched = 0;
             _dispatchDepth++;
             try

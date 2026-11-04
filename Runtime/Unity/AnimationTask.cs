@@ -25,8 +25,10 @@ namespace ZFramework.GAS.Unity
         private readonly int[] _windowTagsAdded;
         private TimelineTaskContext _taskContext;
         private EffectEvaluationContext _effectValues;
+        private AbilitySourceIdentity _sourceIdentity;
         private readonly Boundary[] _boundaries;
         private int _nextBoundary;
+        private readonly float _timeScale;
         private readonly struct Boundary
         {
             /// <summary>构造完成后是本次播放的实际秒数（已缩放并夹到 <see cref="Duration"/>）。</summary>
@@ -42,6 +44,8 @@ namespace ZFramework.GAS.Unity
         private readonly IRuntimeTrackHandler[] _trackHandlers;
         private readonly bool[] _trackOpen;
         private readonly bool[] _trackDone;
+        public string QueuedSectionId => _queuedSection;
+        public int CopyWeights(Span<ClipWeight> into) => _driver is IAnimationDebugInfo debug ? debug.CopyWeights(into) : 0;
         public string SectionId => _section >= 0 ? _definition.Sections[_section].Id : null;
 
 
@@ -114,9 +118,18 @@ namespace ZFramework.GAS.Unity
             Array.Sort(_boundaries, static (a, c) =>
             { int order = a.Time.CompareTo(c.Time); if (order == 0) order = a.Kind.CompareTo(c.Kind); return order == 0 ? a.Index.CompareTo(c.Index) : order; });
 
-            float played = driver is IBlendingAnimationDriver blending
-                ? blending.Play(definition.ClipName, durationOverride, definition.Loop, definition.BlendIn)
-                : driver.Play(definition.ClipName, durationOverride, definition.Loop);
+            if(driver is IBoneWeightDriver bones) bones.SetNextBoneWeights(definition.BoneWeights);
+            if (driver is ISkillLayerDriver layered) layered.ConfigureNextLayer(definition.Mask, definition.Additive, definition.LayerWeight);
+            string playClip = SkillAnimator.ResolveClip(driver, definition.ClipName, taskContext?.Execution?.Asset?.clipOverrides);
+            float played = driver is AnimatorAnimationDriver animator && definition.Sections.Count > 0
+                ? animator.PlayAt(playClip, durationOverride, definition.Loop, definition.BlendIn, definition.Sections[0].Start / definition.Duration)
+                : driver is IAdvancedBlendingDriver advanced
+                ? advanced.Play(playClip, durationOverride, definition.Loop, definition.BlendInSpec)
+                : driver is IBlendingAnimationDriver blending
+                ? blending.Play(playClip, durationOverride, definition.Loop, definition.BlendIn)
+                : driver.Play(playClip, durationOverride, definition.Loop);
+
+            if(played>0)SkillAnimator.RecordExit(driver,definition.BlendOutSpec);
 
             // 驱动找不到片段时返回 0：表现缺失不应连带把判定一起丢掉，
             // 时间轴按调用方要求的时长（没有则按授权时长）照常推进。
@@ -125,7 +138,7 @@ namespace ZFramework.GAS.Unity
                 : definition.Duration;
 
             // 实际时长 ÷ 授权时长。所有时间点都按它缩放，且只算这一次。
-            float scale = Duration / definition.Duration;
+            _timeScale = Duration / definition.Duration;
 
             // authored × scale 在浮点下可能比 Duration 多出一个 ulp
             // （如授权 0.8s 拉到 0.44s），圈末 head 恰好等于 Duration，多出的那一点会让
@@ -146,11 +159,12 @@ namespace ZFramework.GAS.Unity
 
         /// <summary>当前这一圈的归一化进度（0~1）。</summary>
         public float NormalizedTime => _cycleTime / Duration;
-        private float ToActual(float authored) => Math.Min(authored * (Duration / _definition.Duration), Duration);
+        private float ToActual(float authored) => Math.Min(authored * _timeScale, Duration);
 
         protected override void OnBegin()
         {
-            _effectValues = (_taskContext?.Execution?.Values ?? Ability.EvaluationContext ?? new EffectEvaluationContext(Ability.Level)).CaptureSource(Ability.Owner.Attributes);
+            _sourceIdentity = Ability.Owner.SourceIdentity;
+            _effectValues = _taskContext?.Execution?.Values ?? Ability.EvaluationContext ?? new EffectEvaluationContext(Ability.Level);
             bool configured = _trackHandlers.Length > 0 || _definition.TaskEvents.Length > 0;
             foreach (var marker in _definition.Markers) configured |= marker.Actions.Count > 0;
             if (configured && _taskContext?.Execution == null)
@@ -158,6 +172,7 @@ namespace ZFramework.GAS.Unity
                 var execution = new SkillExecutionContext(DefinitionSource.Of(Ability.Definition) as GameplayAbilityAsset, Ability, _target, _effectValues, _taskContext);
                 _taskContext = execution.Services;
             }
+            if (_taskContext?.Execution!=null && _driver is ISkillRigService rig) _taskContext.Execution.Services.Rig??=rig;
             for (int i = 0; i < _trackHandlers.Length; i++) _trackHandlers[i] = _definition.RuntimeTracks[i].Create(_taskContext.Execution);
             if (_definition.Sections.Count > 0) JumpToSection(_definition.Sections[0].Id);
         }
@@ -174,13 +189,15 @@ namespace ZFramework.GAS.Unity
         public bool JumpToSection(string id)
         {
             int index = FindSection(id); if (!IsActive || index < 0) return false;
+            bool jumping = _section >= 0;
             float destination = ToActual(_definition.Sections[index].Start);
             int consumed = destination == _cycleTime ? _nextBoundary : 0;
+            int version = ++_jumpVersion;
             CloseTimelineState(true);
-            if (!IsActive) return false;
-            _section = index; _queuedSection = null; _jumpVersion++;
+            if (!IsActive || version != _jumpVersion) return false;
+            _section = index; _queuedSection = null;
             float time = _definition.Sections[index].Start;
-            for (int i = 0; i < _trackDone.Length; i++) _trackDone[i] = _definition.RuntimeTracks[i].End <= time;
+            for (int i = 0; i < _trackDone.Length; i++) _trackDone[i] = ToActual(_definition.RuntimeTracks[i].End) <= destination;
             _cycleTime = destination;
             _nextBoundary = 0;
             while (_nextBoundary < _boundaries.Length && _boundaries[_nextBoundary].Time < _cycleTime) _nextBoundary++;
@@ -189,18 +206,35 @@ namespace ZFramework.GAS.Unity
             for (int i = 0; i < _definition.TagWindows.Length; i++)
             {
                 var window = _definition.TagWindows[i];
-                if ((window.Start < time || WasConsumed(0, i)) && (window.End < 0 || window.End > time))
-                    for (int j = 0; j < window.Tags.Count && IsActive; j++) { _windowTagsAdded[i]++; Ability.Owner.OwnedTags.AddTag(window.Tags[j]); }
+                if ((ToActual(window.Start) < destination || WasConsumed(0, i)) && (window.End < 0 || ToActual(window.End) > destination))
+                    for (int j = 0; j < window.Tags.Count; j++)
+                    {
+                        _windowTagsAdded[i]++; Ability.Owner.OwnedTags.AddTag(window.Tags[j]);
+                        if (!IsActive || version != _jumpVersion) return false;
+                    }
             }
             for (int i = 0; i < _definition.CueRegions.Length && IsActive; i++)
             {
                 var region = _definition.CueRegions[i];
-                if ((region.Start < time || WasConsumed(1, i)) && (region.End < 0 || region.End > time)) { _regionOpen[i] = true; DispatchCue(region.CueTag, GameplayCueEvent.OnActive); }
+                if ((ToActual(region.Start) < destination || WasConsumed(1, i)) && (region.End < 0 || ToActual(region.End) > destination))
+                {
+                    _regionOpen[i] = true; DispatchCue(region.CueTag, GameplayCueEvent.OnActive);
+                    if (!IsActive || version != _jumpVersion) return false;
+                }
             }
-            if (_driver is ISeekableAnimationDriver seekable) seekable.Seek(NormalizedTime);
-            else _driver.Advance(NormalizedTime);
+            if (!IsActive || version != _jumpVersion) return false;
+            var transition = _definition.Sections[index].Transition;
+            transition.duration *= _timeScale;
+            if (!(jumping && transition.duration > 0 && _driver is IAdvancedBlendingDriver advanced &&
+                (advanced.Capabilities & AnimationBlendCapabilities.SeekBlend) != 0 && advanced.SeekBlend(NormalizedTime, transition)))
+            {
+                if (!jumping && _driver is PlayableAnimationDriver playable) playable.SetEntryTime(NormalizedTime);
+                else if ((jumping || _driver is not AnimatorAnimationDriver) && _driver is ISeekableAnimationDriver seekable) seekable.Seek(NormalizedTime);
+                else _driver.Advance(NormalizedTime);
+            }
+            if (!IsActive || version != _jumpVersion) return false;
             SampleTracks(time);
-            return IsActive;
+            return IsActive && version == _jumpVersion;
             bool WasConsumed(int kind, int item)
             {
                 for (int b = 0; b < consumed; b++) if (_boundaries[b].Kind == kind && _boundaries[b].Index == item) return true;
@@ -210,7 +244,13 @@ namespace ZFramework.GAS.Unity
 
         protected override void OnTick(float deltaTime)
         {
-            try { Tick(deltaTime); }
+            try
+            {
+                float scale = HitStopLease.Scale(Ability.Owner,_taskContext?.Time);
+                if (!(scale >= 0) || !float.IsFinite(scale)) throw new InvalidOperationException("局部动画速度必须是有限非负数。");
+                if (_driver is ISkillAnimationSpeed speed) speed.SetLocalScale(scale);
+                Tick(deltaTime * scale);
+            }
             catch (Exception exception) { _taskContext?.Execution?.Fail(exception, _taskContext.Execution.CurrentActionId); throw; }
         }
         private void Tick(float deltaTime)
@@ -265,9 +305,11 @@ namespace ZFramework.GAS.Unity
                 // Sections own [start, end). Decide the successor before admitting shared-end
                 // events or entering tracks there (a loop must never hit the next section).
                 if (!ProcessBoundaries(_cycleTime, inclusive: !atEnd)) return;
+                int version = _jumpVersion;
                 _driver.Advance(NormalizedTime);
+                if (!IsActive || version != _jumpVersion) return;
                 SampleTracks(atEnd ? section.End : NormalizedTime * _definition.Duration, includeStarts: !atEnd);
-                if (!IsActive || _cycleTime < end) return;
+                if (!IsActive || version != _jumpVersion || _cycleTime < end) return;
                 string next = _queuedSection ?? section.Next;
                 if (string.IsNullOrEmpty(next)) { Complete(); return; }
                 int nextIndex = FindSection(next);
@@ -283,30 +325,35 @@ namespace ZFramework.GAS.Unity
         }
         private void SampleTracks(float time, bool includeStarts = true)
         {
+            int version = _jumpVersion;
             for (int i = 0; i < _trackHandlers.Length && IsActive; i++)
             {
                 var definition = _definition.RuntimeTracks[i];
                 if (!_trackOpen[i] && !_trackDone[i] && (time > definition.Start || includeStarts && time == definition.Start))
                 { _trackOpen[i] = true; _trackHandlers[i].Enter(); }
+                if (!IsActive || version != _jumpVersion) return;
                 if (!_trackOpen[i] || !IsActive) continue;
                 _trackHandlers[i].Sample(Math.Min(definition.End - definition.Start, Math.Max(0, time - definition.Start)), UnityEngine.Mathf.InverseLerp(definition.Start, definition.End, time));
+                if (!IsActive || version != _jumpVersion) return;
                 if (time >= definition.End) { _trackOpen[i] = false; _trackDone[i] = true; _trackHandlers[i].Exit(); }
+                if (!IsActive || version != _jumpVersion) return;
             }
         }
         private void CloseTimelineState(bool cancelled)
         {
+            int version = _jumpVersion;
             Exception error = null;
-            for (int i = 0; i < _windowTagsAdded.Length; i++)
-                while (_windowTagsAdded[i] > 0)
+            for (int i = 0; version == _jumpVersion && i < _windowTagsAdded.Length; i++)
+                while (version == _jumpVersion && _windowTagsAdded[i] > 0)
                 { int tag = --_windowTagsAdded[i]; try { Ability.Owner.OwnedTags.RemoveTag(_definition.TagWindows[i].Tags[tag]); } catch (Exception ex) { error ??= ex; } }
-            for (int i = 0; i < _regionOpen.Length; i++) if (_regionOpen[i])
+            for (int i = 0; version == _jumpVersion && i < _regionOpen.Length; i++) if (_regionOpen[i])
             { _regionOpen[i] = false; try { DispatchCue(_definition.CueRegions[i].CueTag, GameplayCueEvent.Removed); } catch (Exception ex) { error ??= ex; } }
-            for (int i = 0; i < _trackHandlers.Length; i++) if (_trackOpen[i])
+            for (int i = 0; version == _jumpVersion && i < _trackHandlers.Length; i++) if (_trackOpen[i])
             {
                 _trackOpen[i] = false;
                 try { if (cancelled) _trackHandlers[i].Cancel(); else _trackHandlers[i].Exit(); } catch (Exception ex) { error ??= ex; }
             }
-            if (error != null) throw error;
+            if (error != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
         }
 
         protected override void OnEnd(bool cancelled)
@@ -335,7 +382,8 @@ namespace ZFramework.GAS.Unity
 
             try
             {
-                if (_driver is IBlendingAnimationDriver blending) blending.Stop(_definition.BlendOut);
+                if (_driver is IAdvancedBlendingDriver advanced) advanced.Stop(_definition.BlendOutSpec);
+                else if (_driver is IBlendingAnimationDriver blending) blending.Stop(_definition.BlendOut);
                 else _driver.Stop();
             }
             catch (Exception ex) { error ??= ex; }
@@ -359,33 +407,38 @@ namespace ZFramework.GAS.Unity
                 {
                     case 0:
                         var tags = _definition.TagWindows[b.Index].Tags;
-                        for (int i = 0; i < tags.Count; i++)
+                        for (int i = _windowTagsAdded[b.Index]; i < tags.Count; i++)
                         {
                             // Commit ownership before notification: cancellation can reenter OnEnd.
-                            _windowTagsAdded[b.Index] = i + 1;
+                            _windowTagsAdded[b.Index]++;
                             Ability.Owner.OwnedTags.AddTag(tags[i]);
                             if (!IsActive || version != _jumpVersion) return false;
                         }
                         break;
                     case 1:
-                        _regionOpen[b.Index] = true;
-                        DispatchCue(_definition.CueRegions[b.Index].CueTag, GameplayCueEvent.OnActive);
+                        if (!_regionOpen[b.Index])
+                        {
+                            _regionOpen[b.Index] = true;
+                            DispatchCue(_definition.CueRegions[b.Index].CueTag, GameplayCueEvent.OnActive);
+                        }
                         break;
                     case 2:
                         var marker = _definition.Markers[b.Index];
+                        SkillActionDebug.Marker(_taskContext?.Execution,marker);
+                        if (!IsActive || version != _jumpVersion) return false;
                         if (marker.Effect != null)
                         {
                             var owner = Ability.Owner;
                             var receiver = marker.Target == AnimationMarkerTarget.Self ? owner : _target;
                             if (_taskContext?.Execution != null) _taskContext.Execution.ExecuteAction(marker.LegacyAction);
-                            else receiver.Effects.Apply(new GameplayEffectSpec(marker.Effect, owner.Attributes, owner.SourceIdentity, context: _effectValues));
-                            if (!IsActive) return false;
+                            else receiver.Effects.Apply(new GameplayEffectSpec(marker.Effect, owner.Attributes, _sourceIdentity, context: _effectValues));
+                            if (!IsActive || version != _jumpVersion) return false;
                         }
                         if (marker.Actions != null && marker.Actions.Count > 0)
                         {
                             var execution = _taskContext?.Execution ?? throw new InvalidOperationException("Configured actions require SkillRunner execution context.");
                             execution.Execute(marker.Actions);
-                            if (!IsActive) return false;
+                            if (!IsActive || version != _jumpVersion) return false;
                         }
                         _onMarker?.Invoke(this, marker);
                         break;
@@ -402,7 +455,7 @@ namespace ZFramework.GAS.Unity
                         {
                             int index = --_windowTagsAdded[b.Index];
                             Ability.Owner.OwnedTags.RemoveTag(_definition.TagWindows[b.Index].Tags[index]);
-                            if (!IsActive) return false;
+                            if (!IsActive || version != _jumpVersion) return false;
                         }
                         break;
                     case 5:
@@ -421,7 +474,7 @@ namespace ZFramework.GAS.Unity
         private void DispatchCue(GameplayTag cueTag, GameplayCueEvent cueEvent)
         {
             AbilitySystemComponent owner = Ability.Owner;
-            owner.CueRouter?.Dispatch(new GameplayCueParameters(cueTag, cueEvent, owner, owner, 1));
+            owner.CueRouter?.Dispatch(new GameplayCueParameters(cueTag, cueEvent, owner, _sourceIdentity, 1));
         }
     }
 }

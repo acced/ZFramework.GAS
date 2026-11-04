@@ -102,6 +102,24 @@ namespace ZFramework.GAS.Tests
                 Assert.AreEqual(Animator.StringToHash("Base Layer.Idle"), animator.GetNextAnimatorStateInfo(0).fullPathHash);
                 animator.Update(.5f);
                 Assert.AreEqual(0, go.transform.localPosition.x, .01f);
+                // Restart/seek the pending destination before Mecanim settles, not only the current state.
+                driver.Play("Base Layer.Attack",.8f,false,.3f);animator.Update(.08f);Assert.IsTrue(animator.IsInTransition(0));
+                driver.Play("Base Layer.Attack",.8f,false,.3f);
+                Assert.IsFalse(animator.IsInTransition(0));Assert.That(animator.GetCurrentAnimatorStateInfo(0).normalizedTime,Is.InRange(0f,.03f));
+                driver.Stop(.1f);animator.Update(.3f);
+                driver.Play("Base Layer.Attack",.8f,false,.3f);animator.Update(.05f);Assert.IsTrue(animator.IsInTransition(0));
+                Assert.IsTrue(((IAdvancedBlendingDriver)driver).SeekBlend(.65f,new SkillBlend(.2f)));
+                Assert.AreEqual(.65f,animator.GetCurrentAnimatorStateInfo(0).normalizedTime,.02f);
+                foreach(float entry in new[]{0f,.3f}){
+                    driver.Stop(0);animator.Play("Base Layer.Idle",0,0);animator.Update(0);
+                    var asc=new AbilitySystemComponent();var spec=asc.GrantAbility(new GameplayAbilityDefinition());asc.TryActivateAbility(spec);
+                    var def=new SkillAnimationDefinition("Base Layer.Attack",.8f,blendInSpec:new SkillBlend(.2f),
+                        sections:new[]{new AnimationSectionDefinition("s","s",entry,.8f,null,entry,.8f)});
+                    var task=new AnimationTask(def,driver);asc.StartTask(spec,task);animator.Update(.005f);
+                    Assert.IsTrue(animator.IsInTransition(0),"Entering the first Section must preserve the pending cross-fade.");
+                    Assert.AreEqual(entry/.8f,animator.GetNextAnimatorStateInfo(0).normalizedTime,.03f);
+                    animator.Update(.08f);Assert.That(go.transform.localPosition.x,Is.InRange(.05f,.95f));asc.Clear();
+                }
                 // 混出为 0：驱动只恢复速度，不切换状态（交给状态机自己的转换）。
                 driver.Play("Base Layer.Attack", .4f, false, 0); driver.Stop(0); animator.Update(.05f);
                 Assert.IsFalse(animator.IsInTransition(0));

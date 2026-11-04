@@ -27,7 +27,60 @@ namespace ZFramework.GAS.Editor.Tests
             public void Stop() { }
         }
         [SetUp] public void Setup() => TestTags.Initialize();
+        [Test] public void RoundedJumpDestinationOpensWindowAndCueExactlyOnce()
+        {
+            const float start = .6854840517044067f, destination = .6854841113090515f, duration = 1.7f, actual = .31f;
+            Assert.Less(start, destination); Assert.AreEqual(start * (actual / duration), destination * (actual / duration));
+            int opens = 0, closes = 0; object openedBy = null, closedBy = null; var router = new GameplayCueRouter();
+            router.Register("Test.Cue", p => { if (p.Event == GameplayCueEvent.OnActive) { opens++; openedBy = p.Source; } if (p.Event == GameplayCueEvent.Removed) { closes++; closedBy = p.Source; } });
+            var owner = new AbilitySystemComponent(cueRouter: router); var spec = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(spec);
+            var definition = new SkillAnimationDefinition("a", duration,
+                tagWindows: new[] { new AnimationTagWindow(start, -1, new GameplayTagSet("Test.Window")) },
+                cueRegions: new[] { new AnimationCueRegion(start, -1, "Test.Cue") },
+                sections: new[] { new AnimationSectionDefinition("a", "a", 0, .1f, null, 0, .1f), new AnimationSectionDefinition("b", "b", destination, duration, null, destination, duration) });
+            var task = new AnimationTask(definition, new Driver(), durationOverride: actual); owner.StartTask(spec, task);
+            task.JumpToSection("b"); owner.Tick(0);
+            Assert.AreEqual(1, opens); Assert.AreEqual(1, owner.OwnedTags.GetTagCount("Test.Window")); owner.Clear();
+            Assert.AreEqual(1, closes); Assert.AreEqual(0, owner.OwnedTags.GetTagCount("Test.Window"));
+            Assert.AreSame(openedBy, closedBy); Assert.IsNull(((AbilitySourceIdentity)closedBy).Owner);
+        }
+        [TestCase(false, false), TestCase(true, false), TestCase(false, true), TestCase(true, true)]
+        public void JumpRestorationCallbackCannotSeekOrSampleTheAbandonedDestination(bool jumpAgain, bool fromTag)
+        {
+            var router = new GameplayCueRouter(); var owner = new AbilitySystemComponent(cueRouter: router);
+            var spec = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(spec);
+            AnimationTask task = null;
+            void Reenter() { if (jumpAgain) task.JumpToSection("c"); else owner.EndAbility(spec); }
+            if (fromTag) owner.OwnedTags.RegisterTagEventCallback("Test.Window", GameplayTagEventType.NewOrRemoved, (_, count) => { if (count > 0) Reenter(); });
+            else router.Register("Test.Cue", p => { if (p.Event == GameplayCueEvent.OnActive) Reenter(); });
+            var definition = new SkillAnimationDefinition("a", 1,
+                tagWindows: new[] { new AnimationTagWindow(.2f, .7f, new GameplayTagSet("Test.Window")) },
+                cueRegions: new[] { new AnimationCueRegion(.2f, .7f, "Test.Cue") },
+                runtimeTracks: new[] { new CurveSkillTrack { start = .2f, end = .7f, channelId = "abandoned" }.Build() },
+                sections: new[] { new AnimationSectionDefinition("a", "a", 0, .1f, null, 0, .1f), new AnimationSectionDefinition("b", "b", .5f, .7f, null, .5f, .7f), new AnimationSectionDefinition("c", "c", .8f, 1, null, .8f, 1) });
+            var context = new SkillExecutionContext(null, spec, null, spec.EvaluationContext, null); var driver = new Driver();
+            task = new AnimationTask(definition, driver, durationOverride: 1, taskContext: context.Services); owner.StartTask(spec, task);
+            Assert.IsFalse(task.JumpToSection("b"));
+            Assert.AreEqual(jumpAgain ? .8f : 0, driver.Time); Assert.IsFalse(context.Channels.ContainsKey("abandoned"));
+            Assert.AreEqual(0, owner.OwnedTags.GetTagCount("Test.Window"));
+            if (jumpAgain) Assert.AreEqual("c", task.SectionId); else Assert.IsFalse(task.IsActive);
+            owner.EndAbility(spec);
+        }
         [TearDown] public void Cleanup() { foreach (var asset in _assets) if (asset != null) Object.DestroyImmediate(asset); _assets.Clear(); }
+        [Test] public void ReentrantJumpWhileClosingDoesNotSwallowEarlierCallbackException()
+        {
+            var router = new GameplayCueRouter(); var owner = new AbilitySystemComponent(cueRouter: router);
+            var spec = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(spec);
+            var failure = new InvalidOperationException("removal callback failed"); AnimationTask task = null;
+            owner.OwnedTags.RegisterTagEventCallback("Test.Window", GameplayTagEventType.NewOrRemoved, (_, count) => { if (count == 0) throw failure; });
+            router.Register("Test.Cue", cue => { if (cue.Event == GameplayCueEvent.Removed) task.JumpToSection("c"); });
+            var definition = new SkillAnimationDefinition("a", 1,
+                tagWindows: new[] { new AnimationTagWindow(0, .35f, new GameplayTagSet("Test.Window")) }, cueRegions: new[] { new AnimationCueRegion(0, .35f, "Test.Cue") },
+                sections: new[] { new AnimationSectionDefinition("a", "a", 0, .4f, null, 0, .4f), new AnimationSectionDefinition("b", "b", .5f, .7f, null, .5f, .7f), new AnimationSectionDefinition("c", "c", .8f, 1, null, .8f, 1) });
+            task = new AnimationTask(definition, new Driver(), durationOverride: 1); owner.StartTask(spec, task); owner.Tick(.1f);
+            Assert.AreSame(failure, Assert.Throws<InvalidOperationException>(() => task.JumpToSection("b")));
+            Assert.AreEqual("c", task.SectionId); Assert.AreEqual(0, owner.OwnedTags.GetTagCount("Test.Window")); owner.Clear();
+        }
         private T New<T>() where T : ScriptableObject { var asset = ScriptableObject.CreateInstance<T>(); _assets.Add(asset); return asset; }
         [Test] public void SectionJumpClosesWindowsSkipsMarkersAndUsesStableIds()
         {
@@ -138,6 +191,37 @@ namespace ZFramework.GAS.Editor.Tests
         }
         private static T DriverField<T>(PlayableAnimationDriver driver, string name)
             => (T)typeof(PlayableAnimationDriver).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(driver);
+        [Test] public void ReplayedOpenBoundaryIsIdempotentAndReleasesEveryOwnedTag()
+        {
+            int opens = 0, closes = 0; var router = new GameplayCueRouter();
+            router.Register("Test.Cue", cue => { if (cue.Event == GameplayCueEvent.OnActive) opens++; if (cue.Event == GameplayCueEvent.Removed) closes++; });
+            var owner = new AbilitySystemComponent(cueRouter: router); var spec = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(spec);
+            var definition = new SkillAnimationDefinition("a", 1,
+                tagWindows: new[] { new AnimationTagWindow(0, .8f, new GameplayTagSet(new GameplayTag[] { "Test.Window", "Test.Other" })) },
+                cueRegions: new[] { new AnimationCueRegion(0, .8f, "Test.Cue") });
+            var task = new AnimationTask(definition, new Driver(), durationOverride: 1); owner.StartTask(spec, task); owner.Tick(.1f);
+            // Force the defensive case: an already restored/open boundary is visited again.
+            typeof(AnimationTask).GetField("_nextBoundary", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(task, 0);
+            owner.Tick(0);
+            Assert.AreEqual(1, opens); Assert.AreEqual(1, owner.OwnedTags.GetTagCount("Test.Window")); Assert.AreEqual(1, owner.OwnedTags.GetTagCount("Test.Other"));
+            owner.EndAbility(spec);
+            Assert.AreEqual(1, closes); Assert.AreEqual(0, owner.OwnedTags.GetTagCount("Test.Window")); Assert.AreEqual(0, owner.OwnedTags.GetTagCount("Test.Other"));
+        }
+        [TestCase(false), TestCase(true)] public void DisposingDisabledAnimatorReleasesGraphWithoutControllerWriteback(bool inactiveObject)
+        {
+            var go = new GameObject("disabled-dispose"); _assets.Add(go); var animator = go.AddComponent<Animator>();
+            var controller = new AnimatorController(); _assets.Add(controller); controller.AddLayer("Base");
+            foreach (var layer in controller.layers) _assets.Add(layer.stateMachine);
+            var clip = new AnimationClip(); _assets.Add(clip); clip.SetCurve("", typeof(Transform), "localPosition.x", AnimationCurve.Constant(0, 1, 0));
+            controller.layers[0].stateMachine.AddState("Idle").motion = clip; animator.runtimeAnimatorController = controller; animator.Update(0);
+            go.AddComponent<SkillMovementProbe>();
+            using var driver = new PlayableAnimationDriver(animator, new[] { new PlayableClipBinding { name = "a", clip = clip } }, rootMotion: true);
+            driver.Play("a", 1, false); var graph = DriverField<PlayableGraph>(driver, "_graph");
+            if (inactiveObject) go.SetActive(false); else animator.enabled = false;
+            driver.Dispose();
+            Assert.IsFalse(graph.IsValid()); Assert.IsNull(go.GetComponent<SkillRootMotionRelay>()); Assert.IsNull(go.GetComponent<SkillPlayableClock>());
+            UnityEngine.TestTools.LogAssert.NoUnexpectedReceived();
+        }
         [Test] public void JumpClosingRegionDoesNotDispatchRemovedAgainAtDestination()
         {
             int closed = 0; var router = new GameplayCueRouter(); router.Register("Test.Cue", p => { if (p.Event == GameplayCueEvent.Removed) closed++; });
@@ -168,6 +252,18 @@ namespace ZFramework.GAS.Editor.Tests
                 new AnimationMarker(.1f, effect: damage, target: AnimationMarkerTarget.Self) }), new Driver(), durationOverride: 1);
             owner.StartTask(spec, task); owner.Tick(.2f); Assert.AreEqual(99, owner.Attributes.GetCurrent(new AttributeId(1))); owner.EndAbility(spec);
         }
+        [Test] public void DirectTasksStartedAtDifferentTimesUseTheSameActivationSourceCapture()
+        {
+            var owner = new AbilitySystemComponent(); var health = new AttributeId(1); var attack = new AttributeId(2);
+            owner.Attributes.Add(health, 100); var stat = owner.Attributes.Add(attack, 10);
+            var spec = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(spec, captureSource: true);
+            var damage = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] {
+                new EffectModifier(health, ModifierOperation.Add, EffectMagnitude.FromAttribute(attack, -1, MagnitudeCapture.Source)) });
+            var animation = new SkillAnimationDefinition("a", .2f, markers: new[] { new AnimationMarker(.1f, effect: damage, target: AnimationMarkerTarget.Self) });
+            foreach (float changed in new[] { 20f, 30f })
+            { stat.BaseValue = changed; owner.StartTask(spec, new AnimationTask(animation, new Driver(), durationOverride: .2f)); owner.Tick(.2f); }
+            Assert.AreEqual(80, owner.Attributes.GetCurrent(health)); owner.EndAbility(spec);
+        }
         private static void UpdateDriver(PlayableAnimationDriver driver, float dt)
             => typeof(PlayableAnimationDriver).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(driver, new object[] { dt });
         [Test] public void PlayablePreservesInterruptedMixtureAndRestoresRootMotionAtStop()
@@ -183,9 +279,12 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.AreEqual(3, skills.GetInputCount()); Assert.AreEqual(before, skills.GetInputWeight(0) * 10 + skills.GetInputWeight(1) * 20 + skills.GetInputWeight(2) * 30, .0001f);
             Assert.AreEqual(layer, DriverField<float>(driver, "_layerWeight"));
             driver.Seek(.5f); // Real callback suppression is verified by the PlayMode seek test.
+            var onMove = typeof(SkillRootMotionRelay).GetMethod("OnAnimatorMove", BindingFlags.Instance | BindingFlags.NonPublic);
+            int applied = movement.Calls; onMove.Invoke(go.GetComponent<SkillRootMotionRelay>(), null);
+            Assert.Greater(movement.Calls, applied, "Positive control immediately before Stop."); applied = movement.Calls;
             driver.Stop(.2f); Assert.IsFalse(animator.applyRootMotion); UpdateDriver(driver, .1f);
-            typeof(SkillRootMotionRelay).GetMethod("OnAnimatorMove", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(go.GetComponent<SkillRootMotionRelay>(), null);
-            Assert.AreEqual(0, movement.Calls);
+            onMove.Invoke(go.GetComponent<SkillRootMotionRelay>(), null);
+            Assert.AreEqual(applied, movement.Calls);
             float stopping = DriverField<float>(driver, "_layerWeight"); driver.Play("a", 1, false, 1); Assert.AreEqual(stopping, DriverField<float>(driver, "_layerWeight"));
             driver.Stop(); animator.applyRootMotion = true;
             driver.Play("a", 1, false); driver.Stop(); Assert.IsTrue(animator.applyRootMotion, "Each play interval restores the project's latest setting.");
@@ -218,16 +317,45 @@ namespace ZFramework.GAS.Editor.Tests
                 var go = new GameObject("controller-probe"); _assets.Add(go); var animator = go.AddComponent<Animator>(); animator.runtimeAnimatorController = controller;
                 if (rootMotion) go.AddComponent<SkillMovementProbe>();
                 animator.Update(0); animator.Play("Base Layer.Moving", 0, .4f); animator.SetFloat("Speed", .7f); animator.Update(0);
+                var playable = (AnimatorControllerPlayable)animator.playableGraph.GetOutput(0).GetSourcePlayable();
                 using var driver = new PlayableAnimationDriver(animator, new[] { new PlayableClipBinding { name = "a", clip = clip } }, rootMotion: rootMotion);
                 var graph = DriverField<PlayableGraph>(driver, "_graph"); graph.Evaluate(0);
-                var playable = DriverField<AnimatorControllerPlayable>(driver, "_controller");
                 Assert.AreEqual(.7f, playable.GetFloat("Speed"), .001f); Assert.IsTrue(playable.GetCurrentAnimatorStateInfo(0).IsName("Base Layer.Moving"));
                 Assert.AreEqual(.4f, playable.GetCurrentAnimatorStateInfo(0).normalizedTime, .01f);
-                animator.SetFloat("Speed", .9f); animator.SetTrigger("Fire"); graph.Evaluate(.01f); graph.Evaluate(.01f);
+                animator.SetFloat("Speed", .9f); animator.SetTrigger("Fire"); animator.Update(.01f); animator.Update(.01f);
                 Assert.AreEqual(.9f, playable.GetFloat("Speed"), .001f, "Animator.SetFloat must control the actual graph controller");
                 Assert.IsTrue(playable.GetCurrentAnimatorStateInfo(0).IsName("Base Layer.Hit"), "Animator.SetTrigger must drive transitions");
                 driver.Play("a", 1, false, .1f); graph.Evaluate(0); driver.Stop(.1f); graph.Evaluate(0);
                 Assert.IsTrue(playable.GetCurrentAnimatorStateInfo(0).IsName("Base Layer.Hit"), "Root motion ownership changes must not reset the base controller");
+            }
+            finally { AssetDatabase.DeleteAsset(folder); }
+        }
+        [Test] public void PlayableHandoffPreservesPendingTriggersAndRestoresControllerState()
+        {
+            const string folder = "Assets/GASControllerHandoff"; AssetDatabase.CreateFolder("Assets", "GASControllerHandoff");
+            try
+            {
+                var controller = AnimatorController.CreateAnimatorControllerAtPath(folder + "/Controller.controller");
+                controller.AddParameter("Speed", AnimatorControllerParameterType.Float); controller.AddParameter("Fire", AnimatorControllerParameterType.Trigger);
+                var clip = new AnimationClip(); clip.SetCurve("", typeof(Transform), "localPosition.x", AnimationCurve.Constant(0, 1, 0)); AssetDatabase.CreateAsset(clip, folder + "/Clip.anim");
+                var idle = controller.layers[0].stateMachine.AddState("Idle"); idle.motion = clip;
+                var hit = controller.layers[0].stateMachine.AddState("Hit"); hit.motion = clip;
+                var transition = idle.AddTransition(hit); transition.hasExitTime = false; transition.duration = 0; transition.AddCondition(AnimatorConditionMode.If, 0, "Fire");
+                var go = new GameObject("handoff"); _assets.Add(go); var animator = go.AddComponent<Animator>(); animator.runtimeAnimatorController = controller; animator.Update(0);
+                animator.SetTrigger("Fire"); // Pending before the graph exists; it has not been consumed.
+                var playable = (AnimatorControllerPlayable)animator.playableGraph.GetOutput(0).GetSourcePlayable();
+                using var driver = new PlayableAnimationDriver(animator, new[] { new PlayableClipBinding { name = "a", clip = clip } });
+                animator.Update(.01f); animator.Update(.01f);
+                Assert.IsTrue(playable.GetCurrentAnimatorStateInfo(0).IsName("Base Layer.Hit"));
+                animator.SetFloat("Speed", .8f); playable.Play("Base Layer.Hit", 0, .4f); animator.Update(0);
+                driver.Dispose(); animator.Update(0);
+                Assert.AreEqual(.8f, animator.GetFloat("Speed"), .001f);
+                Assert.IsTrue(animator.GetCurrentAnimatorStateInfo(0).IsName("Base Layer.Hit"));
+                Assert.AreEqual(.4f, animator.GetCurrentAnimatorStateInfo(0).normalizedTime, .02f);
+                animator.Play("Base Layer.Idle", 0, 0); animator.Update(0);
+                using var second = new PlayableAnimationDriver(animator, new[] { new PlayableClipBinding { name = "a", clip = clip } });
+                animator.SetTrigger("Fire"); second.Dispose(); animator.Update(.01f); animator.Update(.01f);
+                Assert.IsTrue(animator.GetCurrentAnimatorStateInfo(0).IsName("Base Layer.Hit"), "An unconsumed trigger must also survive disposing the graph.");
             }
             finally { AssetDatabase.DeleteAsset(folder); }
         }

@@ -33,6 +33,7 @@ namespace ZFramework.GAS.Unity
     {
         void Seek(float normalizedTime);
     }
+    public interface ISkillAnimationSpeed { void SetLocalScale(float scale); }
     public interface IAnimationDriverLifetime { bool IsValid { get; } }
 
     /// <summary>
@@ -58,12 +59,13 @@ namespace ZFramework.GAS.Unity
     /// 这里把它变成所有动画形式共用的契约。混入、混出用 <see cref="Animation.CrossFade(string, float)"/>，
     /// 混出时淡回施放前权重最高的片段（通常是待机）。
     /// </summary>
-    public sealed class LegacyAnimationDriver : IBlendingAnimationDriver, ISeekableAnimationDriver, IAnimationDriverLifetime
+    public sealed class LegacyAnimationDriver : ISkillAnimationSpeed, IBlendingAnimationDriver, ISeekableAnimationDriver, IAnimationDriverLifetime
     {
         private readonly Animation _animation;
         public bool IsValid => _animation != null;
         private string _playing, _return;
-        private float _restoreSpeed, _restoreTime;
+        private float _restoreSpeed, _restoreTime, _speed;
+        public void SetLocalScale(float scale){ if(_animation!=null && _playing!=null && _animation[_playing] is AnimationState s) s.speed=_speed*scale; }
         private WrapMode _restoreWrap;
 
         public LegacyAnimationDriver(Animation animation)
@@ -98,7 +100,7 @@ namespace ZFramework.GAS.Unity
             _animation.Stop(clipName);
 
             bool stretch = duration > 0f && state.length > 0f;
-            state.speed = stretch ? state.length / duration : 1f;
+            state.speed = _speed = stretch ? state.length / duration : 1f;
             state.wrapMode = loop ? WrapMode.Loop : WrapMode.Once;
             state.time = 0f;
             // 淡入时长按实际秒数计算：时间轴上的混入随拉伸同比缩放。
