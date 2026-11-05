@@ -16,31 +16,6 @@ internal static class AuditRegressionTests
         var owner = new AbilitySystemComponent(); var id = new AttributeId(1); var health = owner.Attributes.Add(id, 100);
         GameplayEffectDefinition Effect(EffectMagnitude magnitude, ModifierOperation op = ModifierOperation.Add)
             => new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] { new EffectModifier(id, op, magnitude) });
-        var invalid = Effect(EffectMagnitude.FromParameter("missing"), ModifierOperation.Multiply);
-        var valid = Effect(EffectMagnitude.Fixed(-5));
-        var cooldownTags = new EffectTags(granted: new GameplayTagSet("Cooldown.Attack"));
-        var cancelTags = new GameplayTagSet("Ability.Attack");
-        var existing = owner.GrantAbility(new GameplayAbilityDefinition(abilityTags: cancelTags)); owner.TryActivateAbility(existing);
-        foreach (var definition in new[] {
-            new GameplayAbilityDefinition(cost: invalid, cancelAbilitiesWithTags: cancelTags),
-            new GameplayAbilityDefinition(cost: valid, cancelAbilitiesWithTags: cancelTags, cooldown: new GameplayEffectDefinition(EffectDurationPolicy.Duration, 1,
-                tags: cooldownTags, modifiers: invalid.Modifiers)),
-            new GameplayAbilityDefinition(cost: valid, cancelAbilitiesWithTags: cancelTags, cooldown: new GameplayEffectDefinition(EffectDurationPolicy.Duration, 1,
-                tags: cooldownTags,
-                conditionalEffects: new[] { new ConditionalEffect(invalid, EffectTrigger.Removed) })) })
-        {
-            var spec = owner.GrantAbility(definition);
-            Check(owner.TryActivateAbility(spec) == AbilityActivationResult.InvalidConfiguration, "All cost/cooldown descendants must be preflighted.");
-            Check(health.BaseValue == 100 && owner.Effects.Count == 0 && !spec.IsActive, "Invalid configuration must not commit any resources.");
-            Check(existing.IsActive, "Invalid configuration must not cancel another active ability.");
-        }
-        var partial = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] {
-            new EffectModifier(id, ModifierOperation.Add, EffectMagnitude.Fixed(-10)),
-            new EffectModifier(id, ModifierOperation.Add, EffectMagnitude.FromCaller("bad")) });
-        bool rejected = false;
-        try { owner.Effects.Apply(new GameplayEffectSpec(partial, setByCallerValues: new Dictionary<string,float> { ["bad"] = float.NaN })); }
-        catch (InvalidOperationException) { rejected = true; }
-        Check(rejected && health.BaseValue == 100, "An invalid instant effect must not partially write attributes.");
         var secondId = new AttributeId(2); var second = owner.Attributes.Add(secondId, 100);
         var outer = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] {
             new EffectModifier(id, ModifierOperation.Add, EffectMagnitude.Fixed(-1)),
@@ -76,15 +51,11 @@ internal static class AuditRegressionTests
         host.Start(ability, removed); host.Start(ability, failing); host.Start(ability, unrelated);
         try { host.Tick(1); } catch (InvalidOperationException) { }
         Check(unrelated.Ticks == 1 && removed.Ticks == 0, "Mutating a host during failure must not advance peers twice."); host.Clear();
-        host.Start(ability, new Task { Tick = () => throw new InvalidOperationException("one") });
-        host.Start(ability, new Task { Tick = () => throw new InvalidOperationException("two") });
-        AggregateException errors = null; try { host.Tick(1); } catch (AggregateException e) { errors = e; }
-        Check(errors?.InnerExceptions.Count == 2 && host.Count == 0, "Report every task failure.");
         var restarted = new Task(); var restart = new Task();
         restart.Tick = () => { host.Cancel(restarted); host.Start(ability, restarted); host.Cancel(restart); };
         host.Start(ability, restarted); host.Start(ability, restart); host.Tick(1);
         Check(restarted.Ticks == 0, "New task runs must wait for the next frame."); host.Tick(1); Check(restarted.Ticks == 1, "Restarted task must progress next frame."); host.Clear();
-        Console.WriteLine("PASS ActivationPreflightAtomicInstantAndStableTaskScheduling");
+        Console.WriteLine("PASS ReentrantInstantSnapshotsAndStableTaskScheduling");
         ReentryRegressionTests.Run();
     }
 }

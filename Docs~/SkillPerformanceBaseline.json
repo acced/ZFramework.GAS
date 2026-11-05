@@ -294,5 +294,95 @@
       6.3260000000000005
     ]
   },
-  "runtimeMeasurementUtc": "2026-11-04T07:19:10.919122+00:00"
+  "runtimeMeasurementUtc": "2026-11-04T07:19:10.919122+00:00",
+  "runtimeSimplified": {
+    "unity": "6000.3.14f1",
+    "cpu": "Intel(R) Core(TM) i5-14400F",
+    "note": "Warm Editor PlayMode, 200 animated knights, 120 frames at 1/60. Each frame ticks gameplay and the scheduler; the latter now advances the native controller itself. Do not call Animator.Update as well: it would evaluate the controller twice. Each rate has a separate staged timing and main-thread GC.Alloc pass. Historical no-handoff controls are retained in SkillPerformanceBaseline.json.",
+    "units": 200,
+    "frames": 120,
+    "bonesPerUnit": 84,
+    "animatedTransformsPerUnit": 19,
+    "peakFourthFrameEvaluations": 50,
+    "markers": 400,
+    "everyFrameP95": 4.4677,
+    "everyFourthP95": 1.4117,
+    "everyFrameEvaluations": 24000,
+    "everyFourthEvaluations": 6000,
+    "everyFrameAllocations": 0,
+    "everyFourthAllocations": 0,
+    "ascMeanMs": [
+      0.15331333333333325,
+      0.1259791666666666
+    ],
+    "manualAnimationMeanMs": [
+      3.6881616666666663,
+      0.9546899999999999
+    ],
+    "measuredOn": "2026-11-05",
+    "historicalNoHandoffControlP95Ms": [
+      5.9209,
+      6.4113
+    ],
+    "scope": "Controller and skill outputs in the same native graph, manually evaluated once per due sample. No rig probes, handoff jobs, or per-bone skipped-frame writes. Only an explicitly authored bone-weight mask requests a preceding stream capture. This benchmark does not configure such a mask, root motion or detached scene tasks.",
+    "intermediateReplays": [
+      {
+        "stage": 3,
+        "everyFrameP95": 8.7426,
+        "everyFourthP95": 2.4126,
+        "everyFrameAllocations": 0,
+        "everyFourthAllocations": 0,
+        "markers": 400
+      },
+      {
+        "stage": 4,
+        "everyFrameP95": 10.5352,
+        "everyFourthP95": 2.8069,
+        "everyFrameAllocations": 0,
+        "everyFourthAllocations": 0,
+        "markers": 400
+      }
+    ],
+    "finalProjectRuns": {
+      "note": "Three separate warmed Editor PlayMode processes; same timing workload. Medians summarize observed run P95 values, not pooled samples.",
+      "everyFrameP95": [
+        4.4677,
+        9.2057,
+        6.2729
+      ],
+      "everyFourthP95": [
+        1.4117,
+        3.5847,
+        2.8782
+      ],
+      "medianP95Ms": [
+        6.2729,
+        2.8782
+      ],
+      "mainThreadAllocCallsBothRatesInEveryRun": 0
+    },
+    "rerunOfPriorControl": {
+      "note": "2026-11-05: reran the stage-2 package and its original paired benchmark, in a separate project on the same machine. Control omits the handoff job; the old native controller is evaluated even on skipped skill frames. Compare wall-clock results cautiously across editor processes.",
+      "everyFrameP95": 14.8503,
+      "everyFourthP95": 15.8187,
+      "markersPerRate": [
+        400,
+        400
+      ]
+    }
+  },
+  "scopeAndLibraryReview": {
+    "utc": "2026-11-05T08:30:45.0007464Z",
+    "unity": "6000.3.14f1",
+    "units": 200,
+    "nodes": 100,
+    "skills": 500,
+    "note": "Single before/after Editor processes on the same machine. Library measurement includes visible rows. Allocation counts are calls, not bytes. Cold values are single observations.",
+    "librarySearchBefore": {"name": "warm library search and visible rows 500", "p95Milliseconds": 80.1113, "allocationCallsPerOperation": 9509},
+    "librarySearchAfter": {"name": "warm library search and visible rows 500", "p95Milliseconds": 8.1533, "allocationCallsPerOperation": 310},
+    "editorMs": {"cold search 500": 228.5899, "cold global content search 500": 368.6912, "cold window open 100 nodes": 1002.871, "warm scalar edit 100 nodes": 3.8009, "warm drag update and repaint 100 nodes": 15.1434, "Undo and Redo 100 nodes": 556.7156},
+    "crowdP95Ms": [6.1652, 1.6151],
+    "markersPerRate": 400,
+    "mainThreadAllocationCalls": [0, 0]
+  }
 }

@@ -28,7 +28,7 @@ namespace ZFramework.GAS.Editor.Tests
             {
                 window.ShowUtility();
                 int markers = 0;
-                foreach (var name in new[] { "斩击", "战吼", "能量弹", "圣域引导", "召唤" })
+                foreach (var name in new[] { "斩击", "战吼", "分叉闪电", "圣域引导", "召唤" })
                 {
                     var skill = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(skills + name + ".asset");
                     Assert.IsNotNull(skill, name);

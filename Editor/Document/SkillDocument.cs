@@ -85,17 +85,12 @@ namespace ZFramework.GAS.Editor
             internal set{if(_previewEnd==value)return;_previewEnd=value;PreviewRangeChanged?.Invoke();}
         }
         public float PlaybackDuration => Mathf.Max(Root?.Animation?.Duration??0,PreviewEnd);
-        private readonly DebugSubscribers<Action<ChangeSet>> _observers=new();
-        public event Action<ChangeSet> Changed {add=>_observers.Add(value);remove=>_observers.Remove(value);}
-        private void Publish(ChangeSet change)
-        {
-            foreach(var handler in _observers.Snapshot)
-                try{handler(change);}catch(Exception error){Debug.LogException(error);}
-        }
+        public event Action<ChangeSet> Changed;
+        private void Publish(ChangeSet change) => Changed?.Invoke(change);
         public event Action<string> Feedback;
         public event Action FlowRequested;
         public void OpenFlow() => FlowRequested?.Invoke();
-        public SkillDocument() { ModuleFileUndo.AfterReplay += OnUndo; }
+        public SkillDocument() { Undo.undoRedoPerformed += OnUndo; }
 
         public SerializedObject Serialized(Object asset)
         {
@@ -137,7 +132,8 @@ namespace ZFramework.GAS.Editor
         }
         public void RemoveLoose(ScriptableObject asset)
         { _loose.Remove(asset); Layout.LooseAssets.Remove(AssetReferences.Key(asset)); Layout.MarkDirty(); Layout.Save(); }
-        public void Notify(ChangeSet change)
+        public void Notify(ChangeSet change) => Notify(change, false);
+        private void Notify(ChangeSet change, bool restoreSubassets)
         {
             SkillContentIndex.Invalidate(change.Asset);
             bool structure = change.Structure || change.Paths.Length == 0;
@@ -149,8 +145,7 @@ namespace ZFramework.GAS.Editor
                         property.propertyType == SerializedPropertyType.ManagedReference || path.EndsWith(".Array.size", StringComparison.Ordinal))
                     { structure = true; break; }
                 }
-            if (structure || Array.Exists(change.Paths,p=>p.EndsWith(".ownership",StringComparison.Ordinal))) ModuleCallIndex.Changed(change.Asset);
-            if (structure) Reload();
+            if (structure) Reload(restoreSubassets);
             if (change.Asset is SkillAnimationAsset edited) TimelineCommands.EnsureIds(edited, true);
             else if (structure) foreach (var animation in _assets.OfType<SkillAnimationAsset>()) TimelineCommands.EnsureIds(animation, true);
             var invalid = new HashSet<ScriptableObject>();
@@ -219,11 +214,13 @@ namespace ZFramework.GAS.Editor
             foreach (var asset in _assets) if (asset != null) AssetDatabase.SaveAssetIfDirty(asset);
             Report("技能已保存"); Publish(new ChangeSet(Root));
         }
-        private void Reload()
+        private void Reload(bool restoreSubassets = false)
         {
             _assets.Clear(); _parents.Clear();
             var visited = new HashSet<ScriptableObject>();
-            Visit(Root, visited);
+            Visit(Root, visited, restoreSubassets);
+            if (restoreSubassets)
+                foreach (var so in _serialized.Values) if (so.targetObject != null) so.Update();
             if (Root != null)
                 foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(AssetDatabase.GetAssetPath(Root)).OfType<ScriptableObject>())
                     Visit(asset, visited);
@@ -232,38 +229,23 @@ namespace ZFramework.GAS.Editor
             foreach (var dead in _serialized.Keys.Where(o => o == null || o is ScriptableObject s && !visited.Contains(s)).ToArray())
             { _serialized[dead].Dispose(); _serialized.Remove(dead); }
         }
-        private void Visit(ScriptableObject asset, HashSet<ScriptableObject> visited)
+        private void Visit(ScriptableObject asset, HashSet<ScriptableObject> visited, bool restoreSubassets = false)
         {
             if (asset == null || !visited.Add(asset)) return;
             if (!(asset is GameplayAbilityAsset || asset is GameplayEffectAsset || asset is SkillAnimationAsset || asset is SkillActionModuleAsset || asset is SkillParameterSetAsset)) return;
             _assets.Add(asset);
             foreach (var child in AssetReferences.Children(asset))
             {
+                // Undo can restore a referenced subasset as a transient object. Reattach it to its owner before saving.
+                if (restoreSubassets && !EditorUtility.IsPersistent(child)) AssetDatabase.AddObjectToAsset(child, asset);
                 if (!_parents.TryGetValue(child, out var parents)) _parents[child] = parents = new HashSet<ScriptableObject>();
-                parents.Add(asset); Visit(child, visited);
+                parents.Add(asset); Visit(child, visited, restoreSubassets);
             }
         }
         private void OnUndo()
         {
             bool layoutRestored=Layout?.RestoreUndo()==true;
-            // Unity restores destroyed subassets as transient objects. Reattach references before
-            // rebuilding the projection, otherwise a later save silently loses the restored object.
-            if (Root != null)
-            {
-                var restored = new HashSet<ScriptableObject>();
-                void AttachRestored(ScriptableObject owner)
-                {
-                    if (owner == null || !restored.Add(owner)) return;
-                    foreach (var child in AssetReferences.Children(owner))
-                    {
-                          if (!EditorUtility.IsPersistent(child)) AssetDatabase.AddObjectToAsset(child, owner);
-                        AttachRestored(child);
-                    }
-                }
-                AttachRestored(Root);
-            }
-            foreach (var so in _serialized.Values) if (so.targetObject != null) so.Update();
-            Notify(layoutRestored?new ChangeSet(Root,true,"@layout"):new ChangeSet(Root,true));
+            Notify(layoutRestored?new ChangeSet(Root,true,"@layout"):new ChangeSet(Root,true), true);
         }
         private void ClearPool() { foreach (var so in _serialized.Values) so.Dispose(); _serialized.Clear(); }
         private void ClearPendingChanges()
@@ -272,7 +254,7 @@ namespace ZFramework.GAS.Editor
         }
         public void Dispose()
         {
-            ModuleFileUndo.AfterReplay -= OnUndo; ClearPendingChanges();
+            Undo.undoRedoPerformed -= OnUndo; ClearPendingChanges();
             _contentHashes.Clear(); Layout?.Save(); Layout?.Dispose(); ClearPool();
         }
     }

@@ -30,6 +30,20 @@ namespace ZFramework.GAS.Samples.BasicCombat
         [SerializeField] private Skill[] skills = new Skill[0];
         [SerializeField] private AbilitySetAsset abilitySet;
         [SerializeField] private SkillClipOverrideSet axeOverride;
+        [SerializeField] private GameplayAbilityAsset boltSkill;
+        [SerializeField] private GameplayAbilityAsset bounceSkill;
+        [SerializeField] private CombatUnit[] secondary=Array.Empty<CombatUnit>();
+        private float[] _resetAt;
+        private bool _fan=true,_qHeld;
+        public bool FanMode=>_fan;
+        private sealed class EnemyFilter : ITargetFilterSnapshot{
+            private readonly HashSet<object> _enemies=new();
+            public void Include(CombatUnit u)=>_enemies.Add(u.AbilitySystem.SourceIdentity);
+            public ITargetFilter Capture(AbilitySystemComponent source)=>this;
+            public bool Allows(AbilitySystemComponent source,AbilitySystemComponent target)=>
+                _enemies.Contains(target.SourceIdentity) && target.Attributes.GetCurrent(CombatUnit.Health)>0;
+        }
+        private TimelineTaskContext _boltContext;
         private SkillAnimator _equipped;
         [Tooltip("体力每秒回复")]
         [SerializeField] private float staminaRegen = 16;
@@ -63,17 +77,18 @@ namespace ZFramework.GAS.Samples.BasicCombat
             hero.Initialize(_router);
             dummy.Initialize(_router);
             _dummyAnimator = dummy.GetComponentInChildren<Animator>();
+            _resetAt=new float[secondary.Length];var enemies=new EnemyFilter();enemies.Include(dummy);
+            for(int i=0;i<secondary.Length;i++){var u=secondary[i];u.Initialize(_router);u.HealthChanged+=OnHealthChanged;enemies.Include(u);_resetAt[i]=-1;}
             _searcher = new TargetSearcher(16);
             _presentation=gameObject.AddComponent<ArenaPresentation>();
             _context = new TimelineTaskContext
             {
                 Camera=_presentation, Time=_presentation, Rig=_presentation,
-                Origin = hero.transform, Target = aimPoint, Searcher = _searcher, Scene = gameObject.scene,
-                RentVisual = prefab => Instantiate(prefab, castPoint.position, Quaternion.identity).transform,
-                ReturnVisual = ReturnBolt,
+                Origin = hero.transform, LaunchPoint=castPoint, Target = aimPoint, Searcher = _searcher, Scene = gameObject.scene,
             };
+            _boltContext=_context.Snapshot();_boltContext.TargetFilter=enemies;
             if (abilitySet != null) abilitySet.GrantTo(hero.SkillRunner);
-            else foreach (var skill in skills) hero.SkillRunner.Grant(skill.asset);
+            else { foreach (var skill in skills) hero.SkillRunner.Grant(skill.asset);hero.SkillRunner.Grant(bounceSkill); }
 
             if (GameplayTagManager.RequestTag(SampleTags.CueHit, out var hitTag)) _router.Register(hitTag, OnHitCue);
 
@@ -98,11 +113,27 @@ namespace ZFramework.GAS.Samples.BasicCombat
             return false;
         }
 
+        private void Tick(CombatUnit unit, float dt)
+        {
+            try { unit.AbilitySystem.Tick(dt); }
+            catch (Exception error) {
+                Debug.LogException(error, unit);
+                var failed=unit.AbilitySystem.CurrentTask;
+                if(failed?.Ability!=null && failed.ActivationVersion==failed.Ability.ActivationVersion)unit.AbilitySystem.EndAbility(failed.Ability);
+            }
+        }
         private void FixedUpdate()
         {
             float dt = Time.fixedDeltaTime;
-            hero.AbilitySystem.Tick(dt);
-            dummy.AbilitySystem.Tick(dt);
+            Tick(hero, dt);
+            Tick(dummy, dt);
+            for(int i=0;i<secondary.Length;i++){
+                var u=secondary[i];Tick(u, dt);
+                if(u.Get(CombatUnit.Health)<=0 && _resetAt[i]<0)_resetAt[i]=Time.time+1.2f;
+                if(_resetAt[i]>=0 && Time.time>=_resetAt[i]){
+                    _resetAt[i]=-1;_resetting=true;u.SetBase(CombatUnit.Health,u.Get(CombatUnit.MaxHealth));_resetting=false;
+                }
+            }
             hero.SetBase(CombatUnit.Stamina, Mathf.Min(hero.MaxStamina, hero.Get(CombatUnit.Stamina) + staminaRegen * dt));
             if (_dummyResetAt < 0 && dummy.Get(CombatUnit.Health) <= 0) { _dummyResetAt = Time.time + 1.2f; Toast("训练假人被击倒，即将复位"); }
             if (_dummyResetAt > 0 && Time.time >= _dummyResetAt)
@@ -142,7 +173,10 @@ namespace ZFramework.GAS.Samples.BasicCombat
 
         // ───────────── 施放 ─────────────
 
+        private GameplayAbilityAsset Selected(Skill skill)=>skill.asset==boltSkill && !_fan?bounceSkill:skill.asset;
         public void Cast(int index) => TryCast(index);
+        public void ToggleBoltMode(){_fan=!_fan;Toast("能量弹："+(_fan?"分叉闪电":"逐个弹射"));}
+        private void OnApplicationFocus(bool focus){if(!focus)_qHeld=false;}
         public void ToggleWeaponMotion()
         {
             if(_equipped!=null){_equipped.PopOverride(axeOverride);_equipped=null;return;}
@@ -152,35 +186,34 @@ namespace ZFramework.GAS.Samples.BasicCombat
         {
             if (index < 0 || index >= skills.Length) return false;
             var skill = skills[index];
-            var result = hero.SkillRunner.TryCast(skill.asset, dummy.AbilitySystem, _context);
+            bool bolt=skill.asset==boltSkill;
+            var asset=Selected(skill);
+            AbilityActivationResult result;
+            try { result = hero.SkillRunner.TryCast(asset, dummy.AbilitySystem, bolt?_boltContext:_context); }
+            catch (Exception error) { Debug.LogException(error, this); hero.SkillRunner.Cancel(asset); return false; }
             if (result != AbilityActivationResult.Activated)
             {
                 Toast(result switch
                 {
-                    AbilityActivationResult.OnCooldown => skill.Name + " 冷却中",
+                    AbilityActivationResult.OnCooldown => asset.DisplayName + " 冷却中",
                     AbilityActivationResult.CannotAfford => "体力不足",
-                    AbilityActivationResult.AlreadyActive => skill.Name + " 正在施放",
-                    _ => "当前状态无法施放 " + skill.Name,
+                    AbilityActivationResult.AlreadyActive => asset.DisplayName + " 正在施放",
+                    _ => "当前状态无法施放 " + asset.DisplayName,
                 });
                 return false;
             }
             return true;
         }
 
-        private void ReturnBolt(Transform visual)
-        {
-            if (visual == null) return;
-            SpawnBurst(visual.position, new Color(.35f, .9f, 1f, .9f), .2f, 1.1f, .35f);
-            var trail = visual.GetComponent<TrailRenderer>();
-            foreach (var r in visual.GetComponentsInChildren<MeshRenderer>()) r.enabled = false;
-            Destroy(visual.gameObject, trail != null ? trail.time : 0);
-        }
-
-        // ───────────── Cue ─────────────
-
         private void OnHitCue(GameplayCueParameters cue)
         {
-            if (!ReferenceEquals(cue.Target, dummy.AbilitySystem)) return;
+            if(!ReferenceEquals(cue.Target,dummy.AbilitySystem)){
+                foreach(var u in secondary)if(ReferenceEquals(cue.Target,u.AbilitySystem)){
+                    u.GetComponentInChildren<Animator>()?.Play("Hit",0,0);
+                    SpawnBurst(u.transform.position+Vector3.up,Color.cyan,.15f,.8f,.22f);break;
+                }
+                return;
+            }
             if (_dummyAnimator != null) _dummyAnimator.Play("Hit", 0, 0);
             SpawnBurst(aimPoint.position, new Color(1f, .82f, .45f, .95f), .15f, .9f, .28f);
             _shake = .8f;
@@ -212,6 +245,15 @@ namespace ZFramework.GAS.Samples.BasicCombat
 
         // ───────────── HUD ─────────────
 
+        private void HandleModeKey(Event e){
+            if(e.keyCode==KeyCode.Q && (e.type==EventType.KeyDown || e.type==EventType.KeyUp)){
+                if(e.type==EventType.KeyDown && !_qHeld)ToggleBoltMode();
+                _qHeld=e.type==EventType.KeyDown;e.Use();
+            }
+            if(e.type==EventType.KeyDown && e.keyCode==KeyCode.E){ToggleWeaponMotion();e.Use();}
+
+        }
+
         private void OnGUI()
         {
             EnsureStyles();
@@ -219,7 +261,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
             // 键盘经 IMGUI 事件读取，新旧输入系统下都可用。
             if (e.type == EventType.KeyDown && e.keyCode >= KeyCode.Alpha1 && e.keyCode <= KeyCode.Alpha9)
             { Cast(e.keyCode - KeyCode.Alpha1); e.Use(); }
-            if(e.type==EventType.KeyDown && e.keyCode==KeyCode.Q){ToggleWeaponMotion();e.Use();}
+            HandleModeKey(e);
 
             var camera = Camera.main;
             float scale = Mathf.Max(1, Screen.height / 900f);
@@ -227,12 +269,12 @@ namespace ZFramework.GAS.Samples.BasicCombat
             float width = Screen.width / scale, height = Screen.height / scale;
 
             // 标题
-            Panel(new Rect(20, 18, 330, 64), new Color(.06f, .08f, .12f, .78f));
+            Panel(new Rect(20, 18, 455, 64), new Color(.06f, .08f, .12f, .78f));
             GUI.Label(new Rect(34, 24, 320, 30), "BasicCombat · 训练场", _titleStyle);
-            GUI.Label(new Rect(34, 52, 320, 22), "1–5 施放 · Q 切换斩击动作："+(_equipped!=null?"斧劈":"剑斩"), _smallStyle);
+            GUI.Label(new Rect(34, 52, 440, 22), "1–5 施放 · Q 能量弹："+(_fan?"分叉闪电":"逐个弹射")+" · E 武器："+(_equipped!=null?"斧劈":"剑斩"), _smallStyle);
 
             // 假人血条
-            if (camera != null) WorldBar(camera, dummy, scale);
+            if(camera!=null){WorldBar(camera,dummy,scale);foreach(var u in secondary)WorldBar(camera,u,scale);}
 
             // 状态标签
             var chips = new List<(string, Color)>();
@@ -258,22 +300,22 @@ namespace ZFramework.GAS.Samples.BasicCombat
             // 技能栏
             for (int i = 0; i < skills.Length; i++)
             {
-                var skill = skills[i];
+                var skill = skills[i];var asset=Selected(skill);
                 var rect = new Rect(barX + i * 92, height - 120, 80, 80);
                 Panel(rect, new Color(.07f, .09f, .14f, .92f));
                 Panel(new Rect(rect.x, rect.y, rect.width, 4), skill.color);
                 if (GUI.Button(rect, GUIContent.none, GUIStyle.none)) Cast(i);
                 GUI.Label(new Rect(rect.x + 6, rect.y + 8, 30, 20), (i + 1).ToString(), _keyStyle);
-                if (skill.asset.icon != null) GUI.DrawTexture(new Rect(rect.x + 25, rect.y + 10, 30, 30), skill.asset.icon.texture, ScaleMode.ScaleToFit);
-                GUI.Label(new Rect(rect.x, rect.y + 46, rect.width, 22), new GUIContent(skill.Name, skill.asset.description), _labelStyle);
-                float remaining = hero.SkillRunner.CooldownRemaining(skill.asset), total = hero.SkillRunner.CooldownDuration(skill.asset);
+                if (asset.icon != null) GUI.DrawTexture(new Rect(rect.x + 25, rect.y + 10, 30, 30), asset.icon.texture, ScaleMode.ScaleToFit);
+                GUI.Label(new Rect(rect.x, rect.y + 46, rect.width, 22), new GUIContent(asset.DisplayName, asset.description), _labelStyle);
+                float remaining = hero.SkillRunner.CooldownRemaining(asset), total = hero.SkillRunner.CooldownDuration(asset);
                 if (remaining > 0 && total > 0)
                 {
                     float fill = remaining / total;
                     Panel(new Rect(rect.x, rect.y + rect.height * (1 - fill), rect.width, rect.height * fill), new Color(0, 0, 0, .6f));
                     GUI.Label(new Rect(rect.x, rect.y + 20, rect.width, 26), remaining.ToString("0.0"), _countStyle);
                 }
-                if (hero.SkillRunner.IsActive(skill.asset)) Panel(new Rect(rect.x, rect.yMax - 4, rect.width, 4), Color.white);
+                if (hero.SkillRunner.IsActive(asset)) Panel(new Rect(rect.x, rect.yMax - 4, rect.width, 4), Color.white);
             }
 
             // 提示
@@ -305,6 +347,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
             if(_equipped!=null)_equipped.PopOverride(axeOverride);
             if (hero != null) { hero.HealthChanged -= OnHealthChanged; hero.AbilitySystem?.Clear(); }
             if (dummy != null) dummy.HealthChanged -= OnHealthChanged;
+            foreach(var u in secondary)if(u!=null)u.HealthChanged-=OnHealthChanged;
         }
 
         private void WorldBar(Camera camera, CombatUnit unit, float scale)

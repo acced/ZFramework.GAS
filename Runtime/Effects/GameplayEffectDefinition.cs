@@ -70,6 +70,8 @@ namespace ZFramework.GAS
             AttributeId captureAttribute, MagnitudeCapture captureFrom, string callerKey,
             float[] levels = null, IEffectCalculation calculation = null)
         {
+            if (!float.IsFinite(constant) || !float.IsFinite(coefficient)) throw new ArgumentException("Effect magnitude must be finite.");
+            if (levels != null) foreach (float value in levels) if (!float.IsFinite(value)) throw new ArgumentException("Effect level table must be finite.");
             Kind = kind;
             Constant = constant;
             Coefficient = coefficient;
@@ -247,6 +249,8 @@ namespace ZFramework.GAS
             EffectMagnitude? durationMagnitude = null,
             EffectMagnitude? periodMagnitude = null)
         {
+            if (!float.IsFinite(duration) || duration < 0 || !float.IsFinite(period) || period < 0)
+                throw new ArgumentOutOfRangeException(nameof(duration), "Effect duration/period must be finite and nonnegative.");
             DurationPolicy = durationPolicy;
             Duration = duration;
             DurationMagnitude = durationMagnitude;

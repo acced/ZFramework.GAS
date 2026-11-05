@@ -16,10 +16,10 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         public const int Health = 1, MaxHealth = 2, Attack = 3, Stamina = 4;
         private const string CooldownParameter = "冷却", NormalDamage = "普通伤害系数", EmpoweredDamage = "强化伤害系数";
 
-        public static GameplayAbilityAsset[] Create(string folder, GameObject projectileVisual, GameObject guardianPrefab)
+        public static GameplayAbilityAsset[] Create(string folder, GameObject projectileVisual, GameObject guardianPrefab,GameObject lightning,out GameplayAbilityAsset bounce)
         {
             SampleArt.EnsureFolder(folder);
-            var skills = new[] { Slash(folder), Bolt(folder, projectileVisual), Warcry(folder), Sanctuary(folder), Summon(folder, guardianPrefab) };
+            var skills = new[] { Slash(folder), Bolt(folder, projectileVisual,lightning,out bounce), Warcry(folder), Sanctuary(folder), Summon(folder, guardianPrefab) };
             ShareSlashModule(folder, skills[0]);
             return skills;
         }
@@ -27,6 +27,10 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         private static void ShareSlashModule(string folder, GameplayAbilityAsset slash)
         {
             string sharedFolder = folder + "/Shared"; SampleArt.EnsureFolder(sharedFolder);
+            // Both the heavy-slash variant and its module must keep the very same effects.
+            AssetDatabase.SaveAssetIfDirty(slash);
+            foreach(var item in AssetDatabase.LoadAllAssetsAtPath(AssetDatabase.GetAssetPath(slash)))
+                if(item is GameplayEffectAsset effect)MakeShared(effect,sharedFolder+"/斩击 · "+effect.name+".asset");
             // 冷却属于技能自身，留在斩击上；其余是命中模块用到的伤害与范围，抽成共享参数集。
             var parameters = ScriptableObject.CreateInstance<SkillParameterSetAsset>();
             parameters.parameters = Array.FindAll(slash.parameters, p => p.displayName != CooldownParameter);
@@ -78,22 +82,51 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             return Bind(ability, cost, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
 
-        private static GameplayAbilityAsset Bolt(string folder, GameObject visual)
+        private static GameplayAbilityAsset Bolt(string folder,GameObject visual,GameObject lightning,out GameplayAbilityAsset bounce)
         {
-            var ability = Ability(folder, "能量弹", SampleTags.AbilityBolt);
-            var cost = Effect(ability, "消耗 · 体力", EffectDurationPolicy.Instant, 0, so => Modifier(so, Stamina, -15));
-            var cooldown = Cooldown(ability, 1.5f, SampleTags.CooldownBolt);
-            var damage = Effect(ability, "伤害 · 能量弹", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 1.6f), SampleTags.CueHit);
-            var animation = Animation(ability, "动画 · 能量弹", "Bolt", T.BoltLength, so =>
-            {
-                Region(so, T.BoltChargeStart, T.BoltRelease, SampleTags.CueBoltCharge);
-                Actions(so, T.BoltRelease, "发射", new LaunchProjectileAction {
-                    prefab = visual, speed = Number(ability, "速度", 1.2f), radius = .3f, arcHeight = .25f,
-                    lifetime = Number(ability, "寿命", 6),
-                    onHit = new SkillAction[] { new ApplyEffectAction { effect = damage } }
-                });
-            }, .12f, .22f);
-            return Bind(ability, cost, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
+            var ability=Ability(folder,"分叉闪电",SampleTags.AbilityBolt);
+            bounce=Ability(folder,"逐个弹射",SampleTags.AbilityBolt);
+            ability.description="能量弹命中后，从同一命中点向附近敌人同时放电。";
+            bounce.description="能量弹每次命中后从命中点搜索下一名敌人，再发射一枚飞弹。";
+            string Parameter(string name,SkillParameterKind kind,float value){
+                var p=new SkillParameter{displayName=name,kind=kind,defaultValue=value};
+                ability.parameters=new System.Collections.Generic.List<SkillParameter>(ability.parameters){p}.ToArray();
+                EditorUtility.SetDirty(ability);return p.Id;
+            }
+            string hop=Parameter("本跳序号",SkillParameterKind.Int,0),scale=Parameter("本跳伤害倍率",SkillParameterKind.Float,1);
+            var limit=new SkillNumber(3){parameterId=Parameter("最多命中单位（含首击）",SkillParameterKind.Int,3)};
+            var range=Number(ability,"搜索半径",3.5f);var retention=Number(ability,"每跳伤害保留",.8f);
+            var speed=Number(ability,"速度",1.2f);var life=Number(ability,"寿命",6);
+            var cost=Effect(ability,"消耗 · 体力",EffectDurationPolicy.Instant,0,so=>Modifier(so,Stamina,-15));
+            var cooldown=Cooldown(ability,1.5f,SampleTags.CooldownBolt);
+            var damage=Effect(ability,"伤害 · 能量弹",EffectDurationPolicy.Instant,0,so=>{
+                Damage(so,ability,1.6f);
+                so.FindProperty("modifiers").GetArrayElementAtIndex(0).FindPropertyRelative("magnitude.multiplierParameterId").stringValue=scale;
+            },SampleTags.CueHit);
+            SkillAction Hit()=>new ApplyEffectAction{effect=damage};
+            SelectTargetsAction Pick(SkillNumber n)=>new(){targets=new TargetQuery{kind=TargetQueryKind.Circle,origin=SkillSpawnPosition.HitPoint,radius=range,maxTargets=64},
+                count=n,actions=new SkillAction[]{new NextTargetStepAction()}};
+            LaunchProjectileAction Shot(SkillSpawnPosition origin,params SkillAction[] onHit)=>new(){prefab=visual,origin=origin,
+                onlySelectedTarget=true,speed=speed,lifetime=life,radius=.3f,arcHeight=.25f,onHit=onHit};
+            string shared=folder+"/Shared";SampleArt.EnsureFolder(shared);
+            var set=ScriptableObject.CreateInstance<SkillParameterSetAsset>();set.parameters=ability.parameters;
+            AssetDatabase.CreateAsset(set,shared+"/能量弹参数.asset");ability.parameters=Array.Empty<SkillParameter>();
+            ability.parameterSet=bounce.parameterSet=set;
+            MakeShared(cost,shared+"/能量弹消耗.asset");MakeShared(cooldown,shared+"/能量弹冷却.asset");MakeShared(damage,shared+"/能量弹伤害.asset");
+            void Configure(GameplayAbilityAsset variant,bool fork) {
+                var sequence=new TargetSequenceAction{maxTargets=limit,retention=retention,indexParameterId=hop,scaleParameterId=scale,
+                    first=new SkillAction[]{Shot(SkillSpawnPosition.Caster,Hit(),Pick(fork?limit:new SkillNumber(1)))},
+                    next=fork?new SkillAction[]{new ShowTargetLinkAction{prefab=lightning},Hit()}:
+                        new SkillAction[]{Shot(SkillSpawnPosition.HitPoint,Hit(),Pick(new SkillNumber(1)))}};
+                var animation=Animation(variant,"动画 · "+variant.displayName,"Bolt",T.BoltLength,so=>{
+                    Region(so,T.BoltChargeStart,T.BoltRelease,SampleTags.CueBoltCharge);Actions(so,T.BoltRelease,"发射",sequence);
+                },.12f,.22f);
+                Bind(variant,cost,cooldown,animation,so=>Tags(so.FindProperty("activationBlockedTags"),SampleTags.Channeling));
+            }
+            Configure(ability,true);Configure(bounce,false);return ability;
+        }
+        private static void MakeShared(GameplayEffectAsset effect,string path) {
+            AssetDatabase.RemoveObjectFromAsset(effect);AssetDatabase.CreateAsset(effect,path);
         }
 
         private static GameplayAbilityAsset Warcry(string folder)
@@ -197,7 +230,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         }
         private static void Actions(SerializedObject so, float time, string name, params SkillAction[] actions)
         {
-            Marker(so, time, name, null, AnimationMarkerTarget.Self);
+            Marker(so, time, name);
             var list = so.FindProperty("markers"); var item = list.GetArrayElementAtIndex(list.arraySize - 1).FindPropertyRelative("actions");
             item.arraySize = actions.Length;
             for (int i = 0; i < actions.Length; i++) item.GetArrayElementAtIndex(i).managedReferenceValue = actions[i];
@@ -257,14 +290,12 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             return animation;
         }
 
-        private static void Marker(SerializedObject so, float time, string key, GameplayEffectAsset effect, AnimationMarkerTarget target)
+        private static void Marker(SerializedObject so, float time, string key)
         {
             var list = so.FindProperty("markers");
             var m = list.GetArrayElementAtIndex(list.arraySize++);
             m.FindPropertyRelative("time").floatValue = time;
             m.FindPropertyRelative("key").stringValue = key;
-            m.FindPropertyRelative("effect").objectReferenceValue = effect;
-            m.FindPropertyRelative("target").enumValueIndex = (int)target;
         }
 
         private static void Region(SerializedObject so, float start, float end, string cueTag)

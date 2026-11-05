@@ -43,9 +43,9 @@ namespace ZFramework.GAS.Editor
             public readonly SkillHistory History=new();
             public Unit(AbilitySystemComponent owner)
             { Owner=owner; Generation=owner.Generation; owner.OwnedTags.OnAnyTagCountChange+=Tag; owner.Attributes.OnAttributeChanged+=Attribute; owner.Events.Received+=Message; }
-            private void Tag(GameplayTag tag,int count) { try { History.Add(Scoped(TraceKind.标签,null,tag:tag,number:count)); } catch(Exception error) { DebugObserverErrors.Record(error); } }
-            private void Attribute(GameplayAttribute a,float before,float after) { try { History.Add(Scoped(TraceKind.属性,null,number:a.Id.Value,before:before,after:after)); } catch(Exception error) { DebugObserverErrors.Record(error); } }
-            private void Message(GameplayEvent e) { try { History.Add(Scoped(TraceKind.事件,e.Tag.Name+" "+e.Payload)); } catch(Exception error) { DebugObserverErrors.Record(error); } }
+            private void Tag(GameplayTag tag,int count) { History.Add(Scoped(TraceKind.标签,null,tag:tag,number:count)); }
+            private void Attribute(GameplayAttribute a,float before,float after) { History.Add(Scoped(TraceKind.属性,null,number:a.Id.Value,before:before,after:after)); }
+            private void Message(GameplayEvent e) { History.Add(Scoped(TraceKind.事件,e.Tag.Name+" "+e.Payload)); }
             public void Dispose(){Owner.OwnedTags.OnAnyTagCountChange-=Tag; Owner.Attributes.OnAttributeChanged-=Attribute; Owner.Events.Received-=Message;}
         }
         private static Unit _unit;
@@ -54,7 +54,7 @@ namespace ZFramework.GAS.Editor
         private static SkillTrace Scoped(TraceKind kind,string label,GameplayAbilityAsset fallback=null,GameplayTag tag=default,int number=0,float before=0,float after=0)
         {
             if(Actions.Count==0)return new SkillTrace(kind,label,fallback,tag:tag,number:number,before:before,after:after);
-            var (c,id)=Actions.Peek();return new SkillTrace(kind,label,c.Asset,id,c.NavigationId(id),c.Version,tag,number,before,after);
+            var (c,id)=Actions.Peek();return new SkillTrace(kind,label,c.Asset,id,c.EditorCallSiteId ?? id,c.Version,tag,number,before,after);
         }
         internal static SkillHistory Of(AbilitySystemComponent owner) =>
             owner!=null && _unit?.Owner==owner && _unit.Generation==owner.Generation ? _unit.History : null;
@@ -70,7 +70,7 @@ namespace ZFramework.GAS.Editor
             SkillActionDebug.Boundary+=Begin; SkillActionDebug.ActionFinished+=End;
             SkillActionDebug.BranchSelected+=Branch; SkillActionDebug.MarkerReached+=Marker;
             GasDebugHooks.Applied+=Applied; GasDebugHooks.Removed+=Removed; GasDebugHooks.Refreshed+=Refreshed; GasDebugHooks.Stacked+=Stack; GasDebugHooks.PeriodExecuted+=Period;
-            GasDebugHooks.DiagnosticRecorded+=Failure; GasDebugHooks.Cue+=Cue;
+            GasDebugHooks.Cue+=Cue;
         }
         public static void Release()
         {
@@ -78,18 +78,17 @@ namespace ZFramework.GAS.Editor
             SkillActionDebug.Boundary-=Begin; SkillActionDebug.ActionFinished-=End;
             SkillActionDebug.BranchSelected-=Branch; SkillActionDebug.MarkerReached-=Marker;
             GasDebugHooks.Applied-=Applied; GasDebugHooks.Removed-=Removed; GasDebugHooks.Refreshed-=Refreshed; GasDebugHooks.Stacked-=Stack; GasDebugHooks.PeriodExecuted-=Period;
-            GasDebugHooks.DiagnosticRecorded-=Failure; GasDebugHooks.Cue-=Cue; Clear();
+            GasDebugHooks.Cue-=Cue; Clear();
         }
         internal static void Clear(){_unit?.Dispose();_unit=null;Actions.Clear();}
         private static void Begin(SkillExecutionContext c,SkillActionDefinition a)
-        {Actions.Push((c,a.Id));if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.动作开始,a.Label,c.Asset,a.Id,c.NavigationId(a.Id),c.Version));}
-        private static void Branch(SkillExecutionContext c,string id,bool taken){if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.条件分支,taken?"满足":"不满足",c.Asset,id,c.NavigationId(id),c.Version));}
+        {Actions.Push((c,a.Id));if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.动作开始,a.Label,c.Asset,a.Id,c.EditorCallSiteId ?? a.Id,c.Version));}
+        private static void Branch(SkillExecutionContext c,string id,bool taken){if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.条件分支,taken?"满足":"不满足",c.Asset,id,c.EditorCallSiteId ?? id,c.Version));}
         private static void Marker(SkillExecutionContext c,AnimationMarker m)
         {if(c!=null && Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.标记,m.Key,c.Asset,m.Id,m.Id,c.Version));}
         private static void End(SkillExecutionContext c,SkillActionDefinition a,Exception e)
-        {if(Actions.Count>0)Actions.Pop();if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(e==null?TraceKind.动作结束:TraceKind.失败,e?.Message??a.Label,c.Asset,a.Id,c.NavigationId(a.Id),c.Version));}
+        {if(Actions.Count>0)Actions.Pop();if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(e==null?TraceKind.动作结束:TraceKind.失败,e?.Message??a.Label,c.Asset,a.Id,c.EditorCallSiteId ?? a.Id,c.Version));}
         private static void Cue(GameplayCueParameters e){ if(Of(e.Target as AbilitySystemComponent)!=null) _unit.History.Add(Scoped(TraceKind.Cue,e.CueTag.Name+" "+e.Event)); }
-        private static void Failure(AbilitySystemComponent u,AbilityDiagnostic d){if(Of(u)!=null)Add(u,new SkillTrace(TraceKind.失败,d.Message,DefinitionSource.Of(d.Definition) as GameplayAbilityAsset,d.SourceId,d.SourceId,d.ActivationVersion));}
         private static void Effect(AbilitySystemComponent u,GameplayEffectDefinition d,string what,int n)
         {
             if(Of(u)==null)return;

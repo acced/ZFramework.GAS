@@ -2,6 +2,7 @@ using System;
 using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Animations;
+using UnityEngine.Experimental.Animations;
 using UnityEngine.Playables;
 namespace ZFramework.GAS.Unity
 {
@@ -13,11 +14,9 @@ namespace ZFramework.GAS.Unity
         private struct Job : IAnimationJob
         {
             public NativeArray<TransformStreamHandle> Bones;
-            public NativeArray<TransformSceneHandle> SceneBones;
             public NativeArray<float> Weights;
             public NativeArray<Pose> Incoming;
             public bool Capture;
-            public bool ReadNativePose;
             public void ProcessRootMotion(AnimationStream s){}
             public void ProcessAnimation(AnimationStream s)
             {
@@ -25,12 +24,7 @@ namespace ZFramework.GAS.Unity
                 {
                     var h=Bones[i]; if(!h.IsValid(s))continue;
                     if(Capture)
-                    {
-                        var scene=SceneBones[i];
-                        Incoming[i]=ReadNativePose && scene.IsValid(s)
-                            ? new Pose{Position=scene.GetLocalPosition(s),Rotation=scene.GetLocalRotation(s),Scale=scene.GetLocalScale(s)}
-                            : new Pose{Position=h.GetLocalPosition(s),Rotation=h.GetLocalRotation(s),Scale=h.GetLocalScale(s)};
-                    }
+                        Incoming[i]=new Pose{Position=h.GetLocalPosition(s),Rotation=h.GetLocalRotation(s),Scale=h.GetLocalScale(s)};
                     else
                     {
                         var p=Incoming[i];var w=Weights[i];h.SetLocalPosition(s,Vector3.Lerp(p.Position,h.GetLocalPosition(s),w));
@@ -40,24 +34,31 @@ namespace ZFramework.GAS.Unity
             }
         }
         private NativeArray<TransformStreamHandle> _handles;
-        private NativeArray<TransformSceneHandle> _scene;
         private NativeArray<float> _weights;
         private NativeArray<Pose> _poses;
         public readonly AnimationScriptPlayable Before,After;
-        public SkillBoneLayer(PlayableGraph graph,Animator animator,BoneWeightMask.Definition def,Playable incoming,AnimationLayerMixerPlayable layer)
+        private AnimationPlayableOutput _capture;
+        public SkillBoneLayer(PlayableGraph graph,Animator animator,BoneWeightMask.Definition def,Playable incoming,AnimationLayerMixerPlayable layer, bool native)
         {
             int n=def.Bones.Length;
             _handles=new NativeArray<TransformStreamHandle>(n,Allocator.Persistent);_weights=new NativeArray<float>(n,Allocator.Persistent);_poses=new NativeArray<Pose>(n,Allocator.Persistent);
-            _scene=new NativeArray<TransformSceneHandle>(n,Allocator.Persistent);
-            for(int i=0;i<n;i++){var b=def.Bones[i];var t=animator.transform.Find(b.path);if(t!=null){_handles[i]=animator.BindStreamTransform(t);_scene[i]=animator.BindSceneTransform(t);}_weights[i]=b.weight;}
-            var j=new Job{Bones=_handles,SceneBones=_scene,Weights=_weights,Incoming=_poses,Capture=true}; Before=AnimationScriptPlayable.Create(graph,j,1);
+            for(int i=0;i<n;i++){var b=def.Bones[i];var t=animator.transform.Find(b.path);if(t!=null){_handles[i]=animator.BindStreamTransform(t);}_weights[i]=b.weight;}
+            var j=new Job{Bones=_handles,Weights=_weights,Incoming=_poses,Capture=true}; Before=AnimationScriptPlayable.Create(graph,j,1);
             j.Capture=false; After=AnimationScriptPlayable.Create(graph,j,1);
-            if(incoming.IsValid()){graph.Connect(incoming,0,Before,0);Before.SetInputWeight(0,1);}
-            graph.Connect(Before,0,layer,0);layer.SetInputWeight(0,1);graph.Connect(layer,0,After,0);After.SetInputWeight(0,1);
+            if (native)
+            {
+                // Read the controller output before the skill overlay, only for named weighted bones.
+                Before.SetProcessInputs(false);
+                _capture=AnimationPlayableOutput.Create(graph,"Incoming bone weights",animator);
+                _capture.SetSourcePlayable(Before); _capture.SetSortingOrder(1);
+                _capture.SetAnimationStreamSource(AnimationStreamSource.PreviousInputs);
+            }
+            else { graph.Connect(incoming,0,Before,0); Before.SetInputWeight(0,1); }
+            graph.Connect(native ? incoming : (Playable)Before,0,layer,0);layer.SetInputWeight(0,1);graph.Connect(layer,0,After,0);After.SetInputWeight(0,1);
         }
-        public void UseNativeBase(bool enabled=true){var job=Before.GetJobData<Job>();job.ReadNativePose=enabled;Before.SetJobData(job);}
-        public void Destroy(PlayableGraph g){g.DestroyPlayable(Before);g.DestroyPlayable(After);Dispose();}
-        public void Dispose(){if(_handles.IsCreated)_handles.Dispose();if(_scene.IsCreated)_scene.Dispose();if(_weights.IsCreated)_weights.Dispose();if(_poses.IsCreated)_poses.Dispose();}
+        public void RemoveCapture(PlayableGraph g){if(_capture.IsOutputValid()){g.DestroyOutput(_capture);g.DestroyPlayable(Before);}}
+        public void Destroy(PlayableGraph g){if(_capture.IsOutputValid())RemoveCapture(g);else g.DestroyPlayable(Before);g.DestroyPlayable(After);Dispose();}
+        public void Dispose(){if(_handles.IsCreated)_handles.Dispose();if(_weights.IsCreated)_weights.Dispose();if(_poses.IsCreated)_poses.Dispose();}
     }
     internal struct SkillAimJob:IAnimationJob
     {

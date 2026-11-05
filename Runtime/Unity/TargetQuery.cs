@@ -19,6 +19,7 @@ namespace ZFramework.GAS.Unity
     public sealed class TargetQuery
     {
         public TargetQueryKind kind = TargetQueryKind.FixedTarget;
+        public SkillSpawnPosition origin;
         public SkillNumber radius = new SkillNumber(3);
         public SkillNumber angle = new SkillNumber(90);
         public SkillNumber width = new SkillNumber(2);
@@ -29,7 +30,7 @@ namespace ZFramework.GAS.Unity
         public GameplayTag[] requiredTags = Array.Empty<GameplayTag>();
         public GameplayTag[] blockedTags = Array.Empty<GameplayTag>();
         public TargetQueryDefinition Build() => new TargetQueryDefinition(kind, radius, angle, width, height,
-            layerMask, excludeSelf, maxTargets, TagAssetUtility.ToSet(requiredTags), TagAssetUtility.ToSet(blockedTags));
+            layerMask, excludeSelf, maxTargets, TagAssetUtility.ToSet(requiredTags), TagAssetUtility.ToSet(blockedTags),origin);
     }
 
     public sealed class TargetQueryDefinition
@@ -39,11 +40,17 @@ namespace ZFramework.GAS.Unity
         public readonly LayerMask LayerMask;
         public readonly bool ExcludeSelf;
         public readonly int MaxTargets;
+        public readonly SkillSpawnPosition Origin;
+        internal Vector3 Center(SkillExecutionContext c)=>c.OriginAt(Kind==TargetQueryKind.TargetPoint?SkillSpawnPosition.TargetPoint:Origin);
         private readonly GameplayTagRequirements _requirements;
         public TargetQueryDefinition(TargetQueryKind kind, SkillNumber radius, SkillNumber angle, SkillNumber width,
             SkillNumber height, LayerMask mask, bool excludeSelf, int maxTargets,
             GameplayTagSet required = default, GameplayTagSet blocked = default)
+            :this(kind,radius,angle,width,height,mask,excludeSelf,maxTargets,required,blocked,SkillSpawnPosition.Caster){}
+        public TargetQueryDefinition(TargetQueryKind kind,SkillNumber radius,SkillNumber angle,SkillNumber width,
+            SkillNumber height,LayerMask mask,bool excludeSelf,int maxTargets,GameplayTagSet required,GameplayTagSet blocked,SkillSpawnPosition origin)
         {
+            Origin=origin;
             Kind = kind; Radius = radius; Angle = angle; Width = width; Height = height; LayerMask = mask;
             ExcludeSelf = excludeSelf; MaxTargets = Math.Max(1, maxTargets);
             _requirements = GameplayTagRequirements.Create(blocked.AsSpan(), required.AsSpan());
@@ -51,17 +58,6 @@ namespace ZFramework.GAS.Unity
         internal bool Allows(AbilitySystemComponent source, AbilitySystemComponent target, ITargetFilter filter)
             => target != null && (!(ExcludeSelf && Kind != TargetQueryKind.Self) || !ReferenceEquals(source, target))
                 && _requirements.Matches(target.OwnedTags) && (filter == null || filter.Allows(source, target));
-        public void Validate(SkillExecutionContext context, bool requireFixed = true)
-        {
-            if (Kind == TargetQueryKind.FixedTarget && requireFixed && context.Target == null)
-                throw new InvalidOperationException("缺少固定目标");
-            if (Kind == TargetQueryKind.TargetPoint && requireFixed) context.Services.RequireTargetPosition();
-            if (Kind >= TargetQueryKind.TargetPoint && context.Services.Origin == null)
-                throw new InvalidOperationException("范围查询缺少施法位置服务");
-            if (Radius.Resolve(context.Values) < 0 || Width.Resolve(context.Values) < 0 || Height.Resolve(context.Values) < 0)
-                throw new InvalidOperationException("查询范围不能为负数");
-            Angle.Resolve(context.Values);
-        }
     }
 
     public sealed class TargetQueryBuffer
@@ -69,13 +65,15 @@ namespace ZFramework.GAS.Unity
         internal readonly Collider[] Colliders;
         public readonly AbilitySystemComponent[] Units;
         public readonly Transform[] Transforms;
+        internal readonly Vector3[] Points;
+        internal readonly int[] Generations;
         internal readonly float[] Distances;
         public int Count { get; internal set; }
         public bool Saturated { get; internal set; }
         public TargetQueryBuffer(int capacity = 256)
         {
             Colliders = new Collider[capacity]; Units = new AbilitySystemComponent[capacity];
-            Transforms = new Transform[capacity]; Distances = new float[capacity];
+            Transforms = new Transform[capacity]; Distances = new float[capacity]; Points=new Vector3[capacity]; Generations=new int[capacity];
         }
         internal void Clear()
         {

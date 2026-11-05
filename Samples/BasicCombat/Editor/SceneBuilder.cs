@@ -10,7 +10,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
     /// <summary>可游玩的训练场：石台、立柱旗帜、火盆、骑士与训练假人，以及接好线的 <see cref="TrainingArena"/>。</summary>
     internal static class SceneBuilder
     {
-        public static string Build(string path, SampleArt art, CharacterBuilder.Palette m, GameObject knightPrefab, GameObject dummyPrefab, GameplayAbilityAsset[] skills, Scene replacementScene = default)
+        public static string Build(string path, SampleArt art, CharacterBuilder.Palette m, GameObject knightPrefab, GameObject dummyPrefab, GameplayAbilityAsset[] skills,GameplayAbilityAsset bounce, Scene replacementScene = default)
         {
             // 已保存的场景保持不动：以附加方式建场景，保存后关闭。
             // 存在未命名场景时 Unity 不允许附加新建，只能单场景新建，生成后停留在训练场。
@@ -51,11 +51,18 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 var dummyUnit = Unit(dummy, "训练假人", 600, 0, new Vector3(0, 1.75f, 0));
                 var aim = SampleArt.Bone(dummy.transform, "HitPoint", new Vector3(0, 1.0f, 0));
 
+                var extra=new CombatUnit[2];
+                for(int i=0;i<extra.Length;i++){
+                    var other=(GameObject)PrefabUtility.InstantiatePrefab(dummyPrefab,scene);other.name="ChainDummy"+(i+1);
+                    other.transform.SetPositionAndRotation(i==0?new Vector3(-1.7f,0,1.75f):new Vector3(-1.55f,0,-.95f),Quaternion.Euler(0,120,0));
+                    var body=other.AddComponent<CapsuleCollider>();body.center=dummyCollider.center;body.height=dummyCollider.height;body.radius=dummyCollider.radius;
+                    extra[i]=Unit(other,"连锁假人 "+(i+1),600,0,new Vector3(0,1.75f,0));
+                }
                 var camera = new GameObject("Main Camera") { tag = "MainCamera" };
                 var cam = camera.AddComponent<Camera>();
                 cam.clearFlags = CameraClearFlags.SolidColor; cam.backgroundColor = SampleArt.Hex("#0e121a"); cam.fieldOfView = 38;
-                camera.transform.position = new Vector3(3.7f, 2.1f, .3f);
-                camera.transform.LookAt(new Vector3(-.3f, .9f, -.35f));
+                camera.transform.position = new Vector3(5.9f, 3.05f, .55f);
+                camera.transform.LookAt(new Vector3(-.65f, .85f, .25f));
                 camera.AddComponent<AudioListener>();
 
                 var arena = new GameObject("TrainingArena").AddComponent<TrainingArena>();
@@ -63,6 +70,10 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 {
                     so.FindProperty("hero").objectReferenceValue = heroUnit;
                     so.FindProperty("dummy").objectReferenceValue = dummyUnit;
+                    var extras=so.FindProperty("secondary");extras.arraySize=extra.Length;
+                    for(int i=0;i<extra.Length;i++)extras.GetArrayElementAtIndex(i).objectReferenceValue=extra[i];
+                    so.FindProperty("bounceSkill").objectReferenceValue=bounce;
+                    so.FindProperty("boltSkill").objectReferenceValue=skills[1];
                     so.FindProperty("abilitySet").objectReferenceValue = AssetDatabase.LoadAssetAtPath<AbilitySetAsset>(BasicCombatSample.Folder + "/BasicCombatAbilities.asset");
                     so.FindProperty("axeOverride").objectReferenceValue = AssetDatabase.LoadAssetAtPath<SkillClipOverrideSet>(BasicCombatSample.Folder + "/Skills/Shared/斧劈替换表.asset");
                     so.FindProperty("castPoint").objectReferenceValue = Find(hero.transform, "SwordTip");

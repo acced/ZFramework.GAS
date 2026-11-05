@@ -53,11 +53,10 @@ namespace ZFramework.GAS.Editor.Tests
                 RuntimeDebugSession.Refresh();
                 var snapshot = RuntimeDebugSession.Current;
                 Assert.AreSame(hero, RuntimeDebugSession.Observed);
-                Assert.AreEqual(5, snapshot.Abilities.Count);
+                Assert.AreEqual(6, snapshot.Abilities.Count); // Five slots; slot 2 grants both energy variants.
                 Assert.AreEqual("斩击", snapshot.Tasks.Single().AbilityName);
                 Assert.IsTrue(snapshot.Tags.Any(t => t.Value.Name == SampleTags.SuperArmor));
-                Assert.IsTrue(snapshot.Effects.Any(e => e.Asset != null && e.Asset == AssetDatabase.LoadAllAssetsAtPath(AssetDatabase.GetAssetPath(slash))
-                    .OfType<GameplayEffectAsset>().Single(a => a.name.StartsWith("冷却"))));
+                Assert.IsTrue(snapshot.Effects.Any(e => e.Asset != null && ReferenceEquals(e.Asset.Definition, slash.Definition.Cooldown)));
                 Assert.Greater(snapshot.Abilities.Single(a => a.Asset == slash).CooldownRemaining, 0);
                 Assert.IsTrue(editor.Document.Playback.Live);
                 Assert.AreEqual(snapshot.Tasks.Single().AuthoredTime, editor.Document.Playback.Time, .001f);

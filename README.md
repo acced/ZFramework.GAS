@@ -5,7 +5,7 @@ Unity 的 Gameplay Ability System 实现。属性、标签、效果、能力、C
 
 ## 可配置技能
 
-技能资产支持类型化动作、共享模块、Float / Int / Bool 参数与等级表。时间轴事件配置动作列表，无动画技能配置激活动作。投射物、区域和召唤默认由场景宿主调度；引导与等待属于施放实例。运行时调试已有五类快照、编辑器联动，并扩展了失败来源、参数和动作状态。
+技能资产支持类型化动作、共享模块、Float / Int / Bool 参数与等级表。时间轴事件配置动作列表，无动画技能配置激活动作。投射物、区域和召唤默认由场景宿主调度；引导与等待属于施放实例。运行时调试已有五类快照、编辑器联动，可查看门禁结果、参数和动作状态。
 
 双击时间轴标记可进入动作流程；在分支上创建、重排动作，或将连续动作提取为共享模块。Play 时可在流程节点按 F9，然后在运行时调试窗口查看单位的事件历史、参数和实际走过的分支。
 
@@ -229,12 +229,6 @@ var results = new AbilitySystemComponent[16];
 int n = searcher.Sector(origin, forward, radius: 8f, angleDegrees: 90f,
     layerMask: mask, results: results, exclude: self);
 
-// 投射物：视觉体由你创建与回收，任务只负责移动与命中
-asc.StartTask(spec, new ProjectileTask(config, searcher, caster.Attributes, caster,
-    onFinished: t => ReturnToPool(t.Visual)));
-
-// 区域效果：进入施加、离开按配置移除
-asc.StartTask(spec, new AreaEffectTask(areaConfig, searcher, caster.Attributes, caster));
 ```
 
 扇形的角度判定在 **XZ 平面**进行（忽略高度差），适配地面战斗——
@@ -288,67 +282,21 @@ public interface IAnimationDriver
 库内自带三个适配器：`AnimatorAnimationDriver`、`LegacyAnimationDriver`、`SpriteSequenceDriver`。
 前两个由引擎自行推进，`Advance` 是空实现；序列帧在 `Advance` 里按进度换图。
 
-时间轴本身是一段不可变定义，交给 `AnimationTask` 推进：
+标记的动作列表按顺序执行，名称只供显示，引用使用稳定 ID。Section 使用 `[start,end)`；连续进入下一段时只处理一次共享边界。技能时钟仍随 ASC.Tick 推进，即使视觉采样已降频。
+
+### 通过技能资产施放
 
 ```csharp
-var swing = new SkillAnimationDefinition("Attack", 0.8f,
-    markers: new[]
-    {
-        new AnimationMarker(0.35f, "命中", damageEffect),                   // 到点施加效果
-        new AnimationMarker(0.55f, "收招"),                                 // 纯回调，作用对象现场决定
-    },
-    cueRegions: new[] { new AnimationCueRegion(0.1f, 0.5f, trailTag) });    // 起止各派发一次 Cue
-
-asc.StartTask(spec, new AnimationTask(swing, driver, target, castTime,
-    onMarker: (task, marker) => { if (marker.Key == "收招") SpawnShockwave(); },
-    onFinished: _ => asc.EndAbility(spec)));
+var runner = new SkillRunner(asc, () => character.GetComponent<SkillAnimator>().Driver);
+runner.Grant(skill, level: 3); // 或 abilitySet.GrantTo(runner)
+var result = runner.TryCast(skill, targetAsc, services);
 ```
 
-- **时间单位一律是秒**。资产上的 `frameRate` 只供时间轴 UI 把秒显示成帧，不参与任何运行期计算
-- 标记点的时间相对**授权时长**；实际时长与它的比值就是缩放系数，
-  因此攻速变化时命中仍落在挥砍的同一个相对位置
-- 区间映射到一对已有的 Cue 事件（`OnActive` / `Removed`），不引入新概念；`end < 0` 表示随动画结束
-- **循环动画每圈重新触发标记点与区间，且不自行结束**，由能力结束它；非循环跑满时长即 `Complete()`
-- 单帧跨过多个标记点时全部按序触发；跨过整圈时本轮只结算到圈末，余下时间留给下一圈
-- 挂了「作用于固定目标」的效果标记点却没传目标 → **构造时抛异常**；标记点越出时长同样抛异常；
-  两个标记点用同一个 `Key` 也抛——回调靠 `Key` 分辨是哪一下，重名就分不清了
-- 驱动找不到片段（返回 0）时**时间轴照常推进**：表现缺失不该连带把判定一起丢掉。
-  此时 `Stop()` 仍会照常调用一次，因此驱动必须自己分辨播没播过，不能无条件复位共享状态
-- `onFinished` 只报告，不代为结束能力——收招后还有后摇的技能不该被替它结束掉
+构建定义和编辑器校验负责配置正确性。运行时只判断实际玩法门槛（标签、冷却、资源），不再遍历动作预检。配置或项目回调抛错时，在宿主入口记录原始异常并结束能力；不聚合、重试或退款。调试事件是普通 C# event，订阅者不能抛异常。
 
-### 通过技能资产统一施放
+等级、参数在施放时固定。同一授予配置下，反复使用同一份施放覆盖数组会复用解析结果；要改值请传新数组。一次性覆盖数组用完后可回收。Core 默认实时读取来源属性；要冻结值可显式传入 `new EffectEvaluationContext(level, parameters, sourceAttributes)`。`GameplayEffectSpec` 在确实需要持续持有 SetByCaller 时才复制，并保留字典比较器。
 
-每个角色持有一个 `SkillRunner`，复用该角色的 ASC 与动画驱动。训练场、AI 或输入层只传入技能资产：
-
-```csharp
-var runner = new SkillRunner(owner, () => skillAnimator.Driver);
-runner.Grant(abilityAsset); // 可预先授予；TryCast 首次使用也会自动授予
-runner.MarkerReached += (asset, marker) => HandleSkillEvent(asset, marker);
-var result = runner.TryCast(abilityAsset, targetAsc, taskContext);
-```
-
-`Grant` 按资产去重，各角色拥有独立 Spec。`TryCast` 返回 Core 的激活结果；成功后内部创建 `AnimationTask`。技能等待所有能力所属任务完成后结束；场景所属任务不阻止技能结束或下一次施放。循环技能由 `Cancel(asset)` 或 ASC 的取消逻辑终止。`Revoke(asset)` 只撤销直接／临时授予；套组通过 `RevokeFrom` 撤销自身贡献，`RevokeAll(asset)` 明确撤销全部来源。HUD 使用 `IsActive(asset)`、`CooldownRemaining(asset)` 和 `CooldownDuration(asset)` 查询状态。
-
-同步预检与提交失败请检查返回值，完整异常在 `runner.LastCastCheck.Error`（Core：`spec.LastActivationCheck.Error`）；直接启动／推进任务仍会报告异常。只读预检不会写入错误历史。调试窗口可右键复制完整堆栈，最近 64 条执行／清理错误以外的覆盖数见 `DroppedDiagnosticCount`。
-
-宿主负责推进 `owner.Tick(dt)`，提供目标与 `TimelineTaskContext`。召唤、选敌、条件、投射物等配置在动作中。技能正常结束会等待动画及所属等待任务完成；场景宿主调度的投射物、区域和召唤独立存活，不阻止下一次施放。运行期状态不写回共享资产；后续执行失败不自动退还已提交的消耗和冷却。
-
-重复显式 Grant 更新下一次施放的等级／参数；套组撤销只移除自身的授予贡献。显式授予会替代首次 TryCast 的临时来源。独立任务回调与取消分支禁止启动技能所属等待任务，构建时会报告动作位置。Section、取消重入、Playable 和参数快照的修复记录见 [边界与生命周期验证](Docs~/SkillHardeningVerification.md)。
-
-### 通过 SkillAnimator 接入动画后端
-
-角色挂载 `SkillAnimator`，在 Backend 下拉选择 Animator、Legacy Animation 或序列帧。驱动按需创建并缓存；已有手动创建 `IAnimationDriver` 的宿主仍可继续使用。
-
-```csharp
-var driver = character.GetComponent<SkillAnimator>().Driver;
-var task = new AnimationTask(abilityAsset.Animation.Definition, driver,
-    target: targetAsc);
-owner.StartTask(spec, task);
-```
-
-`AnimationTask` 完成时只报告完成；宿主按技能生命周期决定是否结束能力。任务事件需要向构造函数的 `taskContext` 传入 `TimelineTaskContext`，提供 Origin、Searcher、目标和视觉对象池回调。内置 ProjectileSpawner / AreaEffectSpawner 会创建任务对象，这部分不承诺零分配。
-
-`tagWindows` 在区间内计数授予标签，离开、打断和取消时回滚自己持有的计数；`taskEvents` 在指定时间调用可扩展的 `TaskSpawner`。同一帧跨过多个时间点时按边界顺序处理，命中回调能观察到该时刻的标签状态。
+**不得在动画采样回调中施放或修改驱动**，包括 `OnAnimatorMove`、动画事件和 StateMachineBehaviour。将输入交给游戏循环处理。Playables 支持 CrossFade、Freeze、遮罩与根运动适配。技能权重归零后，Controller 负责自己驱动的骨骼；未绑定的武器挂点等由装备脚本或遮罩处理。禁用 SkillAnimator 或更换后端立即释放驱动。
 
 ### Spine（可选包）
 
@@ -380,11 +328,11 @@ owner.StartTask(spec, task);
 
 消耗必须 Instant，冷却必须授予标签，子效果禁止自引用、重复挂载、循环和超过八层的链路。不兼容端口在拖线时不可连接，并提供原因提示。动画事件端口按稳定 ID 绑定，数组重排不改变身份。Cue 节点只读，显示来源效果或时间区间。
 
-属性词表用 `AttributeCatalogAsset` 配置；没有词表时保留整数输入。带 `[AttributeCatalogSource]` 的代码常量可从菜单生成词表。Magnitude、修改器、SetByCaller 和 SerializeReference 后端／任务策略提供专用编辑控件。
+属性词表用 `AttributeCatalogAsset` 配置；没有词表时保留整数输入。带 `[AttributeCatalogSource]` 的代码常量可从菜单生成词表。Magnitude、修改器、SetByCaller 和 SerializeReference 后端／动作策略提供专用编辑控件。
 
 ### 多轨时间轴与预览
 
-支持动画、事件、Cue 区间、标签窗口和任务事件轨道。片段下拉从预览角色解析，选择片段时同步长度、帧率，并等比调整已有时间点。Animator 使用配置的层，递归子状态机，支持 Override Controller；BlendTree 使用第一个子片段作近似预览并提示。
+支持动画、事件、Cue 区间、标签窗口和标记动作。片段下拉从预览角色解析，选择片段时同步长度、帧率，并等比调整已有时间点。Animator 使用配置的层，递归子状态机，支持 Override Controller；BlendTree 使用第一个子片段作近似预览并提示。
 
 | 操作 | 行为 |
 |---|---|
@@ -407,7 +355,7 @@ owner.StartTask(spec, task);
 
 消息页提供 GAS001–004、010–013、020–022、030–032 检查、定位和适用的自动修复。需用户选择的配置仍在 Details 中处理，不会猜测标签或资产。菜单 `Tools → ZFramework GAS → 校验所有技能` 可批量检查；CI 可调用 `ZFramework.GAS.Editor.BatchValidate.Run`，存在错误时退出码非零。批量校验不会为资产补 ID。
 
-`Tools → ZFramework GAS → 创建 BasicCombat 示例` 程序化生成骑士与训练假人、六段动作、技能特效、五个技能和可游玩的训练场，并把示例标签写入项目标签配置。重新生成会先确认，再覆盖示例目录；详见 `Samples/BasicCombat/README.md`。
+`Tools → ZFramework GAS → 创建 BasicCombat 示例` 程序化生成骑士与训练假人、六段动作、技能特效、五个技能槽（六个技能资产）和可游玩的训练场，并把示例标签写入项目标签配置。重新生成会先确认，再覆盖示例目录；详见 `Samples/BasicCombat/README.md`。
 
 
 ## 需要知道的几条语义
@@ -416,9 +364,8 @@ owner.StartTask(spec, task);
 2. **冷却不是计时器，是标签**。冷却效果授予一个标签，能力据此判定；时长即该效果的剩余时长。
    外部移除该效果（`RemoveEffectsWithAnyTag`）会让能力立刻可用。
 3. **`SetByCaller` 键缺失会抛异常**，不会静默返回 0——配置错误应当立刻暴露。
-   同理，属性算出 `NaN` / 无穷（含 `Divide` 除数为 0）、`Tick` 传入负 dt、
-   给修改器传空来源，都会抛异常而非静默接受。
-4. **任务生命周期从属于能力**。想让动作在能力结束后继续，是设计错误。
+   技能定义应提供有限的数值，宿主应传入非负的 Tick 时间。开发构建的使用断言不构成发布版的输入校验。
+4. **能力所属任务随能力结束；场景任务独立存活。**
    任务在遍历目标的过程中若因连锁反应被取消（如击杀触发的打断），会当场停手——
    已死的任务一发都不会再打。
 5. **`OngoingBlocked` 在 tick 内检查**，移除最多延迟一个 tick（60Hz 下 16ms）。
@@ -444,7 +391,7 @@ owner.StartTask(spec, task);
 | 技能 | 用到的机制 |
 |---|---|
 | 斩击 | 体力消耗、冷却、命中伤害（按攻击缩放）、剑光 Cue 区间、霸体与连招窗口 |
-| 能量弹 | 蓄能 Cue、`LaunchProjectileAction`、独立投射物与命中效果 |
+| 能量弹（分叉闪电 / 逐个弹射） | Q 切换第 2 槽资产；两份技能共用参数、消耗和冷却 |
 | 战吼 | 作用于自身的持续增益、光环 Cue、霸体窗口 |
 | 圣域引导 | 周期治疗、引导标签窗口阻断其他技能、法阵 Cue |
 | 召唤 | 时间轴动作生成守护灵与持续区域，按配置寿命独立存活 |
@@ -453,113 +400,11 @@ owner.StartTask(spec, task);
 
 菜单 `Tools → ZFramework GAS → 创建 BasicCombat 示例` 同时生成独立特效、共享映射库并完成角色接线，全部资源保存在 `Assets/GAS Samples/BasicCombat` 内。战吼技能的 `Cue.Ground.Sigil` 在 0.2～0.9 秒显示普通粒子法阵，固定在地面并在结束后保留尾迹。映射位于该目录的 `CueVfxLibrary.asset`，新增特效的步骤见 [BasicCombat 说明](Samples/BasicCombat/README.md)。
 
-## 重入保证
+## 宿主约定
 
-回调里回过头操作系统本身是常见需求（命中即结束技能、进入区域即打断引导）。以下行为经断言固定：
+- 在主循环中每帧推进每个 ASC 和场景宿主一次；不要在任务、效果或事件回调里重入 Tick。所属任务按帧快照遍历，回调取消的任务不会再次推进。
+- 运行时观察事件是同步通知。不要依赖监听器隔离、取消时的错误历史或自动恢复。
+- `GameplayEffectSpec(source: asc)` 使用 `AbilitySourceIdentity` 区分回收之前和之后的单位。`FindFrom(definition, asc)` 仍可按当前身份查找。
+- 骨骼、Prefab、物理和项目移动逻辑由 Unity 层接入；Core 不扫描类型，也不执行图或字符串脚本。
 
-| 在回调中做的事 | 结果 |
-|---|---|
-| 任务的 `OnTick` 里结束 / 移除自己所属的能力 | 能力正确结束，任务收到一次 `OnEnd(cancelled: true)`，激活期标签清理 |
-| 任务的 `OnTick` 里启动新任务 | 新任务**下一帧**才开始推进，与「在 tick 之外启动」一致 |
-| 任务的 `OnTick` 里 `Clear()` 整个 ASC | 能力、任务、效果、标签全部清空，无残留 |
-| 任务的 `OnEnd` 里再次 `Complete()` | 无效果，不会重复触发 `OnEnd` |
-| 任务的 `OnEnd` 里启动新任务 | **抛异常**——能力已结束，不允许再挂任务 |
-| 任务激活的能力反过来取消了本能力 | 本任务被取消，标签清理，无崩溃 |
-| Cue 处理器在 tick 中 `Clear()` 效果容器 | 推迟到本帧 tick 结束后执行，不破坏遍历 |
-| Cue 处理器在派发中注销自己或别人 | 槽位置空、派发结束后压缩；同一次派发里其余处理器一个不漏 |
-| Cue 处理器施加的效果又派发了 Cue（嵌套派发） | 按深度计数，内层退出不影响外层；压缩只在最外层做 |
-| Cue 处理器在派发中注册新处理器 | 本次不派发，下一次生效 |
-| 标签移除回调里增删其他标签 / 再次 `Clear()` | 正常回调的重入通知排队派发；回调抛错则丢弃剩余通知；`Clear` 期间新增且未再次清除的标签保留 |
-| Cue 处理器在 `OnActive` 中移除刚应用的效果 | 修改器与标签正确回滚；`Apply` 仍返回 `Applied`，其 `Applied` 子效果照常触发 |
-| 属性变更回调里改同一属性（如钳制血量上限） | 收敛即可，两次迭代内稳定 |
-| 投射物命中目标时，效果连锁取消了发射者的能力 | 当场停手，后续目标不再受击 |
-| 区域施加光环时，效果连锁取消了所属能力 | 当场停手；已入区者由 `OnEnd` 回滚，后续单位不会被拉进已结束的区域 |
-| 子效果链成环 | 深度超过 8 层抛异常；容器状态不受影响，后续调用正常 |
-| 标签窗口开启回调取消能力 | 回滚本窗口已授予的计数，不移除其他来源的标签 |
-| 单帧跨过完整标签窗口和命中事件 | 按时间边界依次开窗、命中、关窗；命中观察到正确标签状态 |
-| 关闭窗口期间标签回调抛异常 | 继续清理其余窗口；由 EndAbility 取消时记录 LastCleanupError，不阻断其他技能的打断流程 |
-
-> 效果持有来源的 `AttributeSet` 引用（用于按来源缩放数值）。
-> 来源单位被回收时，该引用会让其属性集存活到效果被移除为止——这是有意的，
-> 但对象池实现需要知道这一点。
-
-
-## 本次依赖拆分验证
-
-2026-10-26：纯 .NET 回归覆盖层级边界、多来源计数、激活/效果/冷却、取消与 Cue、事件重入与异常清理、名称及 DataContract 往返；预计算条件验证了 8,192 组状态组合，计数存储另做 20,000 次混合增删对照。
-
-迁移后，19 组 .NET 回归、39 项隔离 Unity 工程集成断言通过，包含三个 `ZFramework.GAS` 程序集的实际名称验证。用例覆盖未知名称、required/granted 空行、序列化输入不变以及动画 Cue 的跳过和告警，保留已有加载边界过滤，查询热路径不增加检查。
-
-Unity 6000.3 批处理编译和集成检查通过：Core 实际程序集不引用引擎或 Generated，Unity 代理序列化往返、旧 Prefab GUID 与内联名称、三个授权资产的定义构建、Tag Playground 均通过。Tags Editor 仍有 Unity 6 的旧 TreeView API 弃用警告。
-
-预热后的激活/结束与标签查询、增删测得 0 字节分配。桌面 .NET 8 对照中完整激活/结束的单标签场景与原实现持平，8/32 标签场景更快。极小集合单独连续增删仍比旧字符串列表多出祖先计数维护成本；查询收益不能等同为所有工作负载都加速。新条件以只读引用暴露，避免每次查询复制条件结构。
-
-### 重构前已有验证记录
-
-以下保留既有验证记录，其覆盖范围和平台以各项说明为准；本次复验范围见上文。
-
-- **500 余项行为断言**，全部在 Unity Editor 内真实执行（含真实 GameObject 与物理查询）：
-  459 项运行期行为 + 10 组重入场景 + 6 条装箱检查 + 图结构 2 组 + 图编辑 46 项
-  + Unity 层复查 13 项 + 核心层复查 23 项 + 端到端技能 19 项（真实播放模式）
-- **热路径无可测量的托管分配**：核心库 10 条 + Unity 层 5 条热路径，
-  六十万至百万级迭代下堆用量零增长，同批次阳性对照可稳定检出 25–28 B/次的分配。
-  含每帧路径 `ProjectileTask.OnTick` / `AreaEffectTask.OnTick` / `GameplayCueRouter.Dispatch`
-- **核心程序集依赖为系统程序集与 Tags Core；Unity 集成验证确认两者均不引用引擎或 Generated**
-- 编译零警告
-- **动画时间轴：27 项运行期断言**，在编辑器之外以确定步长手工 tick 执行
-  （`AnimationTask` 及其依赖不触碰任何 UnityEngine 类型，因此可脱离 Editor 运行）：
-  标记点升序触发、单帧跨多点不重不漏、非循环跑满即完成、循环每圈重触发且不自行结束、
-  打断即 `Stop()` 并收尾区间、下达时长后标记点等比缩放、缺目标即抛异常、
-  找不到片段仍推进时间轴且仍收到 `Advance` 与一次 `Stop`、
-  区间起止各一次、`onFinished` 正确区分播完与打断。
-  其中 `AnimationTask.OnTick` 在**每圈都走到标记点与区间**的 1000 帧里零分配，
-  同批次阳性对照可检出分配；断言集本身经变异测试反证（故意破坏循环重置后确实报错）
-
-### 历史编辑器重构验证（2026-10-26）
-
-- Unity 6000.3.14f1 EditMode：**45/45**，覆盖命令及多节点分组 Undo/Redo、连接规则、链深度、子资产创建／删除／转换、深拷贝、稳定 ID、选择同步、真实指针拖拽写回与一步撤销、模板、校验和窗口节点保留。
-- Unity PlayMode：Animator、Legacy、Sprite、官方 Spine 4.2 的播放／拉伸／Stop 恢复及标记时序；结果见 `Docs~/EditorRefactorStatus.md`。
-- Core .NET 8：**19/19**。100,000 次预热激活／结束测得 **0 字节托管分配**。
-- Unity Mono：时间轴每圈经过标签窗口及无分配测试生成器的任务事件，1,000 圈测得 **0 字节**；序列帧驱动预热 Play/Advance/Stop 测得 0 字节。该结果不覆盖内置 ProjectileSpawner / AreaEffectSpawner 创建新任务的分配。
-- Runtime + Editor 对实际 Unity API 的额外编译检查：0 错误、0 警告。第三方 Tags / Spine Editor 在 Unity 6 存在弃用提示。
-
-该日期尚未执行两名新策划的正式可用性测试、五个样例的完整战斗端到端验收和 IL2CPP 构建。之后已补充五技能 PlayMode 验证、Windows 独立 Mono 冒烟、Android IL2CPP 构建及 UnityLinker 描述文件注入验证。尚未进行 Android 真机施放或独立人员可用性验收。可重复执行的测试源码在 `Tests~/Editor`、`Tests~/PlayMode`、`Tests~/Spine`。当前结果和平台限制见[五阶段改进验证](Docs~/EditorImprovementVerification.md)。
-
-
-### 测量的边界
-- GC 测量在 **Editor + Mono** 下进行，**不代表 IL2CPP 真机的 GC 或帧耗时**。运行时骨骼识别／惯性混合已在 Android ARM64 IL2CPP 模拟器跑过功能回归；本机未安装此 Unity 版本的 Windows IL2CPP 构建模块。
-  构建处理器为具体的动作、轨道、后端及执行器生成裁剪描述；运行期不通过反射发现或调用动作。
-- 检出下限取决于迭代次数：百万次约 2–3 B/次，六十万次约 25 B/次。
-  因此结论是「无可测量的分配」而非「绝对 0 字节」
-- **持续效果创建采用容器级复用**：外部只持有单调递增的 `ActiveGameplayEffectHandle`；
-  内部 Active 状态在最外层操作结束后才移除列表槽位并回池，避免遍历失效、回调重入与 ABA；
-  `Remove(handle)` 会立即令查询身份失效并撤销 Modifier、Granted Tag、Removed Cue 与条件效果，只有物理槽位删除和复用被延迟。
-  删除时逐属性、逐标签完成结构清理，
-  记录并最终重抛首个回调异常。仍被属性 Modifier 引用、无法确认完全脱钩的对象会永久丢弃而不是回池。
-  全部 Modifier magnitude 会先解析到
-  随池化对象按容量复用的缓冲区，成功后才发布到容器，因此解析失败不会留下半初始化效果或旧周期数值。
-  池冷启动或解析缓冲区扩容时仍会分配，稳定容量后的同规模重复应用/移除不再为这两项持续分配。
-- **其他非热路径仍有设计内分配**：`GameplayAbilitySpec`（每次授予）、每发投射物 / 每个区域的任务对象。
-
-## 不包含的内容
-
-- **游戏专属表现**（音效、飘字等）——经 Cue 路由由使用方实现；Unity 层已提供配置驱动的粒子 Prefab 播放与预览
-- **运行期图解释器**——效果与能力是数据资产（与 UE 一致），执行不经过图；
-  编辑器里的技能结构图只是这些引用的可视化，不参与运行
-- **召唤的具体实现**——涉及单位表、生成根节点、路径系统等游戏专属概念，
-  派生 `GameplayAbilityTask` 即可，库不做只转发的壳
-- **对象池**——视觉体与任务对象的生命周期归使用方
-- **完整 Animator 状态机混合预览**仍不等于片段采样预览。可选 Playables 后端、通用运行期轨道、曲线与音效轨已提供；运行时调试及时间轴/效果节点联动见 `Docs~/ConfigurableSkills.md`。
-
-
-### 来源标识与取消诊断
-
-Core 与 Unity 的技能效果统一使用 `AbilitySourceIdentity`。`GameplayEffectSpec(source: asc)` 也会捕获该 ASC 当次身份，按来源叠层不再因入口不同而分开；`Effects.FindFrom(definition, asc)` 同样归一到当前身份，原来的查询入口继续可用。查询旧单位化身留下的效果时需保留并传入旧身份。自定义的非 ASC 来源对象仍原样保留。使用 `identity.Owner` 获取当前仍有效的原 ASC，`Clear()` 后返回 null；直接 `as AbilitySystemComponent` 不再适用于这些来源。代码示例见 [Source 接入说明](Docs~/ConfigurableSkills.md#授予来源与-source-身份)。
-
-取消回调及任务 OnEnd 失败记入 `LastCleanupError`（配置动作另有 `LastCleanupActionId`），显示为调试窗口中的取消清理警告。它不传播到 `EndAbility`，仍继续结束其余任务和技能，也不清理此前已独立存活的任务；失败的清理分支自行创建的资源仍会回收。消耗／冷却的完整效果树在取消其他技能、扣费之前预检；瞬时效果先解析全部数值再写入属性。
-
-ASC 与场景宿主都按本帧的任务运行版本推进，回调删除或重启任务不会重复 Tick。同一宿主的嵌套 Tick 明确抛出 `InvalidOperationException`，由外层循环统一推进时间。任务推进失败会记入 `LastExecutionFailure` 并结束该次技能，其他技能继续完成本帧，多个异常聚合报告。取消清理异常不从 `EndAbility` 逃逸。
-
-ASC 另保留最近 64 条执行／清理错误，可用 `DiagnosticCount`、`GetDiagnostic(index)` 读取；移除技能、`Clear()` 或对象池回收不会丢失记录，宿主显式 `ClearDiagnostics()` 清除。调试窗口提供错误记录及动作定位。模块的构建、施放预检和延迟失败都定位到技能内的 CallModule，消息保留内层模块路径与动作 ID。
-
-Core 默认 `TryActivateAbility(spec)` 固定本次等级，来源属性仍实时读取；需要冻结来源值时调用 `TryActivateAbility(spec, captureSource: true)`。`SkillRunner` 始终冻结等级、参数和来源属性供独立任务使用。快照是不可变数据，属性变化后重新捕获会分配；本轮已验证预热后 10,000 次 Core 施放（消耗、冷却、DoT、资源恢复及攻击力变化）为 0 字节分配。该结果不覆盖快照捕获、Unity 施放构建、新任务或编辑器刷新，历史的 100,000 次无消耗激活测量也不代表整套系统零 GC。
+见[编辑器指南](Docs~/EditorGuide.md)和[验证记录](Docs~/EditorImprovementVerification.md)。

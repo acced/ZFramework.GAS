@@ -3,21 +3,7 @@ using System;
 
 namespace ZFramework.GAS.Unity
 {
-    /// <summary>标记点上的效果作用于谁。</summary>
-    public enum AnimationMarkerTarget
-    {
-        /// <summary>施法时传入的固定目标。</summary>
-        Target,
-        /// <summary>施法者自己（增益、自伤、蓄力标记等）。</summary>
-        Self,
-    }
-
-    /// <summary>
-    /// 时间轴上的一个时间点。
-    ///
-    /// <see cref="Effect"/> 为 null 时是纯回调标记：作用对象由使用方在回调里决定
-    /// （扇形查询、多目标、生成投射物…），库不代为猜测。
-    /// </summary>
+    /// <summary>稳定 ID 的时间轴事件；名称仅用于显示，逻辑由动作列表执行。</summary>
     public readonly struct AnimationMarker
     {
         /// <summary>相对<b>授权时长</b>的秒数；运行期按实际时长等比缩放。</summary>
@@ -29,17 +15,9 @@ namespace ZFramework.GAS.Unity
         /// </summary>
         public readonly string Key;
         public readonly string Id;
-        internal readonly SkillActionDefinition LegacyAction;
         public readonly System.Collections.Generic.IReadOnlyList<SkillActionDefinition> Actions;
 
-        /// <summary>到点施加的效果；可为 null。</summary>
-        public readonly GameplayEffectDefinition Effect;
-
-        public readonly AnimationMarkerTarget Target;
-
-        public AnimationMarker(float time, string key = null, GameplayEffectDefinition effect = null,
-            AnimationMarkerTarget target = AnimationMarkerTarget.Target, string id = null,
-            SkillActionDefinition[] actions = null)
+        public AnimationMarker(float time, string key = null, string id = null, SkillActionDefinition[] actions = null)
         {
             if (time < 0f || float.IsNaN(time))
             {
@@ -48,10 +26,7 @@ namespace ZFramework.GAS.Unity
 
             Time = time;
             Key = string.IsNullOrEmpty(key) ? null : key;
-            Effect = effect;
-            Target = target;
             Id = id;
-            LegacyAction = effect != null ? ApplyEffectAction.Marker(id, effect, target == AnimationMarkerTarget.Self) : null;
             Actions = Array.AsReadOnly(actions == null ? Array.Empty<SkillActionDefinition>() : (SkillActionDefinition[])actions.Clone());
         }
     }
@@ -123,7 +98,6 @@ namespace ZFramework.GAS.Unity
         /// <summary>按开始时间升序。</summary>
         public AnimationCueRegion[] CueRegions { get; }
         public AnimationTagWindow[] TagWindows { get; }
-        public AnimationTaskEvent[] TaskEvents { get; }
         public System.Collections.Generic.IReadOnlyList<AnimationSectionDefinition> Sections { get; }
         public System.Collections.Generic.IReadOnlyList<RuntimeTrackDefinition> RuntimeTracks { get; }
 
@@ -143,7 +117,6 @@ namespace ZFramework.GAS.Unity
         public float BlendOut => BlendOutSpec.duration;
 
         /// <summary>是否存在「作用于固定目标」的效果标记点——任务据此在构造时就要求传入目标。</summary>
-        public bool RequiresTarget { get; }
 
         public SkillAnimationDefinition(
             string clipName,
@@ -152,7 +125,6 @@ namespace ZFramework.GAS.Unity
             AnimationMarker[] markers = null,
             AnimationCueRegion[] cueRegions = null,
             AnimationTagWindow[] tagWindows = null,
-            AnimationTaskEvent[] taskEvents = null,
             float blendIn = 0f,
             float blendOut = 0f, AnimationSectionDefinition[] sections = null, RuntimeTrackDefinition[] runtimeTracks = null,
             SkillBlend? blendInSpec = null, SkillBlend? blendOutSpec = null, UnityEngine.AvatarMask mask = null, bool additive = false, float layerWeight = 1, BoneWeightMask.Definition boneWeights=null)
@@ -203,13 +175,8 @@ namespace ZFramework.GAS.Unity
             Markers = markers == null || markers.Length == 0 ? NoMarkers : (AnimationMarker[])markers.Clone();
             CueRegions = cueRegions == null || cueRegions.Length == 0 ? NoRegions : (AnimationCueRegion[])cueRegions.Clone();
             TagWindows = tagWindows == null ? Array.Empty<AnimationTagWindow>() : (AnimationTagWindow[])tagWindows.Clone();
-            TaskEvents = taskEvents == null ? Array.Empty<AnimationTaskEvent>() : (AnimationTaskEvent[])taskEvents.Clone();
             foreach (var window in TagWindows)
                 if (window.Start > duration || window.End > duration) throw new ArgumentOutOfRangeException(nameof(tagWindows));
-            foreach (var task in TaskEvents)
-                if (task.Time > duration || task.Spawner == null) throw new ArgumentOutOfRangeException(nameof(taskEvents));
-
-            bool requiresTarget = false;
             for (int i = 0; i < Markers.Length; i++)
             {
                 // 落在时长之外的标记点永远不会触发，是配置错误而非「暂时禁用」——立刻暴露。
@@ -219,23 +186,7 @@ namespace ZFramework.GAS.Unity
                         $"Marker at {Markers[i].Time}s lies beyond the animation duration {duration}s.");
                 }
 
-                if (Markers[i].Effect != null && Markers[i].Target == AnimationMarkerTarget.Target)
-                {
-                    requiresTarget = true;
-                }
-
-                // 重名的标记点会让回调分不清是哪一下，属于授权错误。
-                for (int j = i + 1; j < Markers.Length; j++)
-                {
-                    if (Markers[i].Key != null && string.Equals(Markers[i].Key, Markers[j].Key, StringComparison.Ordinal))
-                    {
-                        throw new ArgumentException(
-                            $"Two markers share the key \"{Markers[i].Key}\"; marker keys must be unique.", nameof(markers));
-                    }
-                }
             }
-
-            RequiresTarget = requiresTarget;
 
             for (int i = 0; i < CueRegions.Length; i++)
             {
@@ -252,7 +203,6 @@ namespace ZFramework.GAS.Unity
             Array.Sort(Markers, static (a, b) => a.Time.CompareTo(b.Time));
             Array.Sort(CueRegions, static (a, b) => a.Start.CompareTo(b.Start));
             Array.Sort(TagWindows, static (a, b) => a.Start.CompareTo(b.Start));
-            Array.Sort(TaskEvents, static (a, b) => a.Time.CompareTo(b.Time));
         }
     }
 }

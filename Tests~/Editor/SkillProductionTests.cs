@@ -74,43 +74,8 @@ namespace ZFramework.GAS.Editor.Tests
         {
             public bool DuringValidation;
             public override SkillActionDefinition Build(SkillActionBuildContext builder)
-                => Define("fault", (_, _) => { if (DuringValidation) throw new ArgumentException("validation probe"); },
+                => Define("fault",
                     _ => throw new InvalidOperationException("execution probe"));
-        }
-        [TestCase(true, false), TestCase(false, false), TestCase(false, true)]
-        public void NestedModuleCastFailuresLocateTheOuterCall(bool validate, bool delayed)
-        {
-            var fault = new FaultAction { DuringValidation = validate };
-            var inner = SkillAssetFactory.AddEmbedded<SkillActionModuleAsset>(_skill, "Inner");
-            inner.actions = delayed ? new SkillAction[] { new WaitSkillAction { timeout = new SkillNumber(.1f), onSuccess = new SkillAction[] { fault } } }
-                : new SkillAction[] { fault };
-            var outer = SkillAssetFactory.AddEmbedded<SkillActionModuleAsset>(_skill, "Outer");
-            outer.actions = new SkillAction[] { new CallModuleAction { module = inner } };
-            var call = new CallModuleAction { module = outer }; _skill.activationActions = new SkillAction[] { call };
-            var owner = new AbilitySystemComponent(); var runner = new SkillRunner(owner, null);
-            try
-            {
-                if (delayed)
-                {
-                    runner.TryCast(_skill);
-                    Assert.IsTrue(RuntimeSnapshot.Capture(owner, null).Actions.All(a => a.Id == call.Id));
-                    Assert.Throws<InvalidOperationException>(() => owner.Tick(.2f));
-                }
-                else Assert.AreEqual(validate ? AbilityActivationResult.InvalidConfiguration : AbilityActivationResult.ExecutionFailed, runner.TryCast(_skill));
-                var failure = runner.GetSpec(_skill).LastExecutionFailure;
-                Assert.AreEqual(call.Id, failure.SourceId); Assert.IsFalse(runner.IsActive(_skill));
-                StringAssert.Contains("Inner", failure.Message); StringAssert.Contains("Outer", failure.Message);
-                if (!validate)
-                {
-                    StringAssert.Contains(fault.Id, failure.Message);
-                    Assert.AreEqual(call.Id, owner.GetDiagnostic(0).SourceId);
-                    Assert.AreEqual("执行失败", runner.GetExecution(_skill).Status);
-                }
-                using var document = new SkillDocument(); document.Open(_skill);
-                Assert.IsTrue(SkillActionNavigation.Select(document, failure.SourceId));
-                Assert.AreEqual("activationActions.Array.data[0]", document.Selection.ElementId);
-            }
-            finally { owner.Clear(); }
         }
         [TestCase(0, 0), TestCase(1, 0), TestCase(2, 0), TestCase(3, 0), TestCase(3, -1), TestCase(3, 1)]
         public void SectionEndWarningsIncludeLoopsJumpsQueuedSuccessorsAndRounding(int successor, int ulp)
@@ -124,7 +89,7 @@ namespace ZFramework.GAS.Editor.Tests
             using (var so = new SerializedObject(animation))
             {
                 so.FindProperty("clipName").stringValue = "a";
-                foreach (var name in new[] { "markers", "taskEvents" })
+                foreach (var name in new[] { "markers" })
                 {
                     var events = so.FindProperty(name); events.arraySize = 1;
                     events.GetArrayElementAtIndex(0).FindPropertyRelative("time").floatValue = time;
@@ -133,7 +98,7 @@ namespace ZFramework.GAS.Editor.Tests
             }
             using var document = new SkillDocument(); document.Open(_skill); var issues = new List<Issue>();
             new SectionEndRule().Validate(new ValidationContext(document), animation, issues);
-            Assert.AreEqual(ulp == 0 && b.start == time ? 0 : 2, issues.Count);
+            Assert.AreEqual(ulp == 0 && b.start == time ? 0 : 1, issues.Count);
             foreach (var issue in issues) { StringAssert.Contains("排他终点", issue.Message); Assert.IsNotEmpty(issue.ElementId); }
         }
         [Test] public void BatchCooldownWritesVariantOverrideAndReferenceResultsLocateField()

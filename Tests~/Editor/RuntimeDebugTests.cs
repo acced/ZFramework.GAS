@@ -62,8 +62,8 @@ namespace ZFramework.GAS.Editor.Tests
                 var marker = so.FindProperty("markers"); marker.arraySize = 1;
                 var entry = marker.GetArrayElementAtIndex(0); entry.FindPropertyRelative("id").stringValue = "stable-marker";
                 entry.FindPropertyRelative("time").floatValue = 3;
-                entry.FindPropertyRelative("effect").objectReferenceValue = _effect;
-                entry.FindPropertyRelative("target").enumValueIndex = (int)AnimationMarkerTarget.Self;
+                var actions = entry.FindPropertyRelative("actions"); actions.arraySize = 1;
+                actions.GetArrayElementAtIndex(0).managedReferenceValue = new ApplyEffectAction { effect = _effect, targets = new TargetQuery { kind = TargetQueryKind.Self } };
             });
             Edit(_ability, so =>
             {

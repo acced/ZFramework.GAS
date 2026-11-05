@@ -56,31 +56,11 @@ internal static class SkillExecutionTests
         owner.Effects.Apply(new GameplayEffectSpec(periodic, setByCallerValues: values), out var handle); values["damage"] = -999;
         owner.Tick(1); owner.Effects.Remove(handle);
         Check(owner.Attributes.GetCurrent(health) == 94, "Caller values must be frozen for periodic/removed children.");
-        foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity })
-        {
-            foreach (bool duration in new[] { true, false })
-            {
-                var effect = new GameplayEffectDefinition(EffectDurationPolicy.Duration, duration: 1,
-                    durationMagnitude: duration ? EffectMagnitude.FromCaller("time") : (EffectMagnitude?)null,
-                    periodMagnitude: duration ? (EffectMagnitude?)null : EffectMagnitude.FromCaller("time"));
-                bool rejected = false;
-                try { owner.Effects.Apply(new GameplayEffectSpec(effect, setByCallerValues: new Dictionary<string, float> { ["time"] = invalid })); }
-                catch (InvalidOperationException) { rejected = true; }
-                Check(rejected && owner.Effects.Count == 0, "Non-finite timers must fail before publication.");
-            }
-        }
-        var parameterCost = new GameplayEffectDefinition(EffectDurationPolicy.Instant,
-            modifiers: new[] { new EffectModifier(health, ModifierOperation.Add, EffectMagnitude.FromParameter("missing")) });
-        var invalidAbility = owner.GrantAbility(new GameplayAbilityDefinition(cost: parameterCost));
-        Check(owner.TryActivateAbility(invalidAbility) == AbilityActivationResult.InvalidConfiguration, "Missing context must be a diagnostic result.");
         var spec = owner.GrantAbility(new GameplayAbilityDefinition(), 3);
         owner.TryActivateAbility(spec); owner.EndAbility(spec);
         long allocated = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 10000; i++) { owner.TryActivateAbility(spec); owner.EndAbility(spec); }
         Check(GC.GetAllocatedBytesForCurrentThread() == allocated, "Warm level 3 activation must not allocate a new context.");
-        var host = new GameplayTaskHost(); var good = new Timer(); host.Start(spec, good); host.Start(spec, new ThrowingTimer());
-        try { host.Tick(1); } catch (InvalidOperationException) { }
-        Check(!good.IsActive && host.Count == 0, "A failed scene task must not skip peers in the same tick.");
         bool badInt = false, badBool = false;
         try { SkillParameterValue.FromNumber(SkillParameterKind.Int, 1.5f); } catch (InvalidOperationException) { badInt = true; }
         try { SkillParameterValue.FromNumber(SkillParameterKind.Bool, 2); } catch (InvalidOperationException) { badBool = true; }

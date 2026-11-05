@@ -31,17 +31,24 @@ namespace ZFramework.GAS.Unity
         /// <summary>Unified query. Each nesting level leases its own buffer; order is nearest first.</summary>
         public int Query(TargetQueryDefinition query, SkillExecutionContext context, TargetQueryBuffer buffer,
             Vector3? centerOverride = null, bool applyLimit = true)
+            =>Query(query,context,buffer,centerOverride,applyLimit,false);
+
+        internal int Query(TargetQueryDefinition query,SkillExecutionContext context,TargetQueryBuffer buffer,
+            Vector3? centerOverride,bool applyLimit,bool captureAim)
         {
             buffer.Clear();
             var source = context.Source;
-            var center = centerOverride ?? (query.Kind == TargetQueryKind.TargetPoint ? context.Services.RequireTargetPosition() : context.Position);
             if (query.Kind == TargetQueryKind.Self || query.Kind == TargetQueryKind.FixedTarget)
             {
                 var unit = query.Kind == TargetQueryKind.Self ? source : context.Target;
                 if (context.Allows(query, unit))
-                { buffer.Units[0] = unit; buffer.Transforms[0] = query.Kind == TargetQueryKind.Self ? context.Services.Origin : context.Services.Target; buffer.Count = 1; }
+                {
+                    buffer.Units[0]=unit;buffer.Transforms[0]=query.Kind==TargetQueryKind.Self?context.Services.Origin:context.Services.Target;buffer.Count=1;
+                    if(captureAim){buffer.Points[0]=buffer.Transforms[0]!=null?buffer.Transforms[0].position:context.Position;buffer.Generations[0]=unit.Generation;}
+                }
                 SkillActionDebug.Query(context,buffer); return buffer.Count;
             }
+            var center=centerOverride??query.Center(context);
             float radius = query.Radius.Resolve(context.Values);
             var forward = context.Forward;
             int hits = query.Kind == TargetQueryKind.Line
@@ -70,9 +77,13 @@ namespace ZFramework.GAS.Unity
                 while (index > 0 && buffer.Distances[index - 1] > distance)
                 {
                     buffer.Units[index] = buffer.Units[index - 1]; buffer.Transforms[index] = buffer.Transforms[index - 1];
-                    buffer.Distances[index] = buffer.Distances[index - 1]; index--;
+                    buffer.Distances[index] = buffer.Distances[index - 1];
+                    if(captureAim){buffer.Points[index]=buffer.Points[index-1];buffer.Generations[index]=buffer.Generations[index-1];}
+                    index--;
                 }
-                buffer.Units[index] = unit; buffer.Transforms[index] = transform; buffer.Distances[index] = distance; buffer.Count++;
+                buffer.Units[index] = unit; buffer.Transforms[index] = transform; buffer.Distances[index] = distance;
+                if(captureAim){buffer.Points[index]=collider.bounds.center;buffer.Generations[index]=unit.Generation;}
+                buffer.Count++;
             }
             int count = applyLimit ? Mathf.Min(buffer.Count, query.MaxTargets) : buffer.Count;
             for (int i = count; i < buffer.Count; i++) { buffer.Units[i] = null; buffer.Transforms[i] = null; }

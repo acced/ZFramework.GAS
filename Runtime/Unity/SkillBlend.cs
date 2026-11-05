@@ -4,8 +4,8 @@ using UnityEngine;
 namespace ZFramework.GAS.Unity
 {
     public enum SkillBlendCurve { Linear, SineIn, SineOut, SineInOut, QuadIn, QuadOut, QuadInOut, CubicIn, CubicOut, CubicInOut, ExpoIn, ExpoOut, ExpoInOut, [InspectorName("BackIn（权重限幅）")] BackIn, [InspectorName("BackOut（权重限幅）")] BackOut, [InspectorName("BackInOut（权重限幅）")] BackInOut, Custom }
-    public enum SkillBlendMode { CrossFade, Freeze, Inertialize }
-    [Flags] public enum AnimationBlendCapabilities { None = 0, Curve = 1, SeekBlend = 2, Freeze = 4, Inertialize = 8 }
+    public enum SkillBlendMode { CrossFade, Freeze }
+    [Flags] public enum AnimationBlendCapabilities { None = 0, Curve = 1, SeekBlend = 2, Freeze = 4 }
 
     public sealed class BlendPresetAttribute : PropertyAttribute
     {

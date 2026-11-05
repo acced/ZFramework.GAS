@@ -27,16 +27,15 @@ namespace ZFramework.GAS.Editor
         public static bool Available => _json!=null;
         public static void Copy(SkillAction action)
         { _type=action?.GetType(); _json=action==null?null:JsonUtility.ToJson(action); }
-        public static void Paste(SerializedProperty list,int index,Func<string,bool> consent=null,Func<string,ActionEffectOwnership.CopyDecision> conflict=null)
-            =>Insert(list,index,_type,_json,consent,conflict);
-        public static void Duplicate(SerializedProperty list,int index,SkillAction action,Func<string,bool> consent=null)
-            =>Insert(list,index,action?.GetType(),action==null?null:JsonUtility.ToJson(action),consent,null);
-        private static void Insert(SerializedProperty list,int index,Type type,string json,Func<string,bool> consent,Func<string,ActionEffectOwnership.CopyDecision> conflict)
+        public static void Paste(SerializedProperty list,int index)=>Insert(list,index,_type,_json);
+        public static void Duplicate(SerializedProperty list,int index,SkillAction action)
+            =>Insert(list,index,action?.GetType(),action==null?null:JsonUtility.ToJson(action));
+        private static void Insert(SerializedProperty list,int index,Type type,string json)
         {
             if(type==null || json==null)return;
-            int n=list.arraySize++; var p=list.GetArrayElementAtIndex(n);
+            int n=list.arraySize++;var p=list.GetArrayElementAtIndex(n);
             p.managedReferenceValue=JsonUtility.FromJson(json,type);
-            try{RenewIds(p);ActionEffectOwnership.Localize(list,n,1,(ScriptableObject)list.serializedObject.targetObject,true,consent,conflict:conflict);}
+            try{RenewIds(p);ActionEffectOwnership.RequireShared(list,n,1,(ScriptableObject)list.serializedObject.targetObject);}
             catch{list.DeleteArrayElementAtIndex(n);throw;}
             if(index<n)list.MoveArrayElement(n,index);
         }

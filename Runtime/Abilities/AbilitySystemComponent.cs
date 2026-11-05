@@ -17,25 +17,6 @@ namespace ZFramework.GAS
         private readonly List<GameplayAbilityTask> _tasks = new();
         private readonly List<(GameplayAbilityTask task, long run)> _frame = new();
         private bool _clearing, _ticking;
-        public const int DiagnosticCapacity = 64;
-        private AbilityDiagnostic[] _diagnostics;
-        private int _oldestDiagnostic;
-        private long _diagnosticSequence;
-        internal long DiagnosticSequence => _diagnosticSequence;
-        public long DroppedDiagnosticCount { get; private set; }
-        public int DiagnosticCount { get; private set; }
-        public AbilityDiagnostic GetDiagnostic(int index)
-        {
-            if ((uint)index >= DiagnosticCount) throw new ArgumentOutOfRangeException(nameof(index));
-            return _diagnostics[(_oldestDiagnostic + index) % DiagnosticCapacity];
-        }
-        /// <summary>Errors are retained across Clear/RemoveAbility; the host explicitly acknowledges them.</summary>
-        public void ClearDiagnostics()
-        {
-            if (_diagnostics != null) Array.Clear(_diagnostics, 0, _diagnostics.Length);
-            _oldestDiagnostic = DiagnosticCount = 0; DroppedDiagnosticCount = 0;
-        }
-
         public AttributeSet Attributes { get; }
         public GameplayTagCountContainer OwnedTags { get; }
         public GameplayEffectContainer Effects { get; }
@@ -64,31 +45,26 @@ namespace ZFramework.GAS
         {
             if (_ticking) throw new InvalidOperationException("ASC.Tick cannot be called reentrantly. Advance each owner once from the host loop.");
             _ticking = true;
-            List<Exception> errors = null;
             try
             {
-                try { Effects.Tick(deltaTime); } catch (Exception ex) { (errors ??= new()).Add(ex); }
+                CurrentTask = null;
+                Effects.Tick(deltaTime);
                 for (int i = _tasks.Count - 1; i >= 0; i--) _frame.Add((_tasks[i], _tasks[i].RunVersion));
                 foreach (var item in _frame)
                 {
                     var task = item.task;
-                    if (task.RunVersion != item.run || !_tasks.Contains(task)) continue;
-                    var origin = task.Ability; int activation = task.ActivationVersion; string sourceId = task.DiagnosticId;
-                    long before = _diagnosticSequence;
-                    try { task.Advance(deltaTime); }
-                    catch (Exception ex)
-                    {
-                        (errors ??= new()).Add(ex);
-                        FailTask(task, item.run, origin, activation, ex, sourceId, before);
-                    }
+                    if (task.RunVersion != item.run) continue;
+                    CurrentTask = task;
+                    if(task.IsActive)task.Advance(deltaTime);
                     if (task.RunVersion == item.run && !task.IsActive) _tasks.Remove(task);
                 }
+                CurrentTask = null;
             }
             finally { _frame.Clear(); _ticking = false; }
-            if (errors?.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(errors[0]).Throw();
-            if (errors != null) throw new AggregateException("Ability task/effect failures", errors);
         }
 
+        /// <summary>When a task throws during Tick, the host can end just that cast.</summary>
+        public GameplayAbilityTask CurrentTask { get; private set; }
         public int ActiveTaskCount => _tasks.Count;
 
         /// <summary>按索引只读访问当前任务；不要在枚举期间推进或取消能力。</summary>
@@ -122,41 +98,8 @@ namespace ZFramework.GAS
             }
 
             if (task.IsActive) throw new InvalidOperationException("Task is already running.");
-            int activation = spec.ActivationVersion;
-            long run = task.RunVersion + 1, before = _diagnosticSequence;
             _tasks.Add(task);
-            try { task.Begin(spec, activation); }
-            catch (Exception error)
-            {
-                FailTask(task, run, spec, activation, error, task.RunVersion == run ? task.DiagnosticId : null, before);
-                throw;
-            }
-        }
-
-        private void FailTask(GameplayAbilityTask task, long run, GameplayAbilitySpec spec, int version, Exception error, string id, long before)
-        {
-            RecordTaskFailureSince(spec, version, error, id, before, false);
-            if (spec.ActivationVersion == version) EndAbility(spec);
-            if (task.RunVersion == run && _tasks.Remove(task))
-                try { task.CancelInternal(); } catch (Exception cleanup) { RecordCleanupError(spec, version, cleanup, id); }
-        }
-
-        internal void RecordTaskFailureSince(GameplayAbilitySpec spec, int version, Exception error, string id, long before, bool detached)
-        {
-            // A Unity action may already have reported this very exception, wrapped in its module path.
-            // Only deduplicate within this call; another task/attempt may throw the same exception object.
-            bool reported = false;
-            int recent = (int)Math.Min(_diagnosticSequence - before, DiagnosticCount);
-            for (int i = 0; i < recent && !reported; i++)
-            {
-                var d = GetDiagnostic(DiagnosticCount - 1 - i);
-                if (d.Cleanup || d.Origin != spec || d.ActivationVersion != version) continue;
-                for (var cause = d.Error; cause != null; cause = cause.InnerException)
-                    if (ReferenceEquals(cause, error)) { reported = true; break; }
-            }
-            if (reported) return;
-            if (detached) AddDiagnostic(spec, version, error, id, false); // Provenance only; no lifetime ownership.
-            else RecordExecutionFailure(spec, version, error, id);
+            task.Begin(spec, spec.ActivationVersion);
         }
 
         public int GrantedAbilityCount => _abilities.Count;
@@ -182,7 +125,7 @@ namespace ZFramework.GAS
                 return false;
             }
 
-            spec.Granted = false;
+            spec.IsGranted = false;
             DeactivateInternal(spec);
             return true;
         }
@@ -203,67 +146,50 @@ namespace ZFramework.GAS
         /// 只能靠冷却效果授予的标签恰好落进 <c>activationBlockedTags</c> 才间接生效。
         /// </summary>
         public AbilityActivationResult TryActivateAbility(GameplayAbilitySpec spec, EffectEvaluationContext context = null)
-            => TryActivateAbility(spec, false, context);
-
-        /// <summary>Core defaults to live source attributes. Opt in to a cast-start snapshot for delayed work;
-        /// captured contexts supplied by SkillRunner retain their existing snapshot semantics.</summary>
-        public AbilityActivationResult TryActivateAbility(GameplayAbilitySpec spec, bool captureSource, EffectEvaluationContext context = null)
         {
-            var check = CheckActivation(spec, context);
-            if (!spec.IsActive && !spec.Committing) spec.LastExecutionFailure = default;
+            context ??= spec.DefaultContext;
+            var check = CheckGates(spec);
             spec.LastActivationCheck = check;
             if (!check.Succeeded) return check.Result;
-            GameplayAbilityDefinition definition = spec.Definition;
-            context ??= spec.DefaultContext;
-            if (captureSource) context = context.CaptureSource(Attributes);
-            spec.EvaluationContext = context;
-            spec.LastExecutionFailure = default;
-            spec.LastCleanupError = null; spec.LastCleanupActionId = null;
-            spec.Committing = true;
-            int version = ++spec.ActivationVersion, generation = Generation, tagsAdded = 0;
-            var tags = definition.ActivationOwnedTags;
+            var definition = spec.Definition;
+            var cost = definition.Cost;
+            var cooldown = definition.Cooldown;
+            int costCount = cost?.Modifiers.Length ?? 0, cooldownCount = cooldown?.Modifiers.Length ?? 0;
+            float[] rented = null;
+            Span<float> values = costCount + cooldownCount <= 128 ? stackalloc float[costCount + cooldownCount]
+                : (rented = ArrayPool<float>.Shared.Rent(costCount + cooldownCount));
             try
             {
-                if (CancelAbilitiesWithTags(definition.CancelAbilitiesWithTags) != 0)
+                var costSpec = cost == null ? default : new GameplayEffectSpec(cost, Attributes, this, context: context);
+                var cooldownSpec = cooldown == null ? default : new GameplayEffectSpec(cooldown, Attributes, this, context: context);
+                var costValues = values.Slice(0, costCount);
+                var cooldownValues = values.Slice(costCount, cooldownCount);
+                for (int i = 0; i < costCount; i++) costValues[i] = costSpec.Resolve(cost.Modifiers[i].Magnitude, Attributes);
+                check = CheckCost(cost, costValues);
+                spec.LastActivationCheck = check;
+                if (!check.Succeeded) return check.Result;
+                for (int i = 0; i < cooldownCount; i++) cooldownValues[i] = cooldownSpec.Resolve(cooldown.Modifiers[i].Magnitude, Attributes);
+                float duration = cooldown != null ? cooldownSpec.ResolveDuration(Attributes) : 0;
+                float period = cooldown != null ? cooldownSpec.ResolvePeriod(Attributes) : 0;
+                spec.Committing = true;
+                CancelAbilitiesWithTags(definition.CancelAbilitiesWithTags);
+                spec.EvaluationContext = context;
+                spec.ActivationVersion++;
+                // Resolve once above; project callbacks must not invalidate configuration during commit.
+                if (cost != null) Effects.ApplyResolved(costSpec, costValues, 0, 0);
+                if (cooldown != null)
                 {
-                    EnsureGrant();
-                    // Cancellation callbacks can change gates, resources or calculation inputs.
-                    check = CheckActivationCore(spec, context);
-                    if (!check.Succeeded) { spec.LastActivationCheck = check; return check.Result; }
-                }
-                if (definition.Cost != null)
-                {
-                    Effects.Apply(new GameplayEffectSpec(definition.Cost, Attributes, this, context: context));
-                    EnsureGrant();
-                }
-                if (definition.Cooldown != null)
-                {
-                    Effects.Apply(new GameplayEffectSpec(definition.Cooldown, Attributes, this, context: context));
-                    EnsureGrant();
-                    spec.CommittedCooldown = definition.Cooldown;
-                }
-                while (tagsAdded < tags.Count)
-                {
-                    // Tag storage increments before invoking listeners; undo this prefix if a listener throws.
-                    OwnedTags.AddTag(tags[tagsAdded++]);
-                    EnsureGrant();
+                    Effects.ApplyResolved(cooldownSpec, cooldownValues, duration, period);
+                    spec.CommittedCooldown = cooldown;
                 }
                 spec.IsActive = true;
-                spec.LastActivationCheck = default;
+                definition.ActivationOwnedTags.AddTo(OwnedTags);
                 return AbilityActivationResult.Activated;
             }
-            catch (Exception error)
+            finally
             {
-                RecordExecutionFailure(spec, version, error);
-                while (generation == Generation && tagsAdded > 0)
-                    try { OwnedTags.RemoveTag(tags[--tagsAdded]); } catch (Exception cleanup) { RecordCleanupError(spec, version, cleanup); }
-                spec.LastActivationCheck = spec.LastExecutionFailure;
-                return AbilityActivationResult.ExecutionFailed;
-            }
-            finally { spec.Committing = false; }
-            void EnsureGrant()
-            {
-                if (!spec.Granted || Generation != generation) throw new InvalidOperationException("Grant removed during activation.");
+                spec.Committing = false;
+                if (rented != null) ArrayPool<float>.Shared.Return(rented);
             }
         }
 
@@ -281,19 +207,29 @@ namespace ZFramework.GAS
                 throw new ArgumentException("Ability was granted by a different AbilitySystemComponent.", nameof(spec));
             }
 
-            if (!spec.Granted) throw new ArgumentException("Ability is no longer granted.", nameof(spec));
-            if (spec.IsActive || spec.Committing)
-            {
-                return new AbilityActivationCheck(AbilityActivationResult.AlreadyActive, "技能正在执行");
-            }
+            if (!spec.IsGranted) throw new ArgumentException("Ability is no longer granted.", nameof(spec));
 
-            return CheckActivationCore(spec, context);
+            var check = CheckGates(spec);
+            if (!check.Succeeded) return check;
+            var cost = spec.Definition.Cost;
+            if (cost == null) return default;
+            var effect = new GameplayEffectSpec(cost, Attributes, this, context: context ?? spec.DefaultContext);
+            float[] rented = null;
+            Span<float> values = cost.Modifiers.Length <= 128 ? stackalloc float[cost.Modifiers.Length]
+                : (rented = ArrayPool<float>.Shared.Rent(cost.Modifiers.Length));
+            try
+            {
+                for (int i = 0; i < cost.Modifiers.Length; i++) values[i] = effect.Resolve(cost.Modifiers[i].Magnitude, Attributes);
+                return CheckCost(cost, values);
+            }
+            finally { if (rented != null) ArrayPool<float>.Shared.Return(rented); }
         }
 
-        private AbilityActivationCheck CheckActivationCore(GameplayAbilitySpec spec, EffectEvaluationContext context)
+        private AbilityActivationCheck CheckGates(GameplayAbilitySpec spec)
         {
-            GameplayAbilityDefinition definition = spec.Definition;
-
+            GasAssert.That(spec != null && ReferenceEquals(spec.Owner, this) && spec.IsGranted && !_clearing, "Unknown grant or clearing owner.");
+            if (spec.IsActive || spec.Committing) return new AbilityActivationCheck(AbilityActivationResult.AlreadyActive, "技能正在执行");
+            var definition = spec.Definition;
             if (!definition.ActivationRequirements.Matches(OwnedTags))
             {
                 for (int i = 0; i < definition.ActivationRequiredTags.Count; i++)
@@ -302,25 +238,8 @@ namespace ZFramework.GAS
                 for (int i = 0; i < definition.ActivationBlockedTags.Count; i++)
                     if (OwnedTags.HasTag(definition.ActivationBlockedTags[i]))
                         return new AbilityActivationCheck(AbilityActivationResult.Blocked, "被标签阻止", definition.ActivationBlockedTags[i]);
-                return new AbilityActivationCheck(AbilityActivationResult.Blocked, "标签条件不满足");
             }
-
-            if (spec.IsOnCooldown)
-            {
-                return new AbilityActivationCheck(AbilityActivationResult.OnCooldown, "技能冷却中", amount: spec.CooldownRemaining);
-            }
-
-            context ??= spec.DefaultContext;
-            try
-            {
-                if (definition.Cost != null)
-                    new GameplayEffectSpec(definition.Cost, Attributes, this, context: context).Validate(Attributes);
-                if (definition.Cooldown != null)
-                    new GameplayEffectSpec(definition.Cooldown, Attributes, this, context: context).Validate(Attributes);
-                return CheckCost(definition.Cost, context);
-            }
-            catch (Exception error)
-            { return AbilityActivationCheck.PreflightFailure(error); }
+            return spec.IsOnCooldown ? new AbilityActivationCheck(AbilityActivationResult.OnCooldown, "技能冷却中", amount: spec.CooldownRemaining) : default;
         }
 
         /// <summary>结束激活状态，撤下激活期标签。已结束或非本组件授予的返回 false。</summary>
@@ -374,36 +293,33 @@ namespace ZFramework.GAS
         {
             if (_clearing) return;
             _clearing = true;
-            Exception error = null;
             try
             {
             Generation++;
             SourceIdentity = new AbilitySourceIdentity(this);
             for (int i = _abilities.Count - 1; i >= 0; i--)
-                if (i < _abilities.Count) try { EndAbility(_abilities[i]); } catch (Exception exception) { error ??= exception; }
-            foreach (var spec in _abilities) spec.Granted = false;
+                if (i < _abilities.Count) EndAbility(_abilities[i]);
+            foreach (var spec in _abilities) spec.IsGranted = false;
             _abilities.Clear();
             _tasks.Clear();
-            try { Effects.Clear(); } catch (Exception exception) { error ??= exception; }
-            try { OwnedTags.Clear(); } catch (Exception exception) { error ??= exception; }
+            Effects.Clear();
+            OwnedTags.Clear();
             Events.Clear();
             }
             finally { _clearing = false; }
-            if (error != null) throw error;
         }
 
         /// <summary>
         /// 消耗是否付得起。只有 Add 操作可判断（当前值加上负数后不得为负）；
         /// 其余操作无法在不实际结算的情况下判定，跳过检查。
         /// </summary>
-        private AbilityActivationCheck CheckCost(GameplayEffectDefinition cost, EffectEvaluationContext context)
+        private AbilityActivationCheck CheckCost(GameplayEffectDefinition cost, ReadOnlySpan<float> values)
         {
             if (cost == null)
             {
                 return default;
             }
 
-            var costSpec = new GameplayEffectSpec(cost, Attributes, this, context: context);
             EffectModifier[] modifiers = cost.Modifiers;
             for (int i = 0; i < modifiers.Length; i++)
             {
@@ -417,7 +333,7 @@ namespace ZFramework.GAS
                 float sum = 0;
                 for (int j = 0; j <= i; j++)
                     if (modifiers[j].Target == modifier.Target && modifiers[j].Operation == ModifierOperation.Add)
-                        sum += costSpec.ResolveForValidation(modifiers[j].Magnitude, Attributes);
+                        sum += values[j];
                 if (attribute.CurrentValue + sum < 0f)
                 {
                     return new AbilityActivationCheck(AbilityActivationResult.CannotAfford, "资源不足", attribute: modifier.Target,
@@ -439,7 +355,7 @@ namespace ZFramework.GAS
             spec.IsActive = false;
             var tags = spec.Definition.ActivationOwnedTags;
             for (int i = 0; i < tags.Count; i++)
-                try { OwnedTags.RemoveTag(tags[i]); } catch (Exception error) { RecordCleanupError(spec, version, error); }
+                OwnedTags.RemoveTag(tags[i]);
             CancelTasksOf(spec, version);
         }
 
@@ -456,35 +372,10 @@ namespace ZFramework.GAS
                 {
                     var item = snapshot[i]; var task = item.task;
                     if (task.RunVersion != item.run || !ReferenceEquals(task.Ability, spec) || task.ActivationVersion != version || !_tasks.Remove(task)) continue;
-                    string sourceId = task.DiagnosticId;
-                    try { task.CancelInternal(); } catch (Exception error) { RecordCleanupError(spec, version, error, sourceId); }
+                    task.CancelInternal();
                 }
             }
             finally { ArrayPool<(GameplayAbilityTask, long)>.Shared.Return(snapshot, true); }
-        }
-        public void RecordCleanupError(GameplayAbilitySpec spec, int version, Exception error, string sourceId = null)
-        {
-            AddDiagnostic(spec, version, error, sourceId, true);
-            if (spec.ActivationVersion != version) return;
-            spec.LastCleanupError = error.Message;
-            spec.LastCleanupActionId = sourceId;
-        }
-        public void RecordExecutionFailure(GameplayAbilitySpec spec, int version, Exception error, string sourceId = null)
-        {
-            AddDiagnostic(spec, version, error, sourceId, false);
-            if (spec.ActivationVersion != version || spec.LastExecutionFailure.Result == AbilityActivationResult.ExecutionFailed) return;
-            spec.LastExecutionFailure = AbilityActivationCheck.FromError(AbilityActivationResult.ExecutionFailed, error, sourceId);
-        }
-        private void AddDiagnostic(GameplayAbilitySpec spec, int version, Exception error, string sourceId, bool cleanup)
-        {
-            if (spec == null || !ReferenceEquals(spec.Owner, this)) throw new ArgumentException("Diagnostic belongs to a different owner.", nameof(spec));
-            if (error == null) throw new ArgumentNullException(nameof(error));
-            _diagnostics ??= new AbilityDiagnostic[DiagnosticCapacity];
-            _diagnostics[(_oldestDiagnostic + DiagnosticCount) % DiagnosticCapacity] = new AbilityDiagnostic(spec, version, error, sourceId, cleanup);
-            _diagnosticSequence++;
-            if (DiagnosticCount < DiagnosticCapacity) DiagnosticCount++;
-            else { _oldestDiagnostic = (_oldestDiagnostic + 1) % DiagnosticCapacity; DroppedDiagnosticCount++; }
-            GasDebugHooks.Diagnostic(this, GetDiagnostic(DiagnosticCount-1));
         }
     }
 }

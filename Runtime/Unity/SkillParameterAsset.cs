@@ -17,6 +17,8 @@ namespace ZFramework.GAS.Unity
         public float[] levels = Array.Empty<float>();
         public SkillParameterValue Resolve(int level)
         {
+            SkillParameterValue.FromNumber(kind, defaultValue);
+            if (levels != null) foreach (var v in levels) SkillParameterValue.FromNumber(kind, v);
             float value = levels != null && levels.Length > 0 ? levels[Mathf.Clamp(level - 1, 0, levels.Length - 1)] : defaultValue;
             if (float.IsNaN(value) || float.IsInfinity(value)) throw new InvalidOperationException($"参数 {displayName} 的值不是有限数。");
             return SkillParameterValue.FromNumber(kind, value);
@@ -48,7 +50,7 @@ namespace ZFramework.GAS.Unity
         public float Resolve(EffectEvaluationContext context)
         {
             float number = string.IsNullOrEmpty(parameterId) ? value : context.Parameter(parameterId) * coefficient;
-            if (float.IsNaN(number) || float.IsInfinity(number)) throw new InvalidOperationException($"无效数值／参数 {parameterId}");
+            GasAssert.That(float.IsFinite(number), "无效数值参数。");
             return number;
         }
     }

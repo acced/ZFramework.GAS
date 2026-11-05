@@ -21,18 +21,11 @@ namespace ZFramework.GAS.Unity
         [SerializeReference, FlowBranch("取消")] public SkillAction[] onCancel = Array.Empty<SkillAction>();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
-            builder.RequireAbilityTask(Id);
+            builder.RequireAbilityTask(Id);builder.Number(timeout,float.Epsilon);
             var wait = kind; var duration = timeout; var tag = eventTag.Resolve(); var id = Id;
             var success = builder.Build(onSuccess); var timedOut = builder.Build(onTimeout); var cancelled = builder.BuildDetached(onCancel);
             if (wait == SkillWaitKind.GameplayEvent && !tag.IsValid) throw new InvalidOperationException("等待事件缺少有效标签。");
-            return Define("等待 · " + wait, (context, deferred) =>
-            {
-                SkillSpawn.Positive(duration.Resolve(context.Values), "等待时长");
-                if (wait == SkillWaitKind.Target && context.Services.TargetSelection == null) throw new InvalidOperationException("缺少目标选择服务。");
-                SkillActionBuildContext.Validate(success, context, deferred || wait == SkillWaitKind.Target);
-                SkillActionBuildContext.Validate(timedOut, context, deferred);
-                SkillActionBuildContext.Validate(cancelled, context, deferred);
-            }, context => context.Start(new SkillWaitTask(context, id, wait, duration.Resolve(context.Values), tag, success, timedOut, cancelled), false));
+            return Define("等待 · " + wait, context => context.Start(new SkillWaitTask(context, id, wait, duration.Resolve(context.Values), tag, success, timedOut, cancelled), false));
         }
     }
     internal sealed class SkillWaitTask : SkillActionTask
@@ -67,13 +60,13 @@ namespace ZFramework.GAS.Unity
             _remaining -= dt;
             if (_remaining > 0 && !_ready) return;
             var next = _ready || _kind == SkillWaitKind.Delay ? _success : _timeout;
-            Complete(); _result.Execute(next);
+            _result.RefreshAsyncTargets(); Complete(); _result.Execute(next);
         }
-        protected override void OnEnd(bool cancelled)
+        protected override void EndAction(bool cancelled)
         {
             if (_events != null) { _events.Received -= Receive; _events = null; }
             var request = _request; _request = null;
-            if (cancelled) Execution.Cleanup(Execution.Error == null ? _cancel : null, request, ActionId);
+            if (cancelled) Execution.Cleanup(_cancel, request);
             else request?.Dispose();
         }
     }

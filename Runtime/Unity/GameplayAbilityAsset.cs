@@ -27,20 +27,19 @@ namespace ZFramework.GAS.Unity
         public SkillClipOverrideSet clipOverrides;
         [SerializeReference] public SkillAction[] activationActions = Array.Empty<SkillAction>();
         public SkillParameterValues ResolveParameters(int level, SkillParameterOverride[] castOverrides = null)
+            => ResolveParameters(level, null, castOverrides);
+        internal SkillParameterValues ResolveParameters(int level, SkillParameterOverride[] grant, SkillParameterOverride[] cast)
         {
             var values = new Dictionary<string, SkillParameterValue>();
-            parameterSet?.AddTo(values, level);
-            foreach (var parameter in parameters)
-            {
-                if (parameter == null || string.IsNullOrEmpty(parameter.Id)) throw new InvalidOperationException("参数缺少 ID。");
-                if (values.ContainsKey(parameter.Id)) throw new InvalidOperationException("重复参数 ID: " + parameter.Id);
-                values.Add(parameter.Id, parameter.Resolve(level));
-            }
+            if (parameterSet != null) SkillParameterSetAsset.AddTo(values, parameterSet.parameters, level);
+            SkillParameterSetAsset.AddTo(values, parameters, level);
             SkillParameterSetAsset.Apply(values, parameterOverrides, level);
-            SkillParameterSetAsset.Apply(values, castOverrides, level);
-            return new SkillParameterValues(values);
+            SkillParameterSetAsset.Apply(values, grant, level);
+            SkillParameterSetAsset.Apply(values, cast, level);
+            return values.Count == 0 ? SkillParameterValues.Empty : new SkillParameterValues(values);
         }
-        public SkillActionDefinition[] BuildActions() => new SkillActionBuildContext(this).Build(activationActions);
+        [NonSerialized] private SkillActionDefinition[] _actions;
+        public SkillActionDefinition[] BuildActions() => _actions ??= new SkillActionBuildContext(this).Build(activationActions);
         [Header("标签")]
         [Tooltip("本能力的标识标签，供「取消带某标签的能力」匹配")]
         [SerializeField] private GameplayTag[] abilityTags = Array.Empty<GameplayTag>();
@@ -89,7 +88,7 @@ namespace ZFramework.GAS.Unity
             return definition;
         }
 
-        public void InvalidateDefinition() { _definition = null; DefinitionSource.InvalidateDependents(this); }
+        public void InvalidateDefinition() { _definition = null; _actions = null; DefinitionSource.InvalidateDependents(this); }
         private void OnValidate() => InvalidateDefinition();
     }
 }

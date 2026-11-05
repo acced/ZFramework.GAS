@@ -10,8 +10,11 @@ namespace ZFramework.GAS
         public readonly object Source;
         public readonly SkillParameterValue Payload;
         public readonly EffectEvaluationContext Context;
+        public readonly System.Numerics.Vector3? Position;
         public GameplayEvent(GameplayTag tag, object source, SkillParameterValue payload, EffectEvaluationContext context = null)
-        { Tag = tag; Source = source; Payload = payload; Context = context; }
+            : this(tag,source,payload,context,null) {}
+        public GameplayEvent(GameplayTag tag, object source, SkillParameterValue payload, EffectEvaluationContext context, System.Numerics.Vector3? position)
+        { Tag = tag; Source = source; Payload = payload; Context = context; Position = position; }
     }
 
     public sealed class GameplayEventChannel

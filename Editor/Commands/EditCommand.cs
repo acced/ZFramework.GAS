@@ -31,7 +31,7 @@ namespace ZFramework.GAS.Editor
             catch
             {
                 // Keep the authoring error as the primary exception, even when cleanup fails.
-                Cleanup(()=>ModuleFileUndo.RevertTransaction(group));
+                Cleanup(()=>Undo.RevertAllDownToGroup(group));
                 Cleanup(()=>document?.Notify(new ChangeSet(asset,true)));
                 throw;
             }

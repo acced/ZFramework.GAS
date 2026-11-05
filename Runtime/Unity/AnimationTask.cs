@@ -17,8 +17,8 @@ namespace ZFramework.GAS.Unity
         private static readonly bool[] NoRegions = Array.Empty<bool>();
 
         private readonly SkillAnimationDefinition _definition;
-        private readonly IAnimationDriver _driver;
-        private readonly AbilitySystemComponent _target;
+        private IAnimationDriver _driver;
+        private AbilitySystemComponent _target;
         private readonly Action<AnimationTask, AnimationMarker> _onMarker;
         private readonly Action<AnimationTask> _onFinished;
         private readonly bool[] _regionOpen;
@@ -28,7 +28,7 @@ namespace ZFramework.GAS.Unity
         private AbilitySourceIdentity _sourceIdentity;
         private readonly Boundary[] _boundaries;
         private int _nextBoundary;
-        private readonly float _timeScale;
+        private float _timeScale;
         private readonly struct Boundary
         {
             /// <summary>构造完成后是本次播放的实际秒数（已缩放并夹到 <see cref="Duration"/>）。</summary>
@@ -50,26 +50,7 @@ namespace ZFramework.GAS.Unity
 
 
 
-        /// <summary>
-        /// 构造即开播——与 <see cref="ProjectileTask"/> 在构造时定下起点同源，
-        /// 紧接着交给 <see cref="AbilitySystemComponent.StartTask"/>。
-        /// </summary>
-        /// <param name="target">
-        /// 固定目标。定义里存在「作用于固定目标」的效果标记点时必须给出。
-        /// </param>
-        /// <param name="durationOverride">
-        /// 大于 0 时把动画拉伸到该秒数（按攻速缩放攻击动作即用此参数）；
-        /// 小于等于 0 时用动画的自然时长。
-        /// </param>
-        /// <param name="onMarker">
-        /// 每个标记点到点时回调，用 <see cref="AnimationMarker.Key"/> 分辨是哪一下。
-        /// 效果之外的事（范围查询、生成投射物、播音效）在这里做。
-        /// </param>
-        /// <param name="onFinished">
-        /// 播完或被打断时回调（<see cref="GameplayAbilityTask.WasCancelled"/> 区分两者）。
-        /// 「动画播完则技能结束」是使用方的决定而非本任务的——收招后还有后摇的技能不该被替它结束掉，
-        /// 因此这里只报告，不代为调用 <see cref="AbilitySystemComponent.EndAbility"/>。
-        /// </param>
+        /// <summary>Start playback immediately, then attach the task to its active ability.</summary>
         public AnimationTask(
             SkillAnimationDefinition definition,
             IAnimationDriver driver,
@@ -80,24 +61,12 @@ namespace ZFramework.GAS.Unity
             TimelineTaskContext taskContext = null)
         {
             _definition = definition ?? throw new ArgumentNullException(nameof(definition));
-            _driver = driver ?? throw new ArgumentNullException(nameof(driver));
-
-            if (definition.RequiresTarget && target == null)
-            {
-                throw new ArgumentNullException(nameof(target),
-                    "The animation has a marker that applies an effect to a fixed target, but no target was given.");
-            }
-
-            _target = target;
             _onMarker = onMarker;
             _onFinished = onFinished;
             _regionOpen = definition.CueRegions.Length > 0 ? new bool[definition.CueRegions.Length] : NoRegions;
             _windowTagsAdded = new int[definition.TagWindows.Length];
-            _taskContext = taskContext?.Snapshot();
             _trackHandlers = new IRuntimeTrackHandler[definition.RuntimeTracks.Count]; _trackOpen = new bool[_trackHandlers.Length]; _trackDone = new bool[_trackHandlers.Length];
-            if (definition.TaskEvents.Length > 0 && taskContext == null)
-                throw new ArgumentNullException(nameof(taskContext), "Task events require host scene services.");
-            _boundaries = new Boundary[definition.Markers.Length + definition.CueRegions.Length * 2 + definition.TagWindows.Length * 2 + definition.TaskEvents.Length + _trackHandlers.Length * 2];
+            _boundaries = new Boundary[definition.Markers.Length + definition.CueRegions.Length * 2 + definition.TagWindows.Length * 2 + _trackHandlers.Length * 2];
             int b = 0;
             for (int i = 0; i < _trackHandlers.Length; i++)
             { _boundaries[b++] = new Boundary(definition.RuntimeTracks[i].Start, 6, i); _boundaries[b++] = new Boundary(definition.RuntimeTracks[i].End, 7, i); }
@@ -114,10 +83,21 @@ namespace ZFramework.GAS.Unity
                 _boundaries[b++] = new Boundary(r.End < 0 ? definition.Duration : r.End, 5, i);
             }
             for (int i = 0; i < definition.Markers.Length; i++) _boundaries[b++] = new Boundary(definition.Markers[i].Time, 2, i);
-            for (int i = 0; i < definition.TaskEvents.Length; i++) _boundaries[b++] = new Boundary(definition.TaskEvents[i].Time, 3, i);
             Array.Sort(_boundaries, static (a, c) =>
             { int order = a.Time.CompareTo(c.Time); if (order == 0) order = a.Kind.CompareTo(c.Kind); return order == 0 ? a.Index.CompareTo(c.Index) : order; });
 
+            Replay(driver,target,durationOverride,taskContext);
+        }
+
+        // SkillRunner leases one timeline per idle cast context. Detached work keeps its own context.
+        internal void Replay(IAnimationDriver driver,AbilitySystemComponent target,float durationOverride,TimelineTaskContext taskContext)
+        {
+            var definition=_definition;_driver=driver??throw new ArgumentNullException(nameof(driver));_target=target;
+            _cycleTime=0;_section=-1;_queuedSection=null;_nextBoundary=0;_jumpVersion++;
+            Array.Clear(_trackDone,0,_trackDone.Length);
+            if(taskContext==null)_taskContext=null;
+            else if(_taskContext==null)_taskContext=taskContext.Snapshot();
+            else {_taskContext.CopyFrom(taskContext);_taskContext.Execution=taskContext.Execution;}
             if(driver is IBoneWeightDriver bones) bones.SetNextBoneWeights(definition.BoneWeights);
             if (driver is ISkillLayerDriver layered) layered.ConfigureNextLayer(definition.Mask, definition.Additive, definition.LayerWeight);
             string playClip = SkillAnimator.ResolveClip(driver, definition.ClipName, taskContext?.Execution?.Asset?.clipOverrides);
@@ -129,7 +109,6 @@ namespace ZFramework.GAS.Unity
                 ? blending.Play(playClip, durationOverride, definition.Loop, definition.BlendIn)
                 : driver.Play(playClip, durationOverride, definition.Loop);
 
-            if(played>0)SkillAnimator.RecordExit(driver,definition.BlendOutSpec);
 
             // 驱动找不到片段时返回 0：表现缺失不应连带把判定一起丢掉，
             // 时间轴按调用方要求的时长（没有则按授权时长）照常推进。
@@ -147,12 +126,12 @@ namespace ZFramework.GAS.Unity
             for (int i = 0; i < _boundaries.Length; i++)
             {
                 Boundary authored = _boundaries[i];
-                _boundaries[i] = new Boundary(ToActual(authored.Time), authored.Kind, authored.Index, authored.Time);
+                _boundaries[i] = new Boundary(ToActual(authored.AuthoredTime), authored.Kind, authored.Index, authored.AuthoredTime);
             }
         }
 
         /// <summary>本次播放的实际时长（秒）。</summary>
-        public float Duration { get; }
+        public float Duration { get; private set; }
 
         /// <summary>本次任务实际持有的定义；资产在编辑器中修改后该实例仍然有效。</summary>
         public SkillAnimationDefinition Definition => _definition;
@@ -165,18 +144,22 @@ namespace ZFramework.GAS.Unity
         {
             _sourceIdentity = Ability.Owner.SourceIdentity;
             _effectValues = _taskContext?.Execution?.Values ?? Ability.EvaluationContext ?? new EffectEvaluationContext(Ability.Level);
-            bool configured = _trackHandlers.Length > 0 || _definition.TaskEvents.Length > 0;
-            foreach (var marker in _definition.Markers) configured |= marker.Actions.Count > 0;
-            if (configured && _taskContext?.Execution == null)
+            if (_taskContext?.Execution == null && NeedsContext())
             {
                 var execution = new SkillExecutionContext(DefinitionSource.Of(Ability.Definition) as GameplayAbilityAsset, Ability, _target, _effectValues, _taskContext);
                 _taskContext = execution.Services;
             }
+            _taskContext?.Execution?.RetainTask();
             if (_taskContext?.Execution!=null && _driver is ISkillRigService rig) _taskContext.Execution.Services.Rig??=rig;
             for (int i = 0; i < _trackHandlers.Length; i++) _trackHandlers[i] = _definition.RuntimeTracks[i].Create(_taskContext.Execution);
             if (_definition.Sections.Count > 0) JumpToSection(_definition.Sections[0].Id);
         }
 
+        private bool NeedsContext(){
+            if(_trackHandlers.Length>0)return true;
+            foreach(var marker in _definition.Markers)if(marker.Actions.Count>0)return true;
+            return false;
+        }
         public bool QueueSection(string id)
         {
             if (!IsActive || _section < 0 || FindSection(id) < 0) return false;
@@ -244,14 +227,10 @@ namespace ZFramework.GAS.Unity
 
         protected override void OnTick(float deltaTime)
         {
-            try
-            {
                 float scale = HitStopLease.Scale(Ability.Owner,_taskContext?.Time);
                 if (!(scale >= 0) || !float.IsFinite(scale)) throw new InvalidOperationException("局部动画速度必须是有限非负数。");
                 if (_driver is ISkillAnimationSpeed speed) speed.SetLocalScale(scale);
                 Tick(deltaTime * scale);
-            }
-            catch (Exception exception) { _taskContext?.Execution?.Fail(exception, _taskContext.Execution.CurrentActionId); throw; }
         }
         private void Tick(float deltaTime)
         {
@@ -342,55 +321,26 @@ namespace ZFramework.GAS.Unity
         private void CloseTimelineState(bool cancelled)
         {
             int version = _jumpVersion;
-            Exception error = null;
             for (int i = 0; version == _jumpVersion && i < _windowTagsAdded.Length; i++)
                 while (version == _jumpVersion && _windowTagsAdded[i] > 0)
-                { int tag = --_windowTagsAdded[i]; try { Ability.Owner.OwnedTags.RemoveTag(_definition.TagWindows[i].Tags[tag]); } catch (Exception ex) { error ??= ex; } }
+                    Ability.Owner.OwnedTags.RemoveTag(_definition.TagWindows[i].Tags[--_windowTagsAdded[i]]);
             for (int i = 0; version == _jumpVersion && i < _regionOpen.Length; i++) if (_regionOpen[i])
-            { _regionOpen[i] = false; try { DispatchCue(_definition.CueRegions[i].CueTag, GameplayCueEvent.Removed); } catch (Exception ex) { error ??= ex; } }
+            { _regionOpen[i] = false; DispatchCue(_definition.CueRegions[i].CueTag, GameplayCueEvent.Removed); }
             for (int i = 0; version == _jumpVersion && i < _trackHandlers.Length; i++) if (_trackOpen[i])
             {
                 _trackOpen[i] = false;
-                try { if (cancelled) _trackHandlers[i].Cancel(); else _trackHandlers[i].Exit(); } catch (Exception ex) { error ??= ex; }
+                if (cancelled) _trackHandlers[i].Cancel(); else _trackHandlers[i].Exit();
             }
-            if (error != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
         }
 
         protected override void OnEnd(bool cancelled)
         {
-            Exception error = null;
-            try { CloseTimelineState(cancelled); } catch (Exception ex) { error = ex; }
-            for (int i = 0; i < _windowTagsAdded.Length; i++)
-            {
-                while (_windowTagsAdded[i] > 0)
-                {
-                    int tag = --_windowTagsAdded[i];
-                    try { Ability.Owner.OwnedTags.RemoveTag(_definition.TagWindows[i].Tags[tag]); }
-                    catch (Exception ex) { error ??= ex; }
-                }
-            }
-            // 被打断时把已开的区间收尾，否则持续特效会永远挂着。
-            for (int i = 0; i < _regionOpen.Length; i++)
-            {
-                if (_regionOpen[i])
-                {
-                    _regionOpen[i] = false;
-                    try { DispatchCue(_definition.CueRegions[i].CueTag, GameplayCueEvent.Removed); }
-                    catch (Exception ex) { error ??= ex; }
-                }
-            }
-
-            try
-            {
-                if (_driver is IAdvancedBlendingDriver advanced) advanced.Stop(_definition.BlendOutSpec);
-                else if (_driver is IBlendingAnimationDriver blending) blending.Stop(_definition.BlendOut);
-                else _driver.Stop();
-            }
-            catch (Exception ex) { error ??= ex; }
-
-            // 放在最后：回调里多半要结束能力，届时区间已收尾、动画已停。
-            try { _onFinished?.Invoke(this); } catch (Exception ex) { error ??= ex; }
-            if (error != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
+            CloseTimelineState(cancelled);
+            if (_driver is IAdvancedBlendingDriver advanced) advanced.Stop(_definition.BlendOutSpec);
+            else if (_driver is IBlendingAnimationDriver blending) blending.Stop(_definition.BlendOut);
+            else _driver.Stop();
+            _taskContext?.Execution?.ReleaseTask();
+            _onFinished?.Invoke(this);
         }
 
         // Merge boundaries once at construction. Large ticks still observe the correct window state
@@ -426,14 +376,6 @@ namespace ZFramework.GAS.Unity
                         var marker = _definition.Markers[b.Index];
                         SkillActionDebug.Marker(_taskContext?.Execution,marker);
                         if (!IsActive || version != _jumpVersion) return false;
-                        if (marker.Effect != null)
-                        {
-                            var owner = Ability.Owner;
-                            var receiver = marker.Target == AnimationMarkerTarget.Self ? owner : _target;
-                            if (_taskContext?.Execution != null) _taskContext.Execution.ExecuteAction(marker.LegacyAction);
-                            else receiver.Effects.Apply(new GameplayEffectSpec(marker.Effect, owner.Attributes, _sourceIdentity, context: _effectValues));
-                            if (!IsActive || version != _jumpVersion) return false;
-                        }
                         if (marker.Actions != null && marker.Actions.Count > 0)
                         {
                             var execution = _taskContext?.Execution ?? throw new InvalidOperationException("Configured actions require SkillRunner execution context.");
@@ -441,14 +383,6 @@ namespace ZFramework.GAS.Unity
                             if (!IsActive || version != _jumpVersion) return false;
                         }
                         _onMarker?.Invoke(this, marker);
-                        break;
-                    case 3:
-                        var taskEvent = _definition.TaskEvents[b.Index];
-                        if (taskEvent.Action != null && _taskContext?.Execution != null)
-                        {
-                            _taskContext.Execution.ExecuteAction(taskEvent.Action);
-                        }
-                        else taskEvent.Spawner.Spawn(Ability, _taskContext);
                         break;
                     case 4:
                         while (_windowTagsAdded[b.Index] > 0)

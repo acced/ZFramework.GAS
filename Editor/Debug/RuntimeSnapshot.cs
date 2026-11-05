@@ -19,8 +19,6 @@ namespace ZFramework.GAS.Editor
         public IReadOnlyList<Attribute> Attributes { get; }
         public IReadOnlyList<Effect> Effects { get; }
         public IReadOnlyList<ActionState> Actions { get; }
-        public IReadOnlyList<AbilityDiagnostic> Diagnostics { get; }
-        public long DroppedDiagnosticCount { get; }
 
         public sealed class ActionState
         {
@@ -39,7 +37,6 @@ namespace ZFramework.GAS.Editor
             public readonly float CooldownRemaining, CooldownDuration;
             public readonly int Level;
             public readonly AbilityActivationCheck Failure;
-            public readonly string CleanupError, CleanupActionId;
             public readonly IReadOnlyList<KeyValuePair<string, SkillParameterValue>> Parameters;
             internal Ability(GameplayAbilitySpec spec, int index)
             {
@@ -48,8 +45,7 @@ namespace ZFramework.GAS.Editor
                 Active = spec.IsActive; OnCooldown = spec.IsOnCooldown;
                 TagGatePassed = spec.Definition.ActivationRequirements.Matches(spec.Owner.OwnedTags);
                 Level = spec.IsActive ? spec.EvaluationContext?.Level ?? spec.Level : spec.Level; CooldownRemaining = spec.CooldownRemaining;
-                Failure = spec.LastExecutionFailure.Result != AbilityActivationResult.Activated ? spec.LastExecutionFailure : spec.LastActivationCheck;
-                CleanupError = spec.LastCleanupError; CleanupActionId = spec.LastCleanupActionId;
+                Failure = spec.LastActivationCheck;
                 var parameters = new List<KeyValuePair<string, SkillParameterValue>>();
                 spec.EvaluationContext?.Parameters.CopyTo(parameters); Parameters = parameters.AsReadOnly();
                 CooldownDuration = spec.CooldownDuration;
@@ -125,10 +121,6 @@ namespace ZFramework.GAS.Editor
         private RuntimeSnapshot(AbilitySystemComponent owner, Func<object, string> unitName, RuntimeSnapshot previous, double capturedAt)
         {
             Owner = owner; UnitName = unitName?.Invoke(owner) ?? "未命名单位"; CapturedAt = capturedAt;
-            DroppedDiagnosticCount = owner.DroppedDiagnosticCount;
-            var diagnostics = new AbilityDiagnostic[owner.DiagnosticCount];
-            for (int i = 0; i < diagnostics.Length; i++) diagnostics[i] = owner.GetDiagnostic(i);
-            Diagnostics = Array.AsReadOnly(diagnostics);
             var abilities = new List<Ability>(owner.GrantedAbilityCount);
             for (int i = 0; i < owner.GrantedAbilityCount; i++) abilities.Add(new Ability(owner.GetGrantedAbility(i), i));
             Abilities = abilities.AsReadOnly();

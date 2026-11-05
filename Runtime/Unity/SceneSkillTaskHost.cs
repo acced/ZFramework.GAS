@@ -29,7 +29,14 @@ namespace ZFramework.GAS.Unity
         private void FixedUpdate()
         {
             try { Tasks.Tick(Time.fixedDeltaTime); }
-            catch (Exception exception) { Debug.LogException(exception, this); }
+            catch (Exception exception) {
+                Debug.LogException(exception, this);
+                var task = Tasks.CurrentTask;
+                if (task != null) {
+                    Tasks.Cancel(task);
+                    if (task.Ability?.ActivationVersion == task.ActivationVersion) task.Ability.Owner.EndAbility(task.Ability);
+                }
+            }
         }
         private void OnDisable()
         {

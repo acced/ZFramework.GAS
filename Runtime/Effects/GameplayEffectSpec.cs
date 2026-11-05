@@ -3,9 +3,6 @@ using System.Collections.Generic;
 
 namespace ZFramework.GAS
 {
-    // Only preflight translates a project calculation exception into a configuration diagnostic.
-    internal sealed class EffectCalculationValidationException : InvalidOperationException
-    { internal EffectCalculationValidationException(Exception cause) : base(cause.Message, cause) { } }
     /// <summary>
     /// 效果**规格**：一次具体施加的意图 = 定义 + 来源 + 调用方提供的数值。
     /// 对应 UE 的 <c>FGameplayEffectSpec</c>。本身不含运行时状态，可按值传递。
@@ -56,33 +53,18 @@ namespace ZFramework.GAS
             Context = source.Context; SetByCallerValues = source.SetByCallerValues; _callerFrozen = source._callerFrozen;
         }
         internal GameplayEffectSpec ForChild(GameplayEffectDefinition definition) => new GameplayEffectSpec(this, definition);
-        /// <summary>Resolve the entire configured effect tree without publishing effects or changing attributes.
-        /// Includes deferred children: a missing parameter is a configuration error even before its trigger fires.</summary>
-        public void Validate(AttributeSet target) => Validate(target, 0);
-        private void Validate(AttributeSet target, int depth)
-        {
-            if (depth > 8) throw new InvalidOperationException("Conditional effect chain exceeded depth 8; check for a cycle.");
-            foreach (var modifier in Definition.Modifiers) ResolveForValidation(modifier.Magnitude, target);
-            if (Definition.DurationPolicy != EffectDurationPolicy.Instant) { ResolveDuration(target, true); ResolvePeriod(target, true); }
-            foreach (var child in Definition.ConditionalEffects) ForChild(child.Effect).Validate(target, depth + 1);
-        }
-        public float ResolvePeriod(AttributeSet target) => ResolvePeriod(target, false);
-        private float ResolvePeriod(AttributeSet target, bool validating)
+        public float ResolvePeriod(AttributeSet target)
         {
             var d = Definition;
-            return Math.Max(0, Finite(d.PeriodAttribute.HasValue ? SourceValue(d.PeriodAttribute.Value)
-                : d.PeriodMagnitude.HasValue ? Resolve(d.PeriodMagnitude.Value, target, validating) : d.Period, "period"));
+            return Math.Max(0, d.PeriodAttribute.HasValue ? SourceValue(d.PeriodAttribute.Value)
+                : d.PeriodMagnitude.HasValue ? Resolve(d.PeriodMagnitude.Value, target) : d.Period);
         }
-        public float ResolveDuration(AttributeSet target) => ResolveDuration(target, false);
-        private float ResolveDuration(AttributeSet target, bool validating)
+        public float ResolveDuration(AttributeSet target)
         {
             var d = Definition;
-            if (d.DurationAttribute.HasValue)
-            { float value = Finite(SourceValue(d.DurationAttribute.Value), "duration attribute"); if (value > 0) return value; }
-            return Finite(d.DurationMagnitude.HasValue ? Resolve(d.DurationMagnitude.Value, target, validating) : d.Duration, "duration");
+            if (d.DurationAttribute.HasValue) { float value = SourceValue(d.DurationAttribute.Value); if (value > 0) return value; }
+            return d.DurationMagnitude.HasValue ? Resolve(d.DurationMagnitude.Value, target) : d.Duration;
         }
-        internal static float Finite(float value, string name)
-        { if (float.IsNaN(value) || float.IsInfinity(value)) throw new InvalidOperationException("Non-finite effect " + name); return value; }
 
         public float SourceValue(AttributeId id) => Context?.SourceValue(id, SourceAttributes) ?? SourceAttributes?.GetCurrent(id) ?? 0;
         public float Parameter(string id) => Context?.Parameter(id)
@@ -93,15 +75,7 @@ namespace ZFramework.GAS
         /// 静默回落会让配置错误伪装成「伤害为零」这类难以定位的现象。
         /// </summary>
         public float Resolve(in EffectMagnitude magnitude, AttributeSet targetAttributes)
-            => Finite(ResolveValue(magnitude, targetAttributes), "magnitude");
-        internal float ResolveForValidation(in EffectMagnitude magnitude, AttributeSet target)
-            => Resolve(magnitude, target, true);
-        private float Resolve(in EffectMagnitude magnitude, AttributeSet target, bool validating)
-        {
-            if (!validating || magnitude.Kind != MagnitudeKind.Calculation) return Resolve(magnitude, target);
-            try { return Resolve(magnitude, target); }
-            catch (Exception ex) { throw new EffectCalculationValidationException(ex); }
-        }
+            => ResolveValue(magnitude, targetAttributes);
         private float ResolveValue(in EffectMagnitude magnitude, AttributeSet targetAttributes)
         {
             switch (magnitude.Kind)

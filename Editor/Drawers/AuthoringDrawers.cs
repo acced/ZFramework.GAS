@@ -105,7 +105,7 @@ namespace ZFramework.GAS.Editor
         private static string[] Fields(int kind) => kind switch
         {
             0 => new[] { "constant" }, 2 => new[] { "callerKey" }, 3 => new[] { "parameterId", "coefficient", "constant" },
-            4 => new[] { "levels" }, 5 => new[] { "captureAttributeId", "targetAttributeId", "parameterId", "coefficient", "targetCoefficient", "constant", "minimum", "maximum", "resultScale" },
+            4 => new[] { "levels" }, 5 => new[] { "captureAttributeId", "targetAttributeId", "parameterId", "coefficient", "targetCoefficient", "constant", "minimum", "maximum", "resultScale", "multiplierParameterId" },
             _ => new[] { "captureFrom", "captureAttributeId", "coefficient", "constant" }
         };
         public override float GetPropertyHeight(SerializedProperty p, GUIContent label)
@@ -140,7 +140,7 @@ namespace ZFramework.GAS.Editor
             { var child = p.FindPropertyRelative(field); rect.height = EditorGUI.GetPropertyHeight(child); EditorGUI.PropertyField(rect, child, true); rect.y += rect.height + 2; }
         }
     }
-    [CustomPropertyDrawer(typeof(AnimationBackend), true), CustomPropertyDrawer(typeof(TaskSpawner), true), CustomPropertyDrawer(typeof(SkillAction), true), CustomPropertyDrawer(typeof(SkillRuntimeTrack), true)]
+    [CustomPropertyDrawer(typeof(AnimationBackend), true), CustomPropertyDrawer(typeof(SkillAction), true), CustomPropertyDrawer(typeof(SkillRuntimeTrack), true)]
     public sealed class StrategyDrawer : PropertyDrawer
     {
         public override VisualElement CreatePropertyGUI(SerializedProperty property)
@@ -164,7 +164,7 @@ namespace ZFramework.GAS.Editor
                     tools.Add(new Button(() => Change(a => { if (itemIndex + 1 < a.arraySize) a.MoveArrayElement(itemIndex, itemIndex + 1); })) { text = "↓" });
                     tools.Add(new Button(() => Change(a =>
                     {
-                        try{SkillActionClipboard.Duplicate(a,itemIndex+1,property.managedReferenceValue as SkillAction,ActionEffectOwnership.ConfirmCopy);}
+                        try{SkillActionClipboard.Duplicate(a,itemIndex+1,property.managedReferenceValue as SkillAction);}
                         catch(OperationCanceledException){}
                         catch(InvalidOperationException error){root.Q<HelpBox>("action-error")?.RemoveFromHierarchy();
                             root.Add(new HelpBox(error.Message,HelpBoxMessageType.Error){name="action-error"});}

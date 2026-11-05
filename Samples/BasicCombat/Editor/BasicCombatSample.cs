@@ -82,21 +82,25 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var dummyPrefab = SavePrefab(dummy, folder + "/Prefabs/TrainingDummy.prefab");
 
             var bolt = SavePrefab(SampleVfx.BuildProjectile(art), folder + "/Prefabs/ArcaneBolt.prefab");
+            var linkGo=new GameObject("LightningLink");var line=linkGo.AddComponent<LineRenderer>();
+            line.sharedMaterial=art.Additive("Vfx_LightningLink",null,"#91eaff");line.startWidth=.075f;line.endWidth=.035f;
+            line.numCornerVertices=2;line.numCapVertices=2;
+            var lightning=SavePrefab(linkGo,folder+"/Prefabs/LightningLink.prefab");
             var ghost = Object.Instantiate(knightPrefab); ghost.name = "Guardian";
             foreach (var visual in ghost.GetComponentsInChildren<CueVisual>(true)) visual.gameObject.SetActive(false);
             foreach (var behaviour in ghost.GetComponentsInChildren<MonoBehaviour>(true)) Object.DestroyImmediate(behaviour);
             var ghostMaterial = art.Additive("Vfx_Guardian", null, "#9e61ff");
             foreach (var renderer in ghost.GetComponentsInChildren<MeshRenderer>()) renderer.sharedMaterial = ghostMaterial;
             var guardian = SavePrefab(ghost, folder + "/Prefabs/Guardian.prefab");
-            var skills = SampleSkills.Create(folder + "/Skills", bolt, guardian);
+            var skills = SampleSkills.Create(folder + "/Skills", bolt, guardian,lightning,out var bounce);
             var abilitySet = ScriptableObject.CreateInstance<AbilitySetAsset>();
-            abilitySet.abilities = skills.Select(skill => new AbilitySetAsset.Entry { skill = skill }).ToArray();
+            abilitySet.abilities = skills.Append(bounce).Select(skill => new AbilitySetAsset.Entry { skill = skill }).ToArray();
             AssetDatabase.CreateAsset(abilitySet, folder + "/BasicCombatAbilities.asset");
             AssetDatabase.SaveAssets();
             // 建场景可能卸载未被引用的资产，写布局又会重新导入技能：此后一律按路径重新加载。
-            var paths = skills.Select(AssetDatabase.GetAssetPath).Concat(new[] { folder + "/Skills/Shared/重斩变体.asset" }).ToArray();
+            var paths = skills.Append(bounce).Select(AssetDatabase.GetAssetPath).Concat(new[] { folder + "/Skills/Shared/重斩变体.asset" }).ToArray();
             string knightPath = AssetDatabase.GetAssetPath(knightPrefab);
-            SceneBuilder.Build(scenePath, art, palette, knightPrefab, dummyPrefab, skills, replacementScene);
+            SceneBuilder.Build(scenePath, art, palette, knightPrefab, dummyPrefab, skills,bounce,replacementScene);
             knightPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(knightPath);
             // 预览角色记在技能的编辑器布局里，打开技能即可看到骑士。
             foreach (var path in paths)

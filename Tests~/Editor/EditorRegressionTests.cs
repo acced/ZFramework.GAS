@@ -95,9 +95,9 @@ namespace ZFramework.GAS.Editor.Tests
             string first = TimelineCommands.Add(_doc, track, .2f); string second = TimelineCommands.Add(_doc, track, .7f);
             Assert.IsTrue(PortRules.Attach(_doc, animation, new PortId(PortKind.Marker, first), effect));
             EditCommand.Run(_doc, "重新排序", animation, so => so.FindProperty("markers").MoveArrayElement(0, 1), true);
-            using (var so = new SerializedObject(animation)) Assert.AreEqual(effect, TimelineCommands.Find(so, "markers", first).FindPropertyRelative("effect").objectReferenceValue);
-            Assert.AreEqual(first, PortRules.Links(animation).Single().Port.ElementId);
-            Undo.PerformUndo(); Assert.AreEqual(first, PortRules.Links(animation).Single().Port.ElementId); Assert.AreNotEqual(first, second);
+            using (var so = new SerializedObject(animation)) Assert.AreEqual(effect, ((ApplyEffectAction)TimelineCommands.Find(so, "markers", first).FindPropertyRelative("actions").GetArrayElementAtIndex(0).managedReferenceValue).effect);
+            Assert.AreSame(effect, PortRules.Links(animation).Single().Child);
+            Undo.PerformUndo(); Assert.AreSame(effect, PortRules.Links(animation).Single().Child); Assert.AreNotEqual(first, second);
         }
         [Test]
         public void NewElementDoesNotCopyPreviousPayload()
@@ -105,7 +105,7 @@ namespace ZFramework.GAS.Editor.Tests
             var animation = Animation(); var effect = Effect(); string first = TimelineCommands.Add(_doc, new EventTrack(), .2f, effect);
             string second = TimelineCommands.Add(_doc, new EventTrack(), .4f);
             using var so = new SerializedObject(animation);
-            Assert.IsNull(TimelineCommands.Find(so, "markers", second).FindPropertyRelative("effect").objectReferenceValue); Assert.AreNotEqual(first, second);
+            Assert.AreEqual(0, TimelineCommands.Find(so, "markers", second).FindPropertyRelative("actions").arraySize); Assert.AreNotEqual(first, second);
         }
         [Test]
         public void StableIdAssignmentIsIdempotent()
@@ -404,6 +404,12 @@ namespace ZFramework.GAS.Editor.Tests
             var window = SkillEditorWindow.Open(); window.Show(_ability);
             for (int i = 0; i < 5; i++) yield return null;
             var library = window.rootVisualElement.Q<LibraryPanel>();
+            Foldout ParametersOutline() => library.Query<Foldout>().ToList().Single(f => f.text == "参数 · SetByCaller");
+            var outline = ParametersOutline(); outline.value = false;
+            library.Search("Third"); library.Search("");
+            Assert.AreSame(outline, ParametersOutline(), "Filtering the skill library must not rebuild the current skill's outline.");
+            Assert.IsFalse(outline.value);
+            yield return null; // The filtered asset rows need a layout pass before pointer coordinates are valid.
             void Click(Button button)
             {
                 var point = button.worldBound.center;
@@ -703,6 +709,21 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.Throws<ArgumentException>(() => _ = _ability.Definition);
             GrantTag(cooldown); _ability.InvalidateDefinition(); _doc.Notify(new ChangeSet(cooldown)); validation.ValidateNow(true);
             Assert.IsFalse(validation.Issues.Any(i => i.Id == "GAS002")); Assert.IsNotNull(_ability.Definition);
+        }
+        [Test] public void TimelineBranchChecksTheCallingSkillsParameterType()
+        {
+            var p = new SkillParameter { kind = SkillParameterKind.Float };
+            _ability.parameters = new[] { p }; var animation = Animation();
+            Edit(animation, so => {
+                var markers = so.FindProperty("markers"); markers.arraySize = 1;
+                var actions = markers.GetArrayElementAtIndex(0).FindPropertyRelative("actions"); actions.arraySize = 1;
+                actions.GetArrayElementAtIndex(0).managedReferenceValue = new ConditionalAction { booleanParameterId = p.Id };
+            });
+            var issues = new System.Collections.Generic.List<Issue>(); var rule = new SkillConfigurationRule();
+            rule.Validate(new ValidationContext(_doc), animation, issues);
+            Assert.IsTrue(issues.Any(i => i.PropertyPath.EndsWith(".booleanParameterId") && i.Message.Contains("Bool")));
+            p.kind = SkillParameterKind.Bool; issues.Clear(); rule.Validate(new ValidationContext(_doc), animation, issues);
+            Assert.IsFalse(issues.Any(i => i.PropertyPath.EndsWith(".booleanParameterId")));
         }
         [Test]
         public void MecanimWarnsForRecastAndOnlyForAJumpThatCanOccurDuringEntryBlend()

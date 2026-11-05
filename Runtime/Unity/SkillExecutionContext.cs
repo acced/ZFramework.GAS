@@ -11,51 +11,76 @@ namespace ZFramework.GAS.Unity
         private int _targetGeneration;
         private readonly AbilitySystemComponent _source;
         private AbilitySystemComponent _target;
-        private readonly Stack<TargetQueryBuffer> _buffers = new();
-        private readonly List<(GameplayTaskHost host, GameplayAbilityTask task)> _detached = new();
+        private readonly Stack<TargetQueryBuffer> _buffers;
+        private readonly TargetSearcher _searcher;
+
         private Vector3 _position, _forward;
-        private sealed class CastState { public int Version; public string Error; }
-        private readonly CastState _state = new();
+        private sealed class CastState { public int Version, Tasks; public Dictionary<string,HashSet<object>> Records; }
+        private readonly CastState _state;
         private readonly bool _independent, _cleanup;
-        private string _moduleCallId, _modulePath;
-        public string NavigationId(string actionId) => _moduleCallId ?? actionId;
-        private sealed class ModuleCache
-        {
-            public EffectEvaluationContext Values;
-            public string Path;
-            public readonly Stack<SkillExecutionContext> Idle = new();
+        internal bool Executing;
+        internal bool Reusable => !Executing && _state.Tasks == 0;
+        internal void RetainTask() => _state.Tasks++;
+        internal void ReleaseTask() => _state.Tasks--;
+        internal TargetSequenceFrame Sequence {get;set;}
+        public Vector3? HitPoint {get;internal set;}
+        internal Vector3? AimOffset {get;private set;}
+        internal HashSet<object> HitRecord(string key){
+            if(string.IsNullOrEmpty(key))return new HashSet<object>();
+            _state.Records??=new();if(!_state.Records.TryGetValue(key,out var record))_state.Records.Add(key,record=new());
+            return record;
         }
-        private readonly Dictionary<object, ModuleCache> _modules = new();
-        internal SkillExecutionContext ModuleScope(object key, Func<SkillExecutionContext, SkillParameterValues> bind, string callId, string moduleName)
-        {
-            if (!_modules.TryGetValue(key, out var cache))
-                _modules.Add(key, cache = new ModuleCache { Values = Values.WithParameters(bind(this)),
-                    Path = (_modulePath == null ? "" : _modulePath + " → ") + moduleName + " [" + callId + "]" });
-            var scope = cache.Idle.Count > 0 ? cache.Idle.Pop() : new SkillExecutionContext(this, Target, cache.Values);
-            scope._moduleCallId = NavigationId(callId);
-            scope._modulePath = cache.Path;
-            // Only parameter bindings are frozen. A leased synchronous frame gets fresh aim/event data.
-            scope.Services.CopyFrom(Services); scope.Event = Event; scope._target = _target; scope._targetGeneration = _targetGeneration;
-            scope._position = Position; scope._forward = Forward;
-            return scope;
+        internal Vector3 OriginAt(SkillSpawnPosition origin){
+            return origin switch{
+                SkillSpawnPosition.Caster=>Position,
+                SkillSpawnPosition.Target=>Target!=null && Services.Target!=null?Services.Target.position:throw new InvalidOperationException("缺少当前目标。"),
+                SkillSpawnPosition.TargetPoint=>Services.RequireTargetPosition(),
+                SkillSpawnPosition.HitPoint=>HitPoint??throw new InvalidOperationException("缺少命中点。"),
+                SkillSpawnPosition.EventPosition=>Event?.Position is { } p && float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z)?new Vector3(p.X,p.Y,p.Z):throw new InvalidOperationException("事件没有有效位置。"),
+                SkillSpawnPosition.LaunchPoint=>Source!=null && Services.LaunchPoint!=null?Services.LaunchPoint.position:Position,
+                _=>throw new InvalidOperationException("未知原点。")
+            };
         }
-        internal void ReleaseModule(object key, SkillExecutionContext scope) => _modules[key].Idle.Push(scope);
+        // Values are immutable on this parent. A jump's module frames die with the jump;
+        // a periodic occupant or a reusable cast can keep its warmed frames.
+        private Dictionary<ModuleDefinition, SkillExecutionContext> _modules;
+        internal void ExecuteModule(ModuleDefinition module)
+        {
+            _modules ??= new Dictionary<ModuleDefinition, SkillExecutionContext>();
+            if (!_modules.TryGetValue(module, out var scope) || scope == null)
+                scope = WithParameters(module.Resolve(Values));
+            else
+            {
+                scope.Services.CopyFrom(Services); scope.Source = Source; scope.Event = Event;
+                scope._target = _target; scope._targetGeneration = _targetGeneration;
+                scope._position = Position; scope._forward = Forward; scope.Sequence = Sequence;
+                scope.HitPoint = HitPoint; scope.AimOffset = AimOffset;
+            }
+            _modules[module] = null; // Reentrant calls need their own active frame.
+#if UNITY_EDITOR
+            scope.EditorCallSiteId = EditorCallSiteId ?? (module.IsExternalCall ? module.Id : null);
+#endif
+            try { scope.Execute(module.Actions); Status = scope.Status; }
+            finally { _modules[module] = scope; }
+        }
         public GameplayAbilityAsset Asset { get; }
         public GameplayAbilitySpec Ability { get; }
-        public AbilitySystemComponent Source => _source.Generation == _sourceGeneration ? _source : null;
-        public AbilitySystemComponent Target => _target != null && _target.Generation == _targetGeneration ? _target : null;
+        public AbilitySystemComponent Source { get; private set; }
+        public AbilitySystemComponent Target => _target;
         public EffectEvaluationContext Values { get; }
         public GameplayEvent? Event { get; private set; }
         public TimelineTaskContext Services { get; }
+#if UNITY_EDITOR
+        // Actual outer call, including continuations that outlive the synchronous action stack.
+        public string EditorCallSiteId { get; private set; }
+#endif
         public string CurrentActionId { get; internal set; }
-        private string _status = "就绪";
-        public string Status { get => Error != null ? (_cleanup ? "取消清理失败" : "执行失败") : _status; internal set => _status = value; }
-        public string Error => _state.Error;
+        public string Status { get; internal set; } = "就绪";
         public bool IsCastActive => Source != null && Ability.IsActive && Ability.ActivationVersion == _state.Version;
-        internal bool CanContinue => Error == null && (_independent || _cleanup || IsCastActive);
+        internal bool CanContinue => (_independent || _cleanup || IsCastActive);
         internal void BindActivation() => _state.Version = Ability.ActivationVersion;
         public int Version => _state.Version;
-        private readonly Dictionary<string, float> _channels = new();
+        private readonly Dictionary<string, float> _channels;
         public IReadOnlyDictionary<string, float> Channels => _channels;
         public void SetChannel(string id, float value) => _channels[id] = value;
         public void RemoveChannel(string id) => _channels.Remove(id);
@@ -67,33 +92,11 @@ namespace ZFramework.GAS.Unity
         public SkillExecutionContext(GameplayAbilityAsset asset, GameplayAbilitySpec ability, AbilitySystemComponent target,
             EffectEvaluationContext values, TimelineTaskContext services)
         {
+            _buffers = new(); _state = new CastState { Version = ability.ActivationVersion }; _channels = new();
             Asset = asset; Ability = ability; _source = ability.Owner; _sourceGeneration = _source.Generation;
-            _target = target; _targetGeneration = target?.Generation ?? 0; Values = values;
-            Services = services?.Snapshot() ?? new TimelineTaskContext();
-            if (!Services.HasTargetPosition && Services.Target != null) Services.TargetPosition = Services.Target.position;
-            Services.Searcher ??= new TargetSearcher(256);
-            Services.Objects ??= Services.RentVisual != null && Services.ReturnVisual != null
-                ? new LegacyVisualObjects(Services.RentVisual, Services.ReturnVisual) : InstantiateSkillObjectService.Instance;
-            Services.Execution = this;
-            if (!Services.Scene.IsValid() && Services.Origin != null) Services.Scene = Services.Origin.gameObject.scene;
-            _position = Services.Origin != null ? Services.Origin.position : Vector3.zero;
-            _forward = Services.Origin != null ? Services.Origin.forward : Vector3.forward;
-            SourceIdentity = ability.Owner.SourceIdentity;
-            _state.Version = ability.ActivationVersion;
-            if (Services.TargetFilter is ITargetFilterSnapshot snapshot)
-            { Services.TargetFilter = snapshot.Capture(_source); Services.FilterHasSnapshot = true; }
-        }
-        private sealed class LegacyVisualObjects : ISkillObjectService
-        {
-            private readonly Func<GameObject, Transform> _rent;
-            private readonly Action<Transform> _release;
-            public LegacyVisualObjects(Func<GameObject, Transform> rent, Action<Transform> release) { _rent = rent; _release = release; }
-            public GameObject Spawn(GameObject prefab, Vector3 position, Quaternion rotation, Transform parent)
-            {
-                var visual = _rent(prefab); if (visual == null) return null;
-                visual.SetParent(parent, true); visual.SetPositionAndRotation(position, rotation); return visual.gameObject;
-            }
-            public void Release(GameObject instance) { if (instance != null) _release(instance.transform); }
+            SourceIdentity = _source.SourceIdentity; Values = values; Services = new TimelineTaskContext();
+            _searcher = services?.Searcher ?? new TargetSearcher(256);
+            Reset(target, services);
         }
         internal bool Allows(TargetQueryDefinition query, AbilitySystemComponent target)
         {
@@ -105,40 +108,60 @@ namespace ZFramework.GAS.Unity
         private SkillExecutionContext(SkillExecutionContext parent, AbilitySystemComponent target,
             EffectEvaluationContext values, bool independent = false, bool cleanup = false)
         {
-            Asset = parent.Asset; Ability = parent.Ability; _source = parent._source; _sourceGeneration = parent._sourceGeneration;
+            Asset = parent.Asset; Ability = parent.Ability; Source = parent.Source; _source = parent._source; _sourceGeneration = parent._sourceGeneration;
             _target = target; _targetGeneration = target?.Generation ?? 0; Values = values ?? parent.Values;
             Services = parent.Services.Snapshot(); Services.Execution = this;
             _position = parent.Position; _forward = parent.Forward; SourceIdentity = parent.SourceIdentity;
-            _detached = cleanup ? new() : parent._detached; _buffers = parent._buffers;
+            _buffers = parent._buffers; _searcher = parent._searcher;
             _state = cleanup ? new CastState { Version = parent._state.Version } : parent._state;
             _independent = independent || parent._independent; _cleanup = cleanup || parent._cleanup;
             _channels = parent._channels;
-            Event = parent.Event;
-            _moduleCallId = parent._moduleCallId; _modulePath = parent._modulePath;
+#if UNITY_EDITOR
+            EditorCallSiteId = parent.EditorCallSiteId;
+#endif
+            Event = parent.Event; Sequence=parent.Sequence; HitPoint=parent.HitPoint; AimOffset=parent.AimOffset;
         }
         public SkillExecutionContext WithTarget(AbilitySystemComponent target, Transform transform = null)
         {
             var scope = new SkillExecutionContext(this, target, null);
-            scope.Services.RebindTarget(transform); return scope;
+            scope.Services.RebindTarget(transform); scope.AimOffset=null; return scope;
+        }
+        internal SkillExecutionContext Selected(AbilitySystemComponent target, Transform t, Vector3 point){
+            var scope=WithTarget(target,t);scope.Services.TargetPosition=point;
+            scope.AimOffset=t!=null?point-t.position:Vector3.zero;return scope;
         }
         public SkillExecutionContext WithParameters(SkillParameterValues parameters)
             => new SkillExecutionContext(this, Target, Values.WithParameters(parameters));
         public SkillExecutionContext WithEvent(GameplayEvent message)
         { var result = new SkillExecutionContext(this, Target, null); result.Event = message; return result; }
-        internal SkillExecutionContext ForTask() => new SkillExecutionContext(this, Target, null);
+        internal SkillExecutionContext ForTask()
+            => new SkillExecutionContext(this, Target, Values);
         internal SkillExecutionContext Independent() => new SkillExecutionContext(this, Target, null, independent: true);
-        internal void Cleanup(IReadOnlyList<SkillActionDefinition> actions, IDisposable request, string actionId)
+        // Generation checks are made at the asynchronous resume boundary.
+        internal void RefreshAsyncTargets()
         {
-            var scope = new SkillExecutionContext(this, Target, null, cleanup: true);
-            try { request?.Dispose(); }
-            catch (Exception exception) { scope.Fail(exception, actionId); }
-            // Disposal failure must not prevent the authored cleanup from being attempted.
-            if (scope.Error != null) scope = new SkillExecutionContext(this, Target, null, cleanup: true);
-            try { scope.Execute(actions); }
-            catch (Exception exception) { scope.Fail(exception, scope.CurrentActionId ?? actionId); }
+            if (_source.Generation != _sourceGeneration) { Source = null; Services.Origin = null; Services.LaunchPoint = null; }
+            if (_target != null && _target.Generation != _targetGeneration) { _target = null; Services.Target = null; }
+        }
+        private static readonly TimelineTaskContext EmptyServices = new();
+        internal void Reset(AbilitySystemComponent target, TimelineTaskContext services)
+        {
+            _target=target;_targetGeneration=target?.Generation??0;Source=_source;CurrentActionId=null;Status="就绪";
+            Services.CopyFrom(services ?? EmptyServices);
+            Services.Execution=this;Services.Searcher??=_searcher;Services.Objects??=InstantiateSkillObjectService.Instance;
+            if(!Services.HasTargetPosition && Services.Target!=null)Services.TargetPosition=Services.Target.position;
+            if(!Services.Scene.IsValid() && Services.Origin!=null)Services.Scene=Services.Origin.gameObject.scene;
+            if(Services.TargetFilter is ITargetFilterSnapshot filter){Services.TargetFilter=filter.Capture(_source);Services.FilterHasSnapshot=true;}
+            _position=Services.Origin!=null?Services.Origin.position:Vector3.zero;_forward=Services.Origin!=null?Services.Origin.forward:Vector3.forward;
+            if (_state.Records != null) foreach (var record in _state.Records.Values) record.Clear();_channels.Clear();Sequence=null;HitPoint=null;AimOffset=null;
+        }
+        internal void Cleanup(IReadOnlyList<SkillActionDefinition> actions, IDisposable request)
+        {
+            request?.Dispose();
+            if (actions.Count > 0) new SkillExecutionContext(this, Target, null, cleanup: true).Execute(actions);
         }
         public GameplayEffectSpec Effect(GameplayEffectDefinition definition)
-            => new GameplayEffectSpec(definition, source: SourceIdentity, context: Values);
+            => new GameplayEffectSpec(definition, Source?.Attributes, SourceIdentity, context: Values);
         public TargetQueryBuffer RentBuffer() => _buffers.Count > 0 ? _buffers.Pop() : new TargetQueryBuffer();
         public void ReturnBuffer(TargetQueryBuffer buffer) { buffer.Clear(); _buffers.Push(buffer); }
         public void Start(GameplayAbilityTask task, bool independent)
@@ -157,8 +180,6 @@ namespace ZFramework.GAS.Unity
             }
             if (task is SkillActionTask actionTask) actionTask.Detach();
             host.Start(Ability, task, _state.Version);
-            _detached.RemoveAll(static item => !item.task.IsActive);
-            _detached.Add((host, task));
         }
         public void Execute(IReadOnlyList<SkillActionDefinition> actions, int startIndex = 0)
         {
@@ -171,39 +192,10 @@ namespace ZFramework.GAS.Unity
         public bool ExecuteAction(SkillActionDefinition action)
         {
             if (!CanContinue) return false;
-            CurrentActionId = NavigationId(action.Id); Status = action.Label;
-            Exception fault = null;
-            try { SkillActionDebug.Begin(this, action); if (CanContinue) action.Execute(this); }
-            catch (Exception exception) { fault = exception; Fail(exception, action.Id); if (!_cleanup) throw; }
-            finally { SkillActionDebug.End(this, action, fault); }
+            CurrentActionId = action.Id; Status = action.Label;
+            SkillActionDebug.Begin(this, action);
+            try { action.Execute(this); } finally { SkillActionDebug.End(this, action, null); }
             return CanContinue;
-        }
-        internal void ExecuteModule(IReadOnlyList<SkillActionDefinition> actions, SkillExecutionContext module)
-        {
-            try { module.Execute(actions); }
-            finally { Status = module.Status; }
-        }
-        internal void Fail(Exception exception, string actionId, bool alreadyRecorded = false)
-        {
-            if (Error != null) return;
-            // A raw project task can fail during StartTask, before the lifetime observer is installed.
-            // Its ASC already ended and diagnosed this run; unwinding the enclosing action isn't another fault.
-            alreadyRecorded |= !_cleanup && !IsCastActive && Ability.ActivationVersion == Version
-                && ReferenceEquals(Ability.LastExecutionFailure.Error, exception);
-            if (_modulePath != null) exception = new SkillActionException(NavigationId(actionId), _modulePath + " / 动作 [" + actionId + "]: " + exception.Message, exception);
-            actionId = NavigationId(actionId);
-            _state.Error = exception.Message; Status = _cleanup ? "取消清理失败" : "执行失败"; CurrentActionId = actionId;
-            if (_cleanup)
-            {
-                _source.RecordCleanupError(Ability, _state.Version, exception, actionId);
-            }
-            else if (!alreadyRecorded)
-                _source.RecordExecutionFailure(Ability, _state.Version, exception, actionId);
-            // Cancel all resources created by this cast, including work detached before the failed action.
-            for (int i = _detached.Count - 1; i >= 0; i--)
-                try { _detached[i].host.Cancel(_detached[i].task); } catch (Exception cleanup) { Debug.LogException(cleanup); }
-            _detached.Clear();
-            if (!_cleanup && IsCastActive) Source.EndAbility(Ability);
         }
     }
 }

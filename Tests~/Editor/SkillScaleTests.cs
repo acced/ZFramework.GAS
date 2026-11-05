@@ -120,7 +120,7 @@ namespace ZFramework.GAS.Editor.Tests
                 report.metrics.Add(Measure("Undo and Redo 100 nodes", _ => { Undo.PerformUndo(); Undo.PerformRedo(); }, 10));
                 window.Show(single);document=window.Document;document.Selection.Select(module);document.OpenFlow();
                 using(var moduleData=new SerializedObject(module))
-                    report.metrics.Add(Measure("first mixed caller index and validation (499 callers)",_=>SkillFlowCommands.ValidateOwner(moduleData,document),1));
+                    report.metrics.Add(Measure("module structure check (499 callers in library)",_=>SkillFlowCommands.ValidateOwner(moduleData,document),1));
                 int revision=0;
                 void FlowEdit(int _) =>EditCommand.Run(document,"修改模块动作",module,so=>{
                     so.FindProperty("actions.Array.data[0].displayName").stringValue="edit "+(++revision);
@@ -129,22 +129,14 @@ namespace ZFramework.GAS.Editor.Tests
                 var validation=Measure("warm flow edit with Undo and document notification (499 mixed callers)",FlowEdit);
                 report.metrics.Add(validation);Assert.LessOrEqual(validation.p95Milliseconds,50,"Shared module edit budget");
                 report.metrics.Add(Measure("first flow edit after Undo (499 mixed callers)",FlowEdit,20,_=>Undo.PerformUndo()));
-                // Compare the one-time dependency index with a real warm Undo that must
-                // delete the extracted file while 500 skills are present in the project.
-                report.metrics.Add(Measure("cold dependency index for effect ownership (500 skills)",_=>SkillReferenceGuard.Prepare(),1));
+                // Measure the explicit GAS-only reference check independently of normal edits.
                 string unusedPath=Folder+"/UnusedModule.asset";var unused=ScriptableObject.CreateInstance<SkillActionModuleAsset>();
-                AssetDatabase.CreateAsset(unused,unusedPath);SkillReferenceGuard.Prepare();
+                AssetDatabase.CreateAsset(unused,unusedPath);
                 report.metrics.Add(Measure("first exact reference check for unreferenced module (500 skills)",
                     _=>Assert.IsNull(SkillReferenceGuard.Find(unusedPath,new[]{unused})),1));
                 report.metrics.Add(Measure("warm exact reference check for unreferenced module (500 skills)",
                     _=>Assert.IsNull(SkillReferenceGuard.Find(unusedPath,new[]{unused})),12));
-                var small=ScriptableObject.CreateInstance<GameplayAbilityAsset>();small.activationActions=new SkillAction[]{new ConditionalAction()};
-                AssetDatabase.CreateAsset(small,Folder+"/FileUndoCaller.asset");
-                string extracted=Folder+"/FileUndoModule.asset";
-                SkillFlowCommands.Extract(null,small,"activationActions",0,1,extracted);
-                report.metrics.Add(Measure("warm Undo extracted module file (500 skills)",_=>{
-                    Undo.PerformUndo();Assert.IsFalse(File.Exists(extracted));
-                },12,i=>{if(i>0)Undo.PerformRedo();}));
+
                 string directory = Path.Combine(Directory.GetCurrentDirectory(), "GASValidation~"); Directory.CreateDirectory(directory);
                 File.WriteAllText(Path.Combine(directory, "skill-scale.json"), JsonUtility.ToJson(report, true));
                 UnityEngine.Debug.Log(JsonUtility.ToJson(report, true));

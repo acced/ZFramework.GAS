@@ -15,7 +15,6 @@ namespace ZFramework.GAS
         /// <summary>该能力已处于激活状态。</summary>
         AlreadyActive,
         InvalidConfiguration,
-        ExecutionFailed,
     }
 
     /// <summary>
@@ -111,12 +110,10 @@ namespace ZFramework.GAS
         }
         public EffectEvaluationContext EvaluationContext { get; internal set; }
         public AbilityActivationCheck LastActivationCheck { get; internal set; }
-        public AbilityActivationCheck LastExecutionFailure { get; set; }
-        public string LastCleanupError { get; set; }
-        public string LastCleanupActionId { get; set; }
 
         public bool IsActive { get; internal set; }
-        internal bool Committing, Granted = true;
+        internal bool Committing;
+        public bool IsGranted { get; internal set; } = true;
 
         internal GameplayAbilitySpec(GameplayAbilityDefinition definition, AbilitySystemComponent owner, int level)
         {

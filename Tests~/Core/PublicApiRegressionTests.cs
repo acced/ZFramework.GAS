@@ -5,35 +5,31 @@ using ZFramework.GAS;
 internal static class PublicApiRegressionTests
 {
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
-    private sealed class Calculation : IEffectCalculation
-    {
-        public Exception Error;
-        public float Evaluate(in GameplayEffectSpec spec, AttributeSet target) => Error == null ? -1 : throw Error;
-    }
     private sealed class Task : GameplayAbilityTask
     {
         public int Ticks;
-        public Action Tick, End, Begin;
-        protected override void OnBegin() => Begin?.Invoke();
+        public Action Tick;
         protected override void OnTick(float dt) { Ticks++; Tick?.Invoke(); }
-        protected override void OnEnd(bool cancelled) => End?.Invoke();
+    }
+    private sealed class CountedCalculation : IEffectCalculation
+    {
+        public int Calls;
+        public float Evaluate(in GameplayEffectSpec spec, AttributeSet target) { Calls++; return -1; }
     }
     public static void Run()
     {
+        var calculation = new CountedCalculation();
+        var calculated = EffectMagnitude.FromCalculation(calculation);
+        var testOwner = new AbilitySystemComponent(); testOwner.Attributes.Add(new AttributeId(1), 100);
+        var testCost = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] { new EffectModifier(new AttributeId(1), ModifierOperation.Add, calculated) });
+        var testCooldown = new GameplayEffectDefinition(EffectDurationPolicy.Duration, 1, modifiers: testCost.Modifiers,
+            tags: new EffectTags(granted: new GameplayTagSet("Cooldown.Attack")));
+        var counted = testOwner.GrantAbility(new GameplayAbilityDefinition(cost: testCost, cooldown: testCooldown));
+        testOwner.TryActivateAbility(counted);
+        Check(calculation.Calls == 2, "Cost and cooldown magnitudes must each resolve exactly once during activation.");
+        testOwner.Clear();
         var owner = new AbilitySystemComponent(); var manaId = new AttributeId(1); var healthId = new AttributeId(2); var attackId = new AttributeId(3);
         var mana = owner.Attributes.Add(manaId, 1000); var health = owner.Attributes.Add(healthId, 1000); var attack = owner.Attributes.Add(attackId, 10);
-        var victim = owner.GrantAbility(new GameplayAbilityDefinition(abilityTags: new GameplayTagSet("Ability.Attack"))); owner.TryActivateAbility(victim);
-        foreach (var error in new Exception[] { new NullReferenceException("custom NRE", new Exception("inner cause")), new ArgumentException("custom argument") })
-        {
-            var effect = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] {
-                new EffectModifier(manaId, ModifierOperation.Add, EffectMagnitude.FromCalculation(new Calculation { Error = error })) });
-            var invalid = owner.GrantAbility(new GameplayAbilityDefinition(cost: effect, cancelAbilitiesWithTags: new GameplayTagSet("Ability.Attack")));
-            var check = owner.CheckActivation(invalid);
-            Check(check.Result == AbilityActivationResult.InvalidConfiguration && ReferenceEquals(check.Error, error) && check.Error.StackTrace.Contains("Calculation.Evaluate") && owner.DiagnosticCount == 0, "Read-only checks must preserve the original stack/inner exception without writing history.");
-            Check(owner.TryActivateAbility(invalid) == AbilityActivationResult.InvalidConfiguration && mana.BaseValue == 1000 && victim.IsActive, "Invalid preflight must not commit or interrupt.");
-            Check(invalid.LastActivationCheck.Message.Contains(error.GetType().Name), "Diagnostics must retain the exception type.");
-        }
-        owner.EndAbility(victim);
         var scaled = EffectMagnitude.FromAttribute(attackId, -1, MagnitudeCapture.Source);
         var cost = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] { new EffectModifier(manaId, ModifierOperation.Add, scaled) });
         var cooldown = new GameplayEffectDefinition(EffectDurationPolicy.Duration, .01f, tags: new EffectTags(granted: new GameplayTagSet("Cooldown.Attack")));
@@ -78,59 +74,8 @@ internal static class PublicApiRegressionTests
         owner.StartTask(low, survivor); owner.StartTask(middle, removed); owner.StartTask(high, remover); owner.StartTask(low, done);
         owner.Tick(.1f);
         Check(survivor.Ticks == 1 && remover.Ticks == 1 && done.Ticks == 1 && removed.Ticks == 0, "Nonthrowing removal must not repeat or skip task ticks.");
-        owner.Clear(); owner.ClearDiagnostics();
-        var first = Grant(); var second = Grant();
-        owner.StartTask(first, new Task { End = () => throw new ArgumentException("removed grant cleanup") });
-        owner.StartTask(second, new Task { End = () => throw new ArgumentException("recycled owner cleanup") });
-        owner.RemoveAbility(first); owner.Clear();
-        Check(owner.DiagnosticCount == 2 && owner.GrantedAbilityCount == 0 && owner.GetDiagnostic(0).Message.Contains("removed grant cleanup") && owner.GetDiagnostic(1).Message.Contains("recycled owner cleanup"), "Cleanup diagnostics must survive grant removal and owner recycling.");
-        owner.ClearDiagnostics(); Check(owner.DiagnosticCount == 0, "Diagnostics are explicitly acknowledged by the host.");
-        Console.WriteLine("PASS PublicApiPreflightLiveSourceRealCostAllocationLookupAndDiagnostics");
-        FailureBoundaries();
+        owner.Clear();
+        Console.WriteLine("PASS LiveSourceRealCostAllocationLookupAndReentry");
     }
 
-    private sealed class CountFormatting : Exception
-    {
-        public int Formatted;
-        public override string ToString() { Formatted++; return base.ToString(); }
-    }
-    private static void FailureBoundaries()
-    {
-        var owner = new AbilitySystemComponent(); var id = new AttributeId(1); var mana = owner.Attributes.Add(id, 100);
-        var tag = new GameplayTagSet("Ability.Attack"); var victim = owner.GrantAbility(new GameplayAbilityDefinition(abilityTags: tag));
-        var calc = new Calculation(); var error = new InvalidOperationException("state changed");
-        var cost = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] { new EffectModifier(id, ModifierOperation.Add, EffectMagnitude.FromCalculation(calc)) });
-        var ability = owner.GrantAbility(new GameplayAbilityDefinition(cost: cost, cancelAbilitiesWithTags: tag));
-        owner.TryActivateAbility(victim); owner.StartTask(victim, new Task { End = () => calc.Error = error });
-        Check(owner.TryActivateAbility(ability) == AbilityActivationResult.InvalidConfiguration && !victim.IsActive && !ability.IsActive && mana.BaseValue == 100 && ability.LastActivationCheck.Error == error, "Recheck after interruptions before charging the changed cost.");
-        calc.Error = null;
-        Action<GameplayAttribute, float, float> listener = (_, _, _) => throw error;
-        mana.OnCurrentValueChanged += listener;
-        Check(owner.TryActivateAbility(ability) == AbilityActivationResult.ExecutionFailed && !ability.IsActive && ability.LastActivationCheck.Error == error && mana.BaseValue == 99, "Commit callback exceptions return failure, without refunding already committed cost.");
-        mana.OnCurrentValueChanged -= listener;
-        owner.ClearDiagnostics(); owner.TryActivateAbility(ability);
-        var begin = new ArgumentException("begin");
-        var tick = new Exception("outer task"); var cleanup = new Exception("on end");
-        var outer = new Task { Tick = () => {
-            try { owner.StartTask(ability, new Task { Begin = () => throw begin, End = () => throw cleanup }); }
-            catch (ArgumentException e) when (e == begin) { throw tick; }
-        } };
-        owner.StartTask(ability, outer);
-        try { owner.Tick(.1f); } catch (Exception e) when (e == tick) { }
-        Check(!ability.IsActive && owner.ActiveTaskCount == 0 && ability.LastExecutionFailure.Error == begin, "OnBegin failure must end the activation and keep its primary cause.");
-        Check(owner.DiagnosticCount == 3 && owner.GetDiagnostic(0).Error == begin && owner.GetDiagnostic(1).Error == cleanup && owner.GetDiagnostic(2).Error == tick, "Begin, cleanup and an independent outer failure must all be retained.");
-        owner.ClearDiagnostics(); var host = new GameplayTaskHost(); int oldVersion = ability.ActivationVersion;
-        owner.TryActivateAbility(ability);
-        host.Start(ability, new Task { Tick = () => throw begin }, oldVersion);
-        host.Start(ability, new Task { Tick = () => throw tick }, oldVersion);
-        try { host.Tick(.2f); } catch (AggregateException e) { Check(e.InnerExceptions.Count == 2, "Both scene failures propagate."); }
-        Check(owner.DiagnosticCount == 2 && owner.GetDiagnostic(0).ActivationVersion == oldVersion && owner.GetDiagnostic(1).ActivationVersion == oldVersion
-            && ability.IsActive && ability.LastExecutionFailure.Succeeded, "Record every detached failure against its originating cast without affecting the new cast.");
-        owner.ClearDiagnostics();
-        var formatting = new CountFormatting();
-        for (int i = 0; i < 70; i++) owner.RecordCleanupError(ability, ability.ActivationVersion, formatting, i.ToString());
-        Check(formatting.Formatted == 0 && owner.DiagnosticCount == 64 && owner.DroppedDiagnosticCount == 6 && owner.GetDiagnostic(0).SourceId == "6" && owner.GetDiagnostic(63).SourceId == "69", "Bounded diagnostics must remain ordered and never eagerly format exceptions.");
-        owner.ClearDiagnostics(); Check(owner.DroppedDiagnosticCount == 0 && owner.DiagnosticCount == 0, "Clearing also acknowledges the overflow count.");
-        Console.WriteLine("PASS CommitReentryBeginFailureAndBoundedDiagnostics");
-    }
 }

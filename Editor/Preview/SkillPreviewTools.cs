@@ -25,7 +25,7 @@ namespace ZFramework.GAS.Editor
             _material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
             _material.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off); _material.SetInt("_ZWrite", 0);
         }
-        public void Rebuild(GameObject instance, SkillDocument doc, Action<float> pose, bool ghosts, bool trajectory, bool ranges, bool dummy, float distance, int level, Action simulation=null)
+        public void Rebuild(GameObject instance, SkillDocument doc, Action<float> pose, bool ghosts, bool trajectory, Action simulation)
         {
             ClearGhosts(); _vertices.Clear(); _colors.Clear();
             float duration = doc.Root?.Animation?.Duration ?? 1;
@@ -40,33 +40,7 @@ namespace ZFramework.GAS.Editor
                 Capture(instance, pose, Mathf.Min(duration, doc.Playback.Time + 3 / Mathf.Max(1, doc.Root.Animation.FrameRate)), new Color(1, .65f, .25f, .15f));
             }
             pose(doc.Playback.Time);
-            var position = instance.transform.position;
-            if (dummy)
-            {
-                var center = position + instance.transform.forward * distance;
-                Circle(center + Vector3.up * .03f, .3f, Color.gray);
-                Line(center, center + Vector3.up * 1.8f, Color.gray);
-                Line(center + Vector3.up * 1.3f - instance.transform.right * .4f, center + Vector3.up * 1.3f + instance.transform.right * .4f, Color.gray);
-                Circle(center + Vector3.up * 1.7f, .16f, Color.gray);
-            }
-            if (ranges)
-            {
-                var values = new EffectEvaluationContext(level, doc.Root.ResolveParameters(level));
-                if(doc.Playback.Time<.15f) Queries(doc.Root.activationActions, values, instance.transform, distance, 0);
-                if (doc.Root.Animation != null)
-                {
-                    var markers = doc.Serialized(doc.Root.Animation).FindProperty("markers");
-                    for (int i = 0; i < markers.arraySize; i++)
-                    {
-                        var marker=markers.GetArrayElementAtIndex(i);float age=doc.Playback.Time-marker.FindPropertyRelative("time").floatValue;
-                        if(age<0 || age>.15f) continue;
-                        var actions = marker.FindPropertyRelative("actions");
-                        for (int j = 0; j < actions.arraySize; j++)
-                            if (actions.GetArrayElementAtIndex(j).managedReferenceValue is SkillAction action) Queries(new[] { action }, values, instance.transform, distance, 0);
-                    }
-                }
-            }
-            simulation?.Invoke();
+            simulation();
             _lines.Clear(); _lines.SetVertices(_vertices); _lines.SetColors(_colors);
             var indices = new int[_vertices.Count]; for (int i = 0; i < indices.Length; i++) indices[i] = i;
             _lines.SetIndices(indices, MeshTopology.Lines, 0); _lines.RecalculateBounds();
@@ -84,31 +58,11 @@ namespace ZFramework.GAS.Editor
                     _ghosts.Add((filter.sharedMesh, renderer.localToWorldMatrix, false, color));
             }
         }
-        private void Queries(SkillAction[] actions, EffectEvaluationContext values, Transform source, float distance, int depth)
-        {
-            if (actions == null || depth >= 8) return;
-            foreach (var action in actions)
-            {
-                if (action is ApplyEffectAction apply) Query(apply.targets.Build(), values, source, distance);
-                if (action is CreateAreaAction area) Query(area.targets.Build(), values, source, distance);
-                if (action is ConditionalAction condition) { Queries(condition.whenTrue, values, source, distance, depth + 1); Queries(condition.whenFalse, values, source, distance, depth + 1); }
-                if (action is LaunchProjectileAction shot) { Query(shot.collision.Build(),values,source,distance); Queries(shot.onHit,values,source,distance,depth+1); }
-                if (action is CreateAreaAction zone) Queries(zone.onPeriod,values,source,distance,depth+1);
-                if (action is WaitSkillAction wait) { Queries(wait.onSuccess, values, source, distance, depth + 1); Queries(wait.onCancel,values,source,distance,depth+1); Queries(wait.onTimeout,values,source,distance,depth+1); }
-                if (action is CallModuleAction call && call.module != null)
-                {
-                    var parameters = new Dictionary<string, SkillParameterValue>();
-                    if (call.module.parameters != null) foreach (var p in call.module.parameters.parameters) parameters.Add(p.Id, p.Resolve(values.Level));
-                    foreach (var binding in call.bindings) parameters[binding.moduleParameterId] = values.Parameters.Get(binding.callerParameterId);
-                    Queries(call.module.actions, values.WithParameters(new SkillParameterValues(parameters)), source, distance, depth + 1);
-                }
-            }
-        }
-        internal void Query(TargetQueryDefinition query, EffectEvaluationContext values, Transform source, float distance,Vector3? at=null)
+        internal void Query(TargetQueryDefinition query, EffectEvaluationContext values, Transform source, Vector3 origin)
         {
             if (query.Kind < TargetQueryKind.TargetPoint) return;
             float radius = query.Radius.Resolve(values), angle = query.Kind == TargetQueryKind.Sector ? query.Angle.Resolve(values) : 360;
-            var center = (at??(source.position + (query.Kind == TargetQueryKind.TargetPoint ? source.forward * distance : Vector3.zero)))+Vector3.up*.04f;
+            var center = origin + Vector3.up * .04f;
             var color = SkillColors.Cue;
             if (query.Kind == TargetQueryKind.Line)
             {

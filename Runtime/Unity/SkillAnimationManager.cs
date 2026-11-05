@@ -24,23 +24,18 @@ namespace ZFramework.GAS.Unity
         private readonly List<PlayableAnimationDriver> _drivers=new();
         public static ISkillAnimationLodPolicy Policy {get;set;}
         public static long EvaluationCount {get;internal set;}
+        #if UNITY_ASSERTIONS
         private static int _manualSamples;
-        private static readonly Queue<Action> AfterAnimationQueue=new();
-        internal static bool Sampling=>NativeSampling || _manualSamples>0;
-        internal static void BeginManual()=>_manualSamples++;
-        internal static void EndManual(){_manualSamples--;FlushAfterAnimation();}
-        internal static void AfterSampling(Action action)=>AfterAnimationQueue.Enqueue(action);
-        private static bool _flushing;
-        private static void FlushAfterAnimation(){
-            if(Sampling || _flushing)return;
-            _flushing=true;try{
-            for(int count=AfterAnimationQueue.Count;count>0;count--){
-                try{AfterAnimationQueue.Dequeue()();}catch(Exception error){Debug.LogException(error);}
-            }
-            }finally{_flushing=false;}
-        }
+        internal static bool Sampling => NativeSampling || _manualSamples > 0;
+        internal static void BeginManual() => _manualSamples++;
+        internal static void EndManual() => _manualSamples--;
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void InstallHooks()=>SetPoseHooks(true);
+        #else
+        internal static bool Sampling=>false;
+        [System.Diagnostics.Conditional("UNITY_ASSERTIONS")] internal static void BeginManual(){}
+        [System.Diagnostics.Conditional("UNITY_ASSERTIONS")] internal static void EndManual(){}
+        #endif
         internal static void Register(PlayableAnimationDriver driver)
         {
             if(!Application.isPlaying) return;
@@ -56,12 +51,12 @@ namespace ZFramework.GAS.Unity
             if(_instance==null) return;
             int i=_instance._drivers.IndexOf(driver); if(i>=0)_instance._drivers[i]=null;
         }
-        // Capture Update/coroutine equipment edits before Unity writes its native controller
-        // pose. The skill graph itself runs after the controller, before other LateUpdates.
+        #if UNITY_ASSERTIONS
+        // Only assertion builds mark the native sampling window.
         private struct BeforeAnimation { }
         private struct AfterAnimation { }
         internal static bool NativeSampling {get;private set;}
-        private static void EndNative(){NativeSampling=false;FlushAfterAnimation();}
+        private static void EndNative(){NativeSampling=false;}
         private static void SetPoseHooks(bool install)
         {
             var loop=PlayerLoop.GetCurrentPlayerLoop();
@@ -73,7 +68,7 @@ namespace ZFramework.GAS.Unity
                     var child=entry;changed|=Edit(ref child);
                     bool fixedStep=child.type==typeof(FixedUpdate.DirectorFixedUpdate);
                     if(install && (fixedStep || child.type==typeof(PreLateUpdate.DirectorUpdateAnimationBegin))){
-                        next.Add(new PlayerLoopSystem{type=typeof(BeforeAnimation),updateDelegate=fixedStep?FixedPose:FramePose});changed=true;
+                        next.Add(new PlayerLoopSystem{type=typeof(BeforeAnimation),updateDelegate=BeginNative});changed=true;
                     }
                     next.Add(child);
                     if(install && (fixedStep || child.type==typeof(PreLateUpdate.DirectorUpdateAnimationEnd))){
@@ -84,14 +79,8 @@ namespace ZFramework.GAS.Unity
             }
             if(Edit(ref loop))PlayerLoop.SetPlayerLoop(loop);
         }
-        private static void FixedPose()=>Capture(true);
-        private static void FramePose()=>Capture(false);
-        private static void Capture(bool fixedStep){
-            NativeSampling=true;var manager=_instance;if(manager==null)return;
-            foreach(var driver in manager._drivers){
-                try{driver?.ObserveBeforeAnimator(fixedStep);}catch(Exception error){Debug.LogException(error);}
-            }
-        }
+        private static void BeginNative()=>NativeSampling=true;
+        #endif
         private void LateUpdate()
         {
             int count=_drivers.Count;
@@ -109,6 +98,11 @@ namespace ZFramework.GAS.Unity
         }
         private void OnDestroy(){if(_instance==this){_instance=null; foreach(var d in _drivers)d?.Dispose();_drivers.Clear();}}
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        private static void ResetPolicy(){SetPoseHooks(false);NativeSampling=false;_manualSamples=0;AfterAnimationQueue.Clear();Policy=null;}
+        private static void ResetPolicy(){
+#if UNITY_ASSERTIONS
+            SetPoseHooks(false);NativeSampling=false;_manualSamples=0;
+#endif
+            Policy=null;
+        }
     }
 }

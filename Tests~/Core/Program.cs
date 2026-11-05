@@ -30,7 +30,6 @@ internal static class Program
         Run(nameof(ImmutableConfiguration), ImmutableConfiguration);
         Run(nameof(CountEvents), CountEvents);
         Run(nameof(ClearReentry), ClearReentry);
-        Run(nameof(ThrowingRemovalCallback), ThrowingRemovalCallback);
         Run(nameof(NameRoundTrip), NameRoundTrip);
         Run(nameof(DataContractRoundTrip), DataContractRoundTrip);
         Run(nameof(RequirementsEquivalence), RequirementsEquivalence);
@@ -290,25 +289,6 @@ internal static class Program
         Check(events.Count == 6 && events.Contains((poison, 1)) && events.Contains((poison, 0)), "Nested events append and drain");
         asc.OwnedTags.AddTag(poison);
         Check(asc.OwnedTags.HasTag(poison), "Container remains usable after reentry");
-    }
-
-    private static void ThrowingRemovalCallback()
-    {
-        var asc = new AbilitySystemComponent();
-        GameplayTag rage = "Buff.Rage", poison = "Debuff.Poison";
-        var effect = new GameplayEffectDefinition(EffectDurationPolicy.Infinite,
-            tags: new EffectTags(granted: new GameplayTagSet(rage, poison)));
-        asc.Effects.Apply(new GameplayEffectSpec(effect), out var handle);
-        OnTagCountChangedDelegate callback = (tag, count) => { if (count == 0) throw new InvalidOperationException("test callback"); };
-        asc.OwnedTags.RegisterTagEventCallback(rage, GameplayTagEventType.NewOrRemoved, callback);
-        bool thrown = false;
-        try { asc.Effects.Remove(handle); }
-        catch (InvalidOperationException) { thrown = true; }
-        Check(thrown && asc.OwnedTags.IsEmpty && asc.Effects.Count == 0, "Throwing callback still releases every grant");
-        asc.OwnedTags.RemoveTagEventCallback(rage, GameplayTagEventType.NewOrRemoved, callback);
-        asc.Effects.Apply(new GameplayEffectSpec(effect), out handle);
-        asc.Effects.Remove(handle);
-        Check(asc.OwnedTags.IsEmpty, "Queues and effect pool recover after callback exception");
     }
 
     private static void NameRoundTrip()

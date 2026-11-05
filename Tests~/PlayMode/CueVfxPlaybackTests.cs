@@ -70,6 +70,7 @@ namespace ZFramework.GAS.Tests
             try
             {
                 yield return null;
+                hero.SkillRunner.Grant(slash); hero.SkillRunner.Grant(warcry);
                 Assert.AreEqual(AbilityActivationResult.Activated, hero.SkillRunner.TryCast(slash, dummy.AbilitySystem,
                     new TimelineTaskContext { Origin = knight.transform, Target = dummy.transform, Scene = knight.scene }));
                 float elapsed = 0;

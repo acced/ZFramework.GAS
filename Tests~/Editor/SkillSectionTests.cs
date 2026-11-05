@@ -66,21 +66,6 @@ namespace ZFramework.GAS.Editor.Tests
             if (jumpAgain) Assert.AreEqual("c", task.SectionId); else Assert.IsFalse(task.IsActive);
             owner.EndAbility(spec);
         }
-        [TearDown] public void Cleanup() { foreach (var asset in _assets) if (asset != null) Object.DestroyImmediate(asset); _assets.Clear(); }
-        [Test] public void ReentrantJumpWhileClosingDoesNotSwallowEarlierCallbackException()
-        {
-            var router = new GameplayCueRouter(); var owner = new AbilitySystemComponent(cueRouter: router);
-            var spec = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(spec);
-            var failure = new InvalidOperationException("removal callback failed"); AnimationTask task = null;
-            owner.OwnedTags.RegisterTagEventCallback("Test.Window", GameplayTagEventType.NewOrRemoved, (_, count) => { if (count == 0) throw failure; });
-            router.Register("Test.Cue", cue => { if (cue.Event == GameplayCueEvent.Removed) task.JumpToSection("c"); });
-            var definition = new SkillAnimationDefinition("a", 1,
-                tagWindows: new[] { new AnimationTagWindow(0, .35f, new GameplayTagSet("Test.Window")) }, cueRegions: new[] { new AnimationCueRegion(0, .35f, "Test.Cue") },
-                sections: new[] { new AnimationSectionDefinition("a", "a", 0, .4f, null, 0, .4f), new AnimationSectionDefinition("b", "b", .5f, .7f, null, .5f, .7f), new AnimationSectionDefinition("c", "c", .8f, 1, null, .8f, 1) });
-            task = new AnimationTask(definition, new Driver(), durationOverride: 1); owner.StartTask(spec, task); owner.Tick(.1f);
-            Assert.AreSame(failure, Assert.Throws<InvalidOperationException>(() => task.JumpToSection("b")));
-            Assert.AreEqual("c", task.SectionId); Assert.AreEqual(0, owner.OwnedTags.GetTagCount("Test.Window")); owner.Clear();
-        }
         private T New<T>() where T : ScriptableObject { var asset = ScriptableObject.CreateInstance<T>(); _assets.Add(asset); return asset; }
         [Test] public void SectionJumpClosesWindowsSkipsMarkersAndUsesStableIds()
         {
@@ -143,7 +128,8 @@ namespace ZFramework.GAS.Editor.Tests
             var asset = New<GameplayAbilityAsset>(); using (var so = new SerializedObject(asset)) { so.FindProperty("animation").objectReferenceValue = animation; so.ApplyModifiedPropertiesWithoutUndo(); }
             var a = new AbilitySystemComponent(); var b = new AbilitySystemComponent(); a.Attributes.Add(new AttributeId(1), 10);
             var one = new SkillRunner(a, () => new Driver()); var two = new SkillRunner(b, () => new Driver());
-            one.TryCast(asset); two.TryCast(asset); a.Tick(1); b.Tick(.5f);
+            one.Grant(asset);
+            one.TryCast(asset);two.Grant(asset);  two.TryCast(asset); a.Tick(1); b.Tick(.5f);
             Assert.AreEqual(2, one.GetExecution(asset).Channels["speed-id"], .001f);
             Assert.AreEqual(1.5f, two.GetExecution(asset).Channels["speed-id"], .001f);
             one.Cancel(asset); Assert.AreEqual(0, one.GetExecution(asset).Channels.Count); Assert.AreEqual(10, a.Attributes.GetCurrent(new AttributeId(1)));
@@ -163,7 +149,6 @@ namespace ZFramework.GAS.Editor.Tests
                 Assert.AreEqual(.25f, driver.Play("hit", .25f, false, .1f)); Assert.AreEqual(.6f, animator.speed);
                 driver.Seek(.5f); driver.Stop(.1f); Assert.AreEqual(.6f, animator.speed);
             }
-            Assert.IsNull(go.GetComponent<SkillPlayableClock>());
         }
         [TestCase(.8f, .44f, .6f), TestCase(1f, 1f, .5f), TestCase(1.7f, .31f, .9f)]
         public void AdjacentSectionsProcessSharedBoundaryOnceWithoutRestartingWindows(float authored, float actual, float split)
@@ -207,19 +192,27 @@ namespace ZFramework.GAS.Editor.Tests
             owner.EndAbility(spec);
             Assert.AreEqual(1, closes); Assert.AreEqual(0, owner.OwnedTags.GetTagCount("Test.Window")); Assert.AreEqual(0, owner.OwnedTags.GetTagCount("Test.Other"));
         }
-        [TestCase(false), TestCase(true)] public void DisposingDisabledAnimatorReleasesGraphWithoutControllerWriteback(bool inactiveObject)
+        [TestCase(false), TestCase(true)] public void DisposingDisabledAnimatorRemovesOnlySkillNodes(bool inactiveObject)
         {
             var go = new GameObject("disabled-dispose"); _assets.Add(go); var animator = go.AddComponent<Animator>();
             var controller = new AnimatorController(); _assets.Add(controller); controller.AddLayer("Base");
             foreach (var layer in controller.layers) _assets.Add(layer.stateMachine);
             var clip = new AnimationClip(); _assets.Add(clip); clip.SetCurve("", typeof(Transform), "localPosition.x", AnimationCurve.Constant(0, 1, 0));
             controller.layers[0].stateMachine.AddState("Idle").motion = clip; animator.runtimeAnimatorController = controller; animator.Update(0);
+            var native = animator.playableGraph; int nodes = native.GetPlayableCount(), outputs = native.GetOutputCount();
             go.AddComponent<SkillMovementProbe>();
             using var driver = new PlayableAnimationDriver(animator, new[] { new PlayableClipBinding { name = "a", clip = clip } }, rootMotion: true);
-            driver.Play("a", 1, false); var graph = DriverField<PlayableGraph>(driver, "_graph");
+            driver.Play("a", 1, false); Assert.Greater(native.GetPlayableCount(), nodes);
+            var skillOutput = DriverField<AnimationPlayableOutput>(driver, "_output");
+            var skillLayer = DriverField<AnimationLayerMixerPlayable>(driver, "_layers");
+            var clipNode = DriverField<AnimationClipPlayable>(driver, "_current");
             if (inactiveObject) go.SetActive(false); else animator.enabled = false;
             driver.Dispose();
-            Assert.IsFalse(graph.IsValid()); Assert.IsNull(go.GetComponent<SkillRootMotionRelay>()); Assert.IsNull(go.GetComponent<SkillPlayableClock>());
+            Assert.IsFalse(driver.IsValid);
+            Assert.IsTrue(native.IsValid(), "Disposing the skill driver must preserve the Animator's graph.");
+            Assert.IsFalse(skillOutput.IsOutputValid()); Assert.IsFalse(skillLayer.IsValid()); Assert.IsFalse(clipNode.IsValid());
+            Assert.AreEqual(outputs, native.GetOutputCount());
+            Assert.IsNull(go.GetComponent<SkillRootMotionRelay>());
             UnityEngine.TestTools.LogAssert.NoUnexpectedReceived();
         }
         [Test] public void JumpClosingRegionDoesNotDispatchRemovedAgainAtDestination()
@@ -239,7 +232,7 @@ namespace ZFramework.GAS.Editor.Tests
             owner.TryActivateAbility(spec, values);
             var effect = new GameplayEffectDefinition(EffectDurationPolicy.Duration, 1,
                 modifiers: new[] { new EffectModifier(new AttributeId(1), ModifierOperation.Add, EffectMagnitude.FromParameter("damage", -1)) });
-            var task = new AnimationTask(new SkillAnimationDefinition("a", 1, markers: new[] { new AnimationMarker(.1f, effect: effect, target: AnimationMarkerTarget.Self) }), new Driver(), durationOverride: 1);
+            var task = new AnimationTask(new SkillAnimationDefinition("a", 1, markers: new[] { new AnimationMarker(.1f, actions: new[] { ApplyEffectAction.FromDefinition("hit", effect, new TargetQuery { kind = TargetQueryKind.Self }.Build()) }) }), new Driver(), durationOverride: 1);
             owner.StartTask(spec, task); owner.Tick(.2f); Assert.AreEqual(93, owner.Attributes.GetCurrent(new AttributeId(1))); Assert.AreSame(owner.SourceIdentity, owner.Effects[0].Source); owner.Clear();
         }
         [Test] public void TaskStartedAfterUpgradeStillUsesTheActivationsLevelOne()
@@ -249,17 +242,17 @@ namespace ZFramework.GAS.Editor.Tests
             var damage = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] {
                 new EffectModifier(new AttributeId(1), ModifierOperation.Add, EffectMagnitude.ByLevel(-1, -2, -3)) });
             var task = new AnimationTask(new SkillAnimationDefinition("a", 1, markers: new[] {
-                new AnimationMarker(.1f, effect: damage, target: AnimationMarkerTarget.Self) }), new Driver(), durationOverride: 1);
+                new AnimationMarker(.1f, actions: new[] { ApplyEffectAction.FromDefinition("hit", damage, new TargetQuery { kind = TargetQueryKind.Self }.Build()) }) }), new Driver(), durationOverride: 1);
             owner.StartTask(spec, task); owner.Tick(.2f); Assert.AreEqual(99, owner.Attributes.GetCurrent(new AttributeId(1))); owner.EndAbility(spec);
         }
         [Test] public void DirectTasksStartedAtDifferentTimesUseTheSameActivationSourceCapture()
         {
             var owner = new AbilitySystemComponent(); var health = new AttributeId(1); var attack = new AttributeId(2);
             owner.Attributes.Add(health, 100); var stat = owner.Attributes.Add(attack, 10);
-            var spec = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(spec, captureSource: true);
+            var spec = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(spec, new EffectEvaluationContext(spec.Level, source: owner.Attributes));
             var damage = new GameplayEffectDefinition(EffectDurationPolicy.Instant, modifiers: new[] {
                 new EffectModifier(health, ModifierOperation.Add, EffectMagnitude.FromAttribute(attack, -1, MagnitudeCapture.Source)) });
-            var animation = new SkillAnimationDefinition("a", .2f, markers: new[] { new AnimationMarker(.1f, effect: damage, target: AnimationMarkerTarget.Self) });
+            var animation = new SkillAnimationDefinition("a", .2f, markers: new[] { new AnimationMarker(.1f, actions: new[] { ApplyEffectAction.FromDefinition("hit", damage, new TargetQuery { kind = TargetQueryKind.Self }.Build()) }) });
             foreach (float changed in new[] { 20f, 30f })
             { stat.BaseValue = changed; owner.StartTask(spec, new AnimationTask(animation, new Driver(), durationOverride: .2f)); owner.Tick(.2f); }
             Assert.AreEqual(80, owner.Attributes.GetCurrent(health)); owner.EndAbility(spec);

@@ -45,7 +45,6 @@ namespace ZFramework.GAS.Editor
                 Rect(X(region.Start), 37, Mathf.Max(1, X(region.End < 0 ? duration : region.End) - X(region.Start)), 7, SkillColors.Cue);
             foreach (var window in definition.TagWindows)
                 Rect(X(window.Start), 49, Mathf.Max(1, X(window.End < 0 ? duration : window.End) - X(window.Start)), 7, SkillColors.Cost);
-            foreach (var task in definition.TaskEvents) Diamond(task.Time, 66, SkillColors.Task);
             p.strokeColor = SkillColors.Cooldown; p.lineWidth = 2; p.BeginPath();
             p.MoveTo(new Vector2(X(_task.AuthoredTime), 1)); p.LineTo(new Vector2(X(_task.AuthoredTime), 74)); p.Stroke();
         }

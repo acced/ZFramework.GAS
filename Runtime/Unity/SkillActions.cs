@@ -19,23 +19,8 @@ namespace ZFramework.GAS.Unity
         public string Id => id;
         public string displayName;
         public abstract SkillActionDefinition Build(SkillActionBuildContext builder);
-        protected SkillActionDefinition Define(string label, Action<SkillExecutionContext, bool> validate,
-            Action<SkillExecutionContext> execute) => new DelegateSkillAction(id,
-                string.IsNullOrEmpty(displayName) ? label : displayName, validate, execute);
-    }
-
-    [Serializable]
-    public sealed class RunSpawnerAction : SkillAction
-    {
-        [SerializeReference] public TaskSpawner spawner;
-        public override SkillActionDefinition Build(SkillActionBuildContext builder)
-        {
-            // An arbitrary project spawner can start ability-owned work.
-            builder.RequireAbilityTask(Id);
-            if(spawner==null)throw new InvalidOperationException("缺少任务执行器。");
-            var delegateAction=spawner.Build();
-            return Define("执行任务",delegateAction.Validate,delegateAction.Execute);
-        }
+        protected SkillActionDefinition Define(string label, Action<SkillExecutionContext> execute) => new DelegateSkillAction(id,
+                string.IsNullOrEmpty(displayName) ? label : displayName, execute);
     }
 
     public abstract class SkillActionDefinition
@@ -43,21 +28,13 @@ namespace ZFramework.GAS.Unity
         public string Id { get; }
         public string Label { get; }
         protected SkillActionDefinition(string id, string label) { Id = id; Label = label; }
-        public abstract void Validate(SkillExecutionContext context, bool deferredTarget = false);
         public abstract void Execute(SkillExecutionContext context);
     }
     internal sealed class DelegateSkillAction : SkillActionDefinition
     {
-        private readonly Action<SkillExecutionContext, bool> _validate;
         private readonly Action<SkillExecutionContext> _execute;
-        public DelegateSkillAction(string id, string label, Action<SkillExecutionContext, bool> validate,
-            Action<SkillExecutionContext> execute) : base(id, label) { _validate = validate; _execute = execute; }
-        public override void Validate(SkillExecutionContext context, bool deferredTarget = false)
-        {
-            try { _validate?.Invoke(context, deferredTarget); }
-            catch (SkillActionException) { throw; }
-            catch (Exception ex) { throw new SkillActionException(Id, Label + ": " + ex.Message, ex); }
-        }
+        public DelegateSkillAction(string id, string label, Action<SkillExecutionContext> execute)
+            : base(id, label) { _execute = execute; }
         public override void Execute(SkillExecutionContext context) => _execute(context);
     }
     public class SkillActionException : InvalidOperationException
@@ -71,8 +48,52 @@ namespace ZFramework.GAS.Unity
     {
         private readonly ScriptableObject _owner;
         private readonly HashSet<string> _entryIds;
+        private SkillParameter[] _parameters;
+        private SkillParameter[] Parameters => _parameters ?? (_owner switch {
+            GameplayAbilityAsset skill => skill.parameters,
+            SkillActionModuleAsset module => module.parameters?.parameters,
+            _ => null
+        });
+        private SkillParameter Parameter(string id)
+        {
+            foreach (var p in Parameters ?? Array.Empty<SkillParameter>()) if (p.Id == id) return p;
+            if (_parameters == null && _owner is GameplayAbilityAsset skill && skill.parameterSet != null)
+                foreach (var p in skill.parameterSet.parameters) if (p.Id == id) return p;
+            throw new InvalidOperationException("缺少参数: " + id);
+        }
         public SkillActionBuildContext(ScriptableObject owner = null) { _owner = owner; }
         internal SkillActionBuildContext(ScriptableObject owner,HashSet<string> entryIds) { _owner=owner;_entryIds=entryIds; }
+        public void Number(SkillNumber number, float min = float.MinValue, float max = float.MaxValue, bool integer = false)
+        {
+            if (!string.IsNullOrEmpty(number.parameterId)) {
+                if (_owner is not GameplayAbilityAsset && Parameters == null) return;
+                var p = Parameter(number.parameterId);
+                if (p.kind == SkillParameterKind.Bool) throw new InvalidOperationException("数值绑定不能使用 Bool。");
+                if (p.levels == null || p.levels.Length == 0) Number(new SkillNumber(p.defaultValue * number.coefficient), min, max, integer);
+                else foreach (var v in p.levels) Number(new SkillNumber(v * number.coefficient), min, max, integer);
+                return;
+            }
+            float value = number.value;
+            if (!float.IsFinite(value) || value < min || value > max || integer && value != Mathf.Floor(value))
+                throw new InvalidOperationException("动作数值超出允许范围。");
+        }
+        internal void RequireKind(string id, SkillParameterKind kind)
+        {
+            if (!string.IsNullOrEmpty(id) && (_owner is GameplayAbilityAsset || Parameters != null) && Parameter(id).kind != kind)
+                throw new InvalidOperationException($"参数 {id} 必须是 {kind}。");
+        }
+        internal void CheckBinding(ModuleParameterBinding binding, SkillParameter[] locals)
+        {
+            var local = Array.Find(locals, p => p.Id == binding.moduleParameterId)
+                ?? throw new InvalidOperationException("模块参数不存在: " + binding.moduleParameterId);
+            if (string.IsNullOrEmpty(binding.callerParameterId)) throw new InvalidOperationException("未指定调用方参数。");
+            RequireKind(binding.callerParameterId, local.kind);
+        }
+        public void Query(TargetQuery query)
+        {
+            if (query == null || query.maxTargets < 1 || query.maxTargets > 256) throw new InvalidOperationException("目标查询容量必须为 1–256。");
+            Number(query.radius, 0); Number(query.width, 0); Number(query.height, 0); Number(query.angle, 0, 360);
+        }
         public void DependsOn(ScriptableObject asset) => DefinitionSource.DependsOn(_owner, asset);
         private readonly HashSet<SkillActionModuleAsset> _modules = new();
         private int _depth;
@@ -106,30 +127,26 @@ namespace ZFramework.GAS.Unity
             }
             finally { _depth--; }
         }
+        public SkillActionDefinition[] Scope(SkillAction[] actions, SkillParameter[] parameters)
+        {
+            var previous = _parameters; _parameters = parameters;
+            try { return Build(actions); } finally { _parameters = previous; }
+        }
         public SkillActionDefinition[] Module(SkillActionModuleAsset module)
         {
             if (module == null) throw new InvalidOperationException("缺少动作模块。");
             DependsOn(module); DependsOn(module.parameters);
             if (!_modules.Add(module)) throw new InvalidOperationException($"模块循环引用：{module.name}");
             var parentIds=_scopeIds; _scopeIds=new HashSet<string>();
+            var parameters = _parameters; _parameters = module.parameters?.parameters ?? Array.Empty<SkillParameter>();
             try { return Build(module.actions); }
-            finally { _scopeIds=parentIds; _modules.Remove(module); }
+            finally { _parameters = parameters; _scopeIds=parentIds; _modules.Remove(module); }
         }
-        public static void Validate(IReadOnlyList<SkillActionDefinition> actions, SkillExecutionContext context, bool deferred = false)
-        { for (int i = 0; i < actions.Count; i++) actions[i].Validate(context, deferred); }
-        internal static void Effect(GameplayEffectDefinition effect, SkillExecutionContext context, AttributeSet target)
-            => context.Effect(effect).Validate(target);
     }
 
     [Serializable]
     public sealed class ApplyEffectAction : SkillAction
     {
-        internal static SkillActionDefinition Marker(string id, GameplayEffectDefinition effect, bool self)
-            => new DelegateSkillAction(id, "施加标记效果", (context, deferred) =>
-            {
-                if (!self && !deferred && context.Target == null) throw new InvalidOperationException("缺少固定目标。");
-                SkillActionBuildContext.Effect(effect, context, (self ? context.Source : context.Target)?.Attributes);
-            }, context => Apply(context, effect, self ? context.Source : context.Target));
         private static void Apply(SkillExecutionContext context, GameplayEffectDefinition effect, AbilitySystemComponent target)
         { if (target == null) throw new InvalidOperationException("效果目标已失效。"); target.Effects.Apply(context.Effect(effect)); }
         public GameplayEffectAsset effect;
@@ -137,21 +154,17 @@ namespace ZFramework.GAS.Unity
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             if (effect == null) throw new InvalidOperationException("缺少效果资产。");
-            builder.DependsOn(effect);
+            builder.Query(targets); builder.DependsOn(effect);
             return FromDefinition(Id, effect.Definition, targets.Build());
         }
-        internal static SkillActionDefinition FromDefinition(string id, GameplayEffectDefinition effect, TargetQueryDefinition query)
-            => new DelegateSkillAction(id, "施加效果", (context, deferred) =>
-            {
-                query.Validate(context, !deferred);
-                SkillActionBuildContext.Effect(effect, context, context.Target?.Attributes);
-            }, context =>
+        public static SkillActionDefinition FromDefinition(string id, GameplayEffectDefinition effect, TargetQueryDefinition query)
+            => new DelegateSkillAction(id, "施加效果", context =>
             {
                 var buffer = context.RentBuffer();
                 try
                 {
                     context.Services.Searcher.Query(query, context, buffer);
-                    if (buffer.Saturated) throw new InvalidOperationException("目标查询缓冲区已满（256 个碰撞体），请收窄 LayerMask 或范围。");
+                    GasAssert.That(!buffer.Saturated, "目标查询缓冲区已满（256 个碰撞体），请收窄 LayerMask 或范围。");
                     for (int i = 0; i < buffer.Count; i++)
                     { if (!context.CanContinue) break; Apply(context, effect, buffer.Units[i]); }
                 }
@@ -179,6 +192,8 @@ namespace ZFramework.GAS.Unity
         [SerializeReference, FlowBranch("不满足")] public SkillAction[] whenFalse = Array.Empty<SkillAction>();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
+            builder.RequireKind(booleanParameterId, SkillParameterKind.Bool);
+            if (compareAttribute) builder.Number(value);
             var required = TagAssetUtility.ToSet(requiredTags); var blocked = TagAssetUtility.ToSet(blockedTags);
             var requirements = GameplayTagRequirements.Create(blocked.AsSpan(), required.AsSpan());
             bool needTarget = requireTarget, target = testTarget, compare = compareAttribute;
@@ -196,14 +211,7 @@ namespace ZFramework.GAS.Unity
                 float a = unit.Attributes.GetCurrent(id), b = number.Resolve(context.Values);
                 return Compare(op,a,b);
             }
-            return Define("条件分支", (context, deferred) =>
-            {
-                if (!string.IsNullOrEmpty(booleanId) && context.Values.Parameters.Get(booleanId).Kind != SkillParameterKind.Bool)
-                    throw new InvalidOperationException("条件开关需要 Bool 参数: " + booleanId);
-                if (compare) number.Resolve(context.Values);
-                SkillActionBuildContext.Validate(yes, context, true); SkillActionBuildContext.Validate(no, context, true);
-                if (!deferred) SkillActionBuildContext.Validate(Test(context) ? yes : no, context);
-            }, context => {bool taken=Test(context); SkillActionDebug.Branch(context,branchId,taken);context.Execute(taken ? yes : no);});
+            return Define("条件分支", context => {bool taken=Test(context); SkillActionDebug.Branch(context,branchId,taken);context.Execute(taken ? yes : no);});
         }
     }
 
@@ -212,24 +220,29 @@ namespace ZFramework.GAS.Unity
     {
         public GameplayTag tag;
         public TargetQuery targets = new TargetQuery { kind = TargetQueryKind.Self };
+        public bool includePosition;
+        public SkillSpawnPosition position;
         public SkillParameterKind payloadKind;
         public SkillNumber payload = new SkillNumber(0);
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
+            builder.Query(targets); builder.Number(payload);
             var tags = TagAssetUtility.ToSet(new[] { tag });
             if (tags.Count == 0) throw new InvalidOperationException("缺少有效的 Gameplay 事件标签。");
-            var eventTag = tags[0]; var query = targets.Build(); var number = payload; var kind = payloadKind;
-            return Define("发送 Gameplay 事件", (context, deferred) => { query.Validate(context, !deferred); SkillParameterValue.FromNumber(kind, number.Resolve(context.Values)); }, context =>
+            var eventTag = tags[0]; var query = targets.Build(); var number = payload; var kind = payloadKind;bool located=includePosition;var origin=position;
+            return Define("发送 Gameplay 事件", context =>
             {
+                System.Numerics.Vector3? eventPosition=null;
+                if(located){var p=context.OriginAt(origin);eventPosition=new System.Numerics.Vector3(p.x,p.y,p.z);}
                 float value = number.Resolve(context.Values);
                 var data = SkillParameterValue.FromNumber(kind, value);
                 var buffer = context.RentBuffer();
                 try
                 {
                     context.Services.Searcher.Query(query, context, buffer);
-                    if (buffer.Saturated) throw new InvalidOperationException("事件目标查询缓冲已满，请收窄范围或碰撞层。");
+                    GasAssert.That(!buffer.Saturated, "事件目标查询缓冲已满，请收窄范围或碰撞层。");
                     for (int i = 0; i < buffer.Count && context.CanContinue; i++)
-                        buffer.Units[i].Events.Send(new GameplayEvent(eventTag, context.SourceIdentity, data, context.Values));
+                        buffer.Units[i].Events.Send(new GameplayEvent(eventTag, context.SourceIdentity, data, context.Values,eventPosition));
                 }
                 finally { context.ReturnBuffer(buffer); }
             });
@@ -255,7 +268,7 @@ namespace ZFramework.GAS.Unity
             catch (Exception error) { throw new SkillActionException(Id, "模块 " + (module != null ? module.name : "<缺失>") + ": " + error.Message, error); }
             // Resolve level tables at cast start, never hold mutable authoring data in running definitions.
             var parameters = module.parameters == null ? Array.Empty<SkillParameter>() : module.parameters.parameters;
-            return Bind(actions,parameters,module.name);
+            return Bind(builder, actions, parameters);
         }
     }
     [Serializable]
@@ -263,64 +276,55 @@ namespace ZFramework.GAS.Unity
     {
         public SkillParameter[] parameters=Array.Empty<SkillParameter>();
         [SerializeReference, FlowBranch("动作")] public SkillAction[] actions=Array.Empty<SkillAction>();
-        public override SkillActionDefinition Build(SkillActionBuildContext builder)=>Bind(builder.Build(actions),parameters,"内联参数");
+        public override SkillActionDefinition Build(SkillActionBuildContext builder)=> Bind(builder, builder.Scope(actions, parameters), parameters);
     }
     [Serializable]
     public abstract class ParameterScopeAction : SkillAction
     {
         public ModuleParameterBinding[] bindings = Array.Empty<ModuleParameterBinding>();
-        protected SkillActionDefinition Bind(SkillActionDefinition[] actions,SkillParameter[] parameters,string moduleName)
+        protected SkillActionDefinition Bind(SkillActionBuildContext builder, SkillActionDefinition[] actions, SkillParameter[] parameters)
         {
-            var defaults = new ModuleDefaults(parameters);
-            var mapped = (ModuleParameterBinding[])bindings.Clone();
-            var cacheKey = new object();
-            string callId = Id;
-            SkillParameterValues BindNew(SkillExecutionContext context)
-            {
-                var values = defaults.Resolve(context.Values.Level);
-                foreach (var binding in mapped)
-                {
-                    if (!values.TryGetValue(binding.moduleParameterId, out var expected)) throw new InvalidOperationException("模块参数不存在: " + binding.moduleParameterId);
-                    var value = context.Values.Parameters.Get(binding.callerParameterId);
-                    if (value.Kind != expected.Kind) throw new InvalidOperationException("模块参数类型不匹配: " + binding.moduleParameterId);
-                    values[binding.moduleParameterId] = value;
-                }
-                return new SkillParameterValues(values);
-            }
-            Func<SkillExecutionContext, SkillParameterValues> createScope = BindNew;
-            SkillExecutionContext Bind(SkillExecutionContext context) => context.ModuleScope(cacheKey, createScope, callId, moduleName);
-            return Define("调用动作模块", (context, deferred) =>
-            {
-                var scope = Bind(context);
-                try { SkillActionBuildContext.Validate(actions, scope, deferred); }
-                catch (Exception error) { throw new SkillActionException(callId, "模块 " + moduleName + ": " + error.Message, error); }
-                finally { context.ReleaseModule(cacheKey, scope); }
-            }, context =>
-            {
-                var scope = Bind(context);
-                try { context.ExecuteModule(actions, scope); }
-                finally { context.ReleaseModule(cacheKey, scope); }
-            });
+            foreach (var binding in bindings) builder.CheckBinding(binding, parameters);
+            return new ModuleDefinition(this, actions, parameters);
         }
-        private sealed class ModuleDefaults
+    }
+
+    internal sealed class ModuleDefinition : SkillActionDefinition
+    {
+        internal readonly SkillActionDefinition[] Actions;
+        private readonly ModuleParameterBinding[] _bindings;
+        private readonly (string id, SkillParameterKind kind, float value, float[] levels)[] _defaults;
+#if UNITY_EDITOR
+        internal readonly bool IsExternalCall;
+#endif
+        internal ModuleDefinition(ParameterScopeAction call, SkillActionDefinition[] actions, SkillParameter[] parameters)
+            : base(call.Id, string.IsNullOrEmpty(call.displayName) ? "调用动作模块" : call.displayName)
         {
-            private readonly (string id, SkillParameterKind kind, float value, float[] levels)[] _items;
-            public ModuleDefaults(SkillParameter[] parameters)
+            Actions = actions;
+#if UNITY_EDITOR
+            IsExternalCall = call is CallModuleAction;
+#endif
+            _bindings = (ModuleParameterBinding[])call.bindings.Clone();
+            _defaults = new (string, SkillParameterKind, float, float[])[parameters.Length];
+            for (int i = 0; i < parameters.Length; ++i)
             {
-                _items = new (string, SkillParameterKind, float, float[])[parameters.Length];
-                for (int i = 0; i < parameters.Length; i++)
-                { var p = parameters[i]; _items[i] = (p.Id, p.kind, p.defaultValue, (float[])p.levels.Clone()); }
-            }
-            public Dictionary<string, SkillParameterValue> Resolve(int level)
-            {
-                var values = new Dictionary<string, SkillParameterValue>();
-                foreach (var p in _items)
-                {
-                    float v = p.levels.Length > 0 ? p.levels[Mathf.Clamp(level - 1, 0, p.levels.Length - 1)] : p.value;
-                    values.Add(p.id, SkillParameterValue.FromNumber(p.kind, v));
-                }
-                return values;
+                var p = parameters[i];
+                _defaults[i] = (p.Id, p.kind, p.defaultValue, p.levels == null ? Array.Empty<float>() : (float[])p.levels.Clone());
             }
         }
+        internal SkillParameterValues Resolve(EffectEvaluationContext caller)
+        {
+            if (_defaults.Length == 0) return SkillParameterValues.Empty;
+            var values = new Dictionary<string, SkillParameterValue>(_defaults.Length);
+            foreach (var p in _defaults)
+            {
+                float v = p.levels.Length == 0 ? p.value : p.levels[Mathf.Clamp(caller.Level - 1, 0, p.levels.Length - 1)];
+                values.Add(p.id, SkillParameterValue.FromNumber(p.kind, v));
+            }
+            foreach (var binding in _bindings)
+                values[binding.moduleParameterId] = caller.Parameters.Get(binding.callerParameterId);
+            return new SkillParameterValues(values);
+        }
+        public override void Execute(SkillExecutionContext context) => context.ExecuteModule(this);
     }
 }

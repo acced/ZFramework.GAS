@@ -39,16 +39,6 @@ namespace ZFramework.GAS.Editor
                     if (so.FindProperty(pair.Item1).objectReferenceValue is ScriptableObject child)
                         yield return new AssetLink(asset, new PortId(pair.Item2), child);
             }
-            else if (asset is SkillAnimationAsset)
-            {
-                var markers = so.FindProperty("markers");
-                for (int i = 0; i < markers.arraySize; i++)
-                {
-                    var marker = markers.GetArrayElementAtIndex(i);
-                    if (marker.FindPropertyRelative("effect").objectReferenceValue is ScriptableObject child)
-                        yield return new AssetLink(asset, new PortId(PortKind.Marker, marker.FindPropertyRelative("id").stringValue), child);
-                }
-            }
             else if (asset is GameplayEffectAsset)
             {
                 var children = so.FindProperty("conditionalEffects");
@@ -130,7 +120,11 @@ namespace ZFramework.GAS.Editor
             else if (port.Kind == PortKind.Marker)
             {
                 var marker = TimelineCommands.Find(so, "markers", port.ElementId);
-                if (marker != null) marker.FindPropertyRelative("effect").objectReferenceValue = remove ? null : child;
+                if (marker != null) {
+                    var actions=marker.FindPropertyRelative("actions");
+                    if(remove) { for(int i=actions.arraySize-1;i>=0;i--)if(actions.GetArrayElementAtIndex(i).managedReferenceValue is ApplyEffectAction a && a.effect==child)actions.DeleteArrayElementAtIndex(i); }
+                    else { int i=actions.arraySize++;actions.GetArrayElementAtIndex(i).managedReferenceValue=new ApplyEffectAction{effect=child as GameplayEffectAsset}; }
+                }
             }
             else
             {

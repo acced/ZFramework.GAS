@@ -44,10 +44,10 @@ namespace ZFramework.GAS.Editor
                 else ValidateStructure(source.FindProperty(source.targetObject is GameplayAbilityAsset?"activationActions":"actions"),ids);
             }
             Owner(so);
-            if(so.targetObject is SkillActionModuleAsset module)
-                ModuleCallIndex.ValidateCallers(module,doc);
+
         }
         internal static bool IsDetached(SkillAction action,string branch) => branch=="onCancel" ||
+            branch=="next" && action is TargetSequenceAction ||
             branch=="onHit" && action is LaunchProjectileAction p && p.ownership==SkillTaskOwnership.Scene ||
             branch=="onPeriod" && action is CreateAreaAction a && a.ownership==SkillTaskOwnership.Scene;
         public static void ValidateStructure(SerializedProperty list,HashSet<string> ids=null)
@@ -82,12 +82,12 @@ namespace ZFramework.GAS.Editor
                 using var data=new SerializedObject(current);var cursor=data.GetIterator();
                 while(cursor.Next(true)){
                     if(cursor.propertyType==SerializedPropertyType.ObjectReference && cursor.objectReferenceValue is GameplayEffectAsset child){Visit(child);continue;}
-                    if(cursor.name!="parameterId" || cursor.propertyType!=SerializedPropertyType.String || string.IsNullOrEmpty(cursor.stringValue))continue;
+                    if((cursor.name!="parameterId" && cursor.name!="multiplierParameterId") || cursor.propertyType!=SerializedPropertyType.String || string.IsNullOrEmpty(cursor.stringValue))continue;
                     string path=cursor.propertyPath;
                     if(path.StartsWith("durationMagnitude.") && !data.FindProperty("useDurationMagnitude").boolValue ||
                         path.StartsWith("periodMagnitude.") && !data.FindProperty("usePeriodMagnitude").boolValue)continue;
                     var kind=data.FindProperty(path.Substring(0,path.LastIndexOf('.')+1)+"kind");
-                    if(kind==null || kind.intValue==(int)MagnitudeKind.Parameter || kind.intValue==(int)MagnitudeKind.Calculation)ids.Add(cursor.stringValue);
+                    if(kind==null || cursor.name=="parameterId" && kind.intValue==(int)MagnitudeKind.Parameter || kind.intValue==(int)MagnitudeKind.Calculation)ids.Add(cursor.stringValue);
                 }
             }
             Visit(effect);return ids;
@@ -114,97 +114,51 @@ namespace ZFramework.GAS.Editor
                 descend=!(cursor.name=="actions" && cursor.isArray && cursor.propertyPath.EndsWith(".actions",StringComparison.Ordinal) &&
                     cursor.serializedObject.FindProperty(cursor.propertyPath.Substring(0,cursor.propertyPath.Length-8))?.managedReferenceValue is InlineParameterScopeAction);
                 if(cursor.propertyType==SerializedPropertyType.String && !string.IsNullOrEmpty(cursor.stringValue) &&
-                    (cursor.name=="parameterId" || cursor.name=="booleanParameterId" || cursor.name=="callerParameterId")) yield return cursor.Copy();
+                    (cursor.name=="parameterId" || cursor.name=="booleanParameterId" || cursor.name=="indexParameterId" || cursor.name=="scaleParameterId" || cursor.name=="callerParameterId")) yield return cursor.Copy();
             }
         }
-        public static void ConvertTask(SkillDocument doc,SkillAnimationAsset asset,string id)
-        {
-            EditCommand.Run(doc,"任务事件转为动作",asset,so=>
-            {
-                var tasks=so.FindProperty("taskEvents");int index=-1;
-                for(int i=0;i<tasks.arraySize;i++)if(tasks.GetArrayElementAtIndex(i).FindPropertyRelative("id").stringValue==id){index=i;break;}
-                if(index<0)throw new InvalidOperationException("任务已被删除。");
-                var entry=tasks.GetArrayElementAtIndex(index);var spawner=entry.FindPropertyRelative("spawner").managedReferenceValue as TaskSpawner;
-                if(spawner==null)throw new InvalidOperationException("请先配置执行器。");
-                var markers=so.FindProperty("markers");var m=markers.GetArrayElementAtIndex(markers.arraySize++);
-                m.FindPropertyRelative("id").stringValue=id;m.FindPropertyRelative("key").stringValue="";
-                m.FindPropertyRelative("time").floatValue=entry.FindPropertyRelative("time").floatValue;m.FindPropertyRelative("effect").objectReferenceValue=null;
-                var actions=m.FindPropertyRelative("actions");actions.arraySize=1;
-                actions.GetArrayElementAtIndex(0).managedReferenceValue=spawner is ProjectileSpawner projectile?(SkillAction)projectile.ToAction():new RunSpawnerAction{spawner=spawner};
-                tasks.DeleteArrayElementAtIndex(index);
-            },true);
-            doc.Selection.Select(asset,"markers",id);doc.OpenFlow();
-        }
+        // File ownership changes are deliberately not represented in Unity's object Undo stack.
         public static void Extract(SkillDocument doc,ScriptableObject owner,string path,int index,int count,string assetPath,Func<string,bool> consent=null)
         {
-            if(System.IO.File.Exists(assetPath) || AssetDatabase.LoadMainAssetAtPath(assetPath)!=null) throw new InvalidOperationException("请选择新资产路径。");
-            string operation=$"提取模块「{System.IO.Path.GetFileNameWithoutExtension(assetPath)}」";
-            string createdGuid=null;
-            try { EditCommand.Transaction(doc,operation,owner,()=>
-            {
-                using var so=new SerializedObject(owner);var list=so.FindProperty(path);
-                var actions=new SkillAction[count];var ids=new HashSet<string>();
-                for(int i=0;i<count;i++)
-                {
-                    var p=list.GetArrayElementAtIndex(index+i);
-                    actions[i]=p.managedReferenceValue as SkillAction;
-                    foreach(var link in ParameterLinks(p)) ids.Add(link.stringValue);
-                    ids.UnionWith(EffectParameters(p));
-                }
-                var scope=SkillNumberDrawer.LocalScope(list.GetArrayElementAtIndex(index)) ?? SkillNumberDrawer.Parameters(owner is SkillAnimationAsset?doc.Root:owner);
-                var declarations=scope.Where(p=>p!=null && ids.Contains(p.Id)).ToArray();
-                if(declarations.Length!=ids.Count) throw new InvalidOperationException("所选动作有缺失的参数绑定。");
-                var module=ScriptableObject.CreateInstance<SkillActionModuleAsset>(); module.actions=actions;
-                string originalActions=EditorJsonUtility.ToJson(module);
-                ModuleFileJournal.InlineEffects inlineEffects=null;
-                SkillParameterSetAsset set=null;
-                if(declarations.Length>0)
-                {
-                    set=ScriptableObject.CreateInstance<SkillParameterSetAsset>(); set.name="参数";set.parameters=declarations;
-                    module.parameters=set;
-                }
-                var call=new CallModuleAction{module=module,bindings=declarations.Select(p=>new ModuleParameterBinding{moduleParameterId=p.Id,callerParameterId=p.Id}).ToArray()};
-                try
-                {
-                    for(int i=1;i<count;i++) list.DeleteArrayElementAtIndex(index+1);
-                    list.GetArrayElementAtIndex(index).managedReferenceValue=call;
-                    so.ApplyModifiedProperties(); ValidateOwner(so,doc);
-                    ActionEffectOwnership.CheckExclusive(module,assetPath,owner,consent);
-                    AssetDatabase.CreateAsset(module,assetPath);createdGuid=AssetDatabase.AssetPathToGUID(assetPath);
-                    if(set!=null)AssetDatabase.AddObjectToAsset(set,module);
-                    using(var moduleData=new SerializedObject(module)){
-                        var moved=ActionEffectOwnership.Localize(moduleData.FindProperty("actions"),0,count,module,false);
-                        if(moved.Count>0)inlineEffects=ModuleFileJournal.InlineEffects.Capture(module,moved.Keys.ToArray());
-                        moduleData.ApplyModifiedPropertiesWithoutUndo();
-                        if(moved.Count>0)doc?.Layout?.CopyMovedEffectLayouts(moved.ToDictionary(p=>AssetReferences.Key(p.Key),p=>AssetReferences.Key(p.Value)));
-                        foreach(var source in moved.Keys)Undo.DestroyObjectImmediate(source);
-                    }
-                    // Persist the reference after its previously transient target has a GUID.
-                    using var persisted=new SerializedObject(owner);
-                    persisted.FindProperty(path).GetArrayElementAtIndex(index).FindPropertyRelative("module").objectReferenceValue=module;
-                    persisted.ApplyModifiedPropertiesWithoutUndo(); EditorUtility.SetDirty(owner);
-                }
-                catch
-                {
-                    EditCommand.Cleanup(()=>{if(set!=null && !EditorUtility.IsPersistent(set))UnityEngine.Object.DestroyImmediate(set);});
-                    EditCommand.Cleanup(()=>{if(module!=null && !EditorUtility.IsPersistent(module))UnityEngine.Object.DestroyImmediate(module);});
-                    throw;
-                }
-                EditorUtility.SetDirty(module); AssetDatabase.SaveAssetIfDirty(module);
-                ModuleFileUndo.Track(assetPath,owner,path,index,originalActions,call,operation,inlineEffects,actions.Select(a=>a.Id).ToArray());
-                // The journal now owns rollback (including retaining a still-referenced module).
-                createdGuid=null;
-            }); } catch {
-                EditCommand.Cleanup(()=>{
-                    if(!string.IsNullOrEmpty(createdGuid) && AssetDatabase.AssetPathToGUID(assetPath)==createdGuid &&
-                        !AssetDatabase.DeleteAsset(assetPath))throw new System.IO.IOException("不能回滚模块文件："+assetPath);
-                });
-                throw;
+            if(string.IsNullOrEmpty(AssetDatabase.GetAssetPath(owner)))throw new InvalidOperationException("请先保存源资产。");
+            if(System.IO.File.Exists(assetPath))throw new InvalidOperationException("请选择新资产路径。");
+            using var so=new SerializedObject(owner);var list=so.FindProperty(path);
+            var actions=new SkillAction[count];var ids=new HashSet<string>();
+            for(int i=0;i<count;i++) {
+                var p=list.GetArrayElementAtIndex(index+i);actions[i]=p.managedReferenceValue as SkillAction;
+                foreach(var link in ParameterLinks(p))ids.Add(link.stringValue);ids.UnionWith(EffectParameters(p));
             }
+            var scope=SkillNumberDrawer.LocalScope(list.GetArrayElementAtIndex(index)) ?? SkillNumberDrawer.Parameters(owner is SkillAnimationAsset?doc.Root:owner);
+            var declarations=scope.Where(p=>p!=null && ids.Contains(p.Id)).ToArray();
+            if(declarations.Length!=ids.Count)throw new InvalidOperationException("所选动作有缺失的参数绑定。");
+            // Account for the containing branch as well as the new CallModule layer.
+            int depth=2;for(int at=0;(at=path.IndexOf(Element,at,StringComparison.Ordinal))>=0;at+=Element.Length)depth++;
+            if(owner is SkillAnimationAsset)depth--; // markers.Array.data[i] is not an action scope.
+            var actionIds=new HashSet<string>();foreach(var a in actions)Visit(a,false,depth,actionIds);
+            var moving=ActionEffectOwnership.CheckExclusive(list,index,count,assetPath);
+            string warning="提取模块并保存不可撤销，也会清除源资产的撤销记录。只移动独占的私有效果，其 GUID:fileID 将改变；外部项目引用由项目负责。";
+            if(!(consent??ActionEffectOwnership.Confirm)(warning))throw new OperationCanceledException();
+            Undo.ClearUndo(owner);foreach(var effect in moving)Undo.ClearUndo(effect);
+            var module=ScriptableObject.CreateInstance<SkillActionModuleAsset>();module.actions=actions;
+            AssetDatabase.CreateAsset(module,assetPath);
+            if(declarations.Length>0) {
+                var set=ScriptableObject.CreateInstance<SkillParameterSetAsset>();set.name="参数";set.parameters=declarations;
+                AssetDatabase.AddObjectToAsset(set,module);module.parameters=set;
+            }
+            var keys=moving.ToDictionary(e=>e,e=>AssetReferences.Key(e));
+            foreach(var effect in moving){AssetDatabase.RemoveObjectFromAsset(effect);AssetDatabase.AddObjectToAsset(effect,module);EditorUtility.SetDirty(effect);}
+            doc?.Layout?.CopyMovedEffectLayouts(keys.ToDictionary(p=>p.Value,p=>AssetReferences.Key(p.Key)));
+            for(int i=1;i<count;i++)list.DeleteArrayElementAtIndex(index+1);
+            list.GetArrayElementAtIndex(index).managedReferenceValue=new CallModuleAction {module=module,
+                bindings=declarations.Select(p=>new ModuleParameterBinding{moduleParameterId=p.Id,callerParameterId=p.Id}).ToArray()};
+            so.ApplyModifiedPropertiesWithoutUndo();EditorUtility.SetDirty(module);EditorUtility.SetDirty(owner);
+            AssetDatabase.SaveAssetIfDirty(module);AssetDatabase.SaveAssetIfDirty(owner);
+            doc?.Notify(new ChangeSet(owner,true));
         }
-        public static void Inline(SkillDocument doc,ScriptableObject owner,string path,int index,Func<string,bool> consent=null,Func<string,ActionEffectOwnership.CopyDecision> conflict=null)
+        public static void Inline(SkillDocument doc,ScriptableObject owner,string path,int index,Func<string,bool> consent=null)
         {
-            EditCommand.Run(doc,"内联共享模块",owner,so=>
+            if(string.IsNullOrEmpty(AssetDatabase.GetAssetPath(owner)))throw new InvalidOperationException("请先保存目标资产。");
+            using var so=new SerializedObject(owner);
             {
                 var list=so.FindProperty(path);var call=list.GetArrayElementAtIndex(index).managedReferenceValue as CallModuleAction;
                 if(call?.module==null) throw new InvalidOperationException("缺少模块。");
@@ -212,6 +166,8 @@ namespace ZFramework.GAS.Editor
                 var children=call.module.actions;
                 using var moduleData=new SerializedObject(call.module);
                 var sourceList=moduleData.FindProperty("actions");
+                ActionEffectOwnership.RequireShared(sourceList,0,sourceList.arraySize,owner);
+                if(!(consent??ActionEffectOwnership.Confirm)("内联模块并保存不可撤销，也会清除目标资产的撤销记录。独立效果继续共享同一定义。"))throw new OperationCanceledException();
                 bool preserveScope=false;
                 for(int i=0;i<children.Length;i++){
                     var item=sourceList.GetArrayElementAtIndex(i);
@@ -223,8 +179,7 @@ namespace ZFramework.GAS.Editor
                     var scoped=new InlineParameterScopeAction{bindings=call.bindings,parameters=call.module.parameters?.parameters??Array.Empty<SkillParameter>(),
                         actions=children.Select(a=>(SkillAction)JsonUtility.FromJson(JsonUtility.ToJson(a),a.GetType())).ToArray()};
                     var slot=list.GetArrayElementAtIndex(index);slot.managedReferenceValue=scoped;SkillActionClipboard.RenewIds(slot);
-                    ActionEffectOwnership.Localize(list,index,1,owner,true,consent,confirmReuse:true,conflict:conflict);
-                    so.ApplyModifiedProperties();ValidateOwner(so,doc);return;
+                    SaveInline();return;
                 }
                 list.DeleteArrayElementAtIndex(index);
                 for(int i=0;i<children.Length;i++)
@@ -238,9 +193,12 @@ namespace ZFramework.GAS.Editor
                     }
                     list.MoveArrayElement(n,index+i);
                 }
-                ActionEffectOwnership.Localize(list,index,children.Length,owner,true,consent,confirmReuse:true,conflict:conflict);
-                so.ApplyModifiedProperties(); ValidateOwner(so,doc);
-            },true);
+                SaveInline();
+            }
+            void SaveInline() {
+                ValidateOwner(so,doc);Undo.ClearUndo(owner);so.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(owner);AssetDatabase.SaveAssetIfDirty(owner);doc?.Notify(new ChangeSet(owner,true));
+            }
         }
     }
 }

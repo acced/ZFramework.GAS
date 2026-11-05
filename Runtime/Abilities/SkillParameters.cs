@@ -3,6 +3,14 @@ using System.Collections.Generic;
 
 namespace ZFramework.GAS
 {
+    /// <summary>Development-only usage checks. Release players trust built configuration.</summary>
+    public static class GasAssert
+    {
+        [System.Diagnostics.Conditional("UNITY_ASSERTIONS")]
+        public static void That(bool condition, string message)
+        { if (!condition) throw new InvalidOperationException(message); }
+    }
+
     public enum SkillParameterKind { Float, Int, Bool }
 
     /// <summary>A typed value. IDs, rather than display names, are used for all lookups.</summary>
@@ -28,19 +36,30 @@ namespace ZFramework.GAS
         public override string ToString() => Kind == SkillParameterKind.Bool ? Boolean.ToString() : Kind == SkillParameterKind.Int ? Integer.ToString() : Number.ToString("0.###");
     }
 
-    /// <summary>Immutable, per-cast parameter snapshot. Construction is a cast-start allocation.</summary>
+    /// <summary>Immutable parameters, resolved and cached by the caller before casting.</summary>
     public sealed class SkillParameterValues
     {
         private readonly Dictionary<string, SkillParameterValue> _values;
+        private readonly SkillParameterValues _parent;
+        private readonly string _overrideId;
+        private readonly SkillParameterValue _overrideValue;
+        private SkillParameterValues(SkillParameterValues parent, string id, SkillParameterValue value)
+        { _parent = parent; _overrideId = id; _overrideValue = value; }
         public static readonly SkillParameterValues Empty = new SkillParameterValues(null);
         public SkillParameterValues(IEnumerable<KeyValuePair<string, SkillParameterValue>> values)
         {
             _values = new Dictionary<string, SkillParameterValue>(StringComparer.Ordinal);
             if (values != null) foreach (var pair in values) _values.Add(pair.Key, pair.Value);
         }
-        public int Count => _values.Count;
+        public SkillParameterValues With(string id, SkillParameterValue value)
+        {
+            if(Get(id).Kind!=value.Kind)throw new InvalidOperationException("参数类型不匹配: "+id);
+            return new SkillParameterValues(this, id, value);
+        }
+        public int Count => _parent?.Count ?? _values.Count;
         public bool TryGet(string id, out SkillParameterValue value)
         {
+            if (_parent != null) { if (id == _overrideId) { value = _overrideValue; return true; } return _parent.TryGet(id, out value); }
             if (id != null) return _values.TryGetValue(id, out value);
             value = default; return false;
         }
@@ -48,7 +67,9 @@ namespace ZFramework.GAS
             : throw new InvalidOperationException($"Missing skill parameter '{id}'.");
         public void CopyTo(List<KeyValuePair<string, SkillParameterValue>> results)
         {
-            results.Clear(); foreach (var pair in _values) results.Add(pair);
+            if (_parent == null) { results.Clear(); foreach (var pair in _values) results.Add(pair); return; }
+            _parent.CopyTo(results);
+            for (int i = 0; i < results.Count; i++) if (results[i].Key == _overrideId) { results[i] = new(_overrideId, _overrideValue); break; }
         }
     }
 
@@ -58,10 +79,6 @@ namespace ZFramework.GAS
         private readonly Dictionary<AttributeId, float> _source;
         private AttributeSet _liveSource;
         public bool HasSourceSnapshot => _source != null;
-        private EffectEvaluationContext _emptySourceCapture;
-        private EffectEvaluationContext _lastCapture;
-        private AttributeSet _lastSource;
-        private long _lastSourceVersion;
         public int Level { get; }
         public SkillParameterValues Parameters { get; }
         public EffectEvaluationContext(int level, SkillParameterValues parameters = null, AttributeSet source = null)
@@ -77,26 +94,13 @@ namespace ZFramework.GAS
         public float Parameter(string id)
         {
             var value = Parameters.Get(id);
-            if (value.Kind == SkillParameterKind.Bool) throw new InvalidOperationException("Numeric binding requires Float or Int: " + id);
-            if (float.IsNaN(value.Number) || float.IsInfinity(value.Number)) throw new InvalidOperationException("Non-finite parameter: " + id);
+            GasAssert.That(value.Kind != SkillParameterKind.Bool && float.IsFinite(value.Number), "Invalid numeric parameter.");
             return value.Number;
         }
         private EffectEvaluationContext(EffectEvaluationContext source, SkillParameterValues parameters)
         { Level = source.Level; Parameters = parameters; _source = source._source; _liveSource = source._liveSource; }
         public EffectEvaluationContext WithParameters(SkillParameterValues parameters)
             => new EffectEvaluationContext(this, parameters ?? SkillParameterValues.Empty);
-        /// <summary>Legacy asynchronous tasks also need source captures when Core supplied only a frozen level.</summary>
-        public EffectEvaluationContext CaptureSource(AttributeSet source)
-        {
-            if (_source != null || source == null) return this;
-            if (source.Count == 0) return _emptySourceCapture ??= new EffectEvaluationContext(Level, Parameters, source);
-            if (_lastSource != source || _lastSourceVersion != source.Version || _lastCapture == null)
-            {
-                _lastCapture = new EffectEvaluationContext(Level, Parameters, source);
-                _lastSource = source; _lastSourceVersion = source.Version;
-            }
-            return _lastCapture;
-        }
     }
 
     /// <summary>Program extension point for bounded, typed calculations; never parses scripts.</summary>
@@ -110,11 +114,15 @@ namespace ZFramework.GAS
     {
         private readonly AttributeId _source, _target;
         private readonly float _constant, _coefficient, _targetCoefficient, _min, _max, _scale;
-        private readonly string _parameter;
+        private readonly string _parameter, _outputMultiplier;
         public AttributeFormula(AttributeId source, AttributeId target, float coefficient = 1,
             float targetCoefficient = 1, float constant = 0, string parameter = null,
             float min = 0, float max = float.MaxValue, float scale = 1)
+            : this(source,target,coefficient,targetCoefficient,constant,parameter,min,max,scale,null) {}
+        public AttributeFormula(AttributeId source, AttributeId target, float coefficient, float targetCoefficient,
+            float constant,string parameter,float min,float max,float scale,string outputMultiplier)
         {
+            _outputMultiplier=outputMultiplier;
             if (min > max) throw new ArgumentException("Formula minimum exceeds maximum.");
             _source = source; _target = target; _coefficient = coefficient;
             _targetCoefficient = targetCoefficient; _constant = constant; _parameter = parameter;
@@ -125,7 +133,7 @@ namespace ZFramework.GAS
             float factor = string.IsNullOrEmpty(_parameter) ? 1 : spec.Parameter(_parameter);
             float value = _constant + spec.SourceValue(_source) * _coefficient * factor
                 - (target?.GetCurrent(_target) ?? 0) * _targetCoefficient;
-            return Math.Max(_min, Math.Min(_max, value)) * _scale;
+            return Math.Max(_min, Math.Min(_max, value)) * _scale * (string.IsNullOrEmpty(_outputMultiplier)?1:spec.Parameter(_outputMultiplier));
         }
     }
 }

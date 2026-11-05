@@ -6,7 +6,18 @@ using UnityEngine;
 using ZFramework.GAS.Unity;
 namespace ZFramework.GAS.Editor
 {
-    internal enum DummyLayout { 直线, 扇形, 随机 }
+    internal enum DummyLayout { 直线, 扇形, 随机, 接力 }
+    // Local-space endpoints are the ones used by onHit and the next target query.
+    internal readonly struct PreviewLeg
+    {
+        public readonly int FromUnit, ToUnit; // zero-based dummy index, -1 = caster
+        public readonly Vector3 From, To;
+        public readonly float Launch, Arrival;
+        public readonly bool Lightning;
+        public PreviewLeg(int fromUnit,int toUnit,Vector3 from,Vector3 to,float launch,float arrival,bool lightning)
+        { FromUnit=fromUnit;ToUnit=toUnit;From=from;To=to;Launch=launch;Arrival=arrival;Lightning=lightning; }
+        public string Caption => $"{(FromUnit<0?"施法者":"#"+(FromUnit+1))} → #{ToUnit+1} · {(Lightning?"闪电":"飞弹")} {Arrival:0.00}s";
+    }
     // Geometric authoring preview: never executes actions, physics, AI or project callbacks.
     internal sealed class SkillPreviewSimulation : IDisposable
     {
@@ -18,6 +29,7 @@ namespace ZFramework.GAS.Editor
         private readonly HashSet<int> _hit=new();
         private readonly MaterialPropertyBlock _tint=new();
         internal const float DummyRadius=.18f;
+        private const float ImpactPulse=.15f;
         public string SourceTags="",TargetTags="";
         public int AimIndex=1; // 1-based; 0 aims at a ground point.
         public float SourceAttribute,TargetAttribute;
@@ -27,6 +39,9 @@ namespace ZFramework.GAS.Editor
             bool Has(GameplayTags.GameplayTag tag)=>!string.IsNullOrEmpty(tag.m_Name) && names.Any(n=>n==tag.m_Name || n.StartsWith(tag.m_Name+".",StringComparison.Ordinal));
             return !(required?.Any(t=>!string.IsNullOrEmpty(t.m_Name) && !Has(t))??false) && !(blocked?.Any(Has)??false);
         }
+        private readonly List<PreviewLeg> _legs=new();
+        internal IReadOnlyList<PreviewLeg> Legs=>_legs;
+        internal IReadOnlyList<Vector3> Targets=>_points;
         public int HitCount=>_hit.Count;
         internal bool WasHit(int dummy)=>_hit.Contains(dummy);
         public float End {get;private set;}
@@ -37,6 +52,7 @@ namespace ZFramework.GAS.Editor
         public static Vector3 Position(DummyLayout layout,int i,int count,float distance)
         {
             float u=count<2?.5f:i/(count-1f);
+            if(layout==DummyLayout.接力)return new Vector3(i%2==0?0:distance*.35f,0,distance*(1+i));
             if(layout==DummyLayout.直线)return new Vector3((u-.5f)*(count-1)*.8f,0,distance);
             if(layout==DummyLayout.扇形)return Quaternion.Euler(0,(u-.5f)*120,0)*Vector3.forward*distance;
             var rng=new System.Random(137+7919*i);
@@ -54,7 +70,8 @@ namespace ZFramework.GAS.Editor
             if(center.sqrMagnitude>(r+bodyRadius)*(r+bodyRadius))return false;
             return q.Kind!=TargetQueryKind.Sector || delta.sqrMagnitude<1e-8f || Vector2.Angle(Vector2.up,new Vector2(delta.x,delta.z))<=q.Angle.Resolve(v)*.5f;
         }
-        public void Sample(SkillDocument doc,Transform caster,int count,DummyLayout layout,float distance,GameObject prefab,int level,bool showEffects,SkillPreviewTools drawing,bool showRanges=false)
+        public void Sample(SkillDocument doc,Transform caster,int count,DummyLayout layout,float distance,GameObject prefab,int level,bool showEffects,SkillPreviewTools drawing,bool showRanges=false,
+            SkillParameterOverride[] castOverrides=null,bool routes=false)
         {
             if(prefab!=_prefab){Clear();_prefab=prefab;}
             while(_units.Count<count)
@@ -67,18 +84,36 @@ namespace ZFramework.GAS.Editor
                 _units.Add(go);var bones=go.GetComponentsInChildren<Transform>(true);_bones.Add(bones);
                 _rest.Add(Array.ConvertAll(bones,b=>(b.localPosition,b.localRotation,b.localScale)));
             }
-            _hit.Clear();_points.Clear();End=doc.Root?.Animation?.Duration??0;
+            _hit.Clear();_legs.Clear();_points.Clear();End=doc.Root?.Animation?.Duration??0;
             for(int i=0;i<_units.Count;i++){_units[i].SetActive(i<count); if(i<count){var p=Position(layout,i,count,distance);_points.Add(p);_units[i].transform.position=caster.TransformPoint(p)+(prefab==null?Vector3.up*DummyRadius:Vector3.zero);}}
             if(doc.Root==null || (count==0 && !showEffects && !showRanges))return;
-            var root=doc.Root; float now=doc.Playback.Time; var values=new EffectEvaluationContext(level,root.ResolveParameters(level));
+            var root=doc.Root; float now=doc.Playback.Time; var values=new EffectEvaluationContext(level,root.ResolveParameters(level,castOverrides));
             var aim=new Vector3(0,0,distance); int target=AimIndex>0 && count>0?Mathf.Clamp(AimIndex-1,0,count-1):-1; if(target>=0)aim=_points[target];
+            Vector3? hitPoint=null; int hitUnit=-1;
+            int FromUnit(SkillSpawnPosition origin)=>origin switch{
+                SkillSpawnPosition.HitPoint=>hitUnit, SkillSpawnPosition.Target or SkillSpawnPosition.TargetPoint=>target, _=>-1 };
+            void Route(Vector3 from,Vector3 to,Color color,bool pending){
+                Vector3 a=caster.TransformPoint(from), b=caster.TransformPoint(to);
+                if(pending)for(int i=0;i<12;i+=2)drawing.Line(Vector3.Lerp(a,b,i/12f),Vector3.Lerp(a,b,(i+1)/12f),color);
+                else drawing.Line(a,b,color);
+            }
+            (TargetSequenceAction action,HashSet<int> seen,int limit,int used,int index,int depth,EffectEvaluationContext values) chain=default;
+            var records=new Dictionary<string,HashSet<int>>();
+            HashSet<int> Record(string key){
+                if(string.IsNullOrEmpty(key))return new HashSet<int>();if(!records.TryGetValue(key,out var s))records.Add(key,s=new());return s;
+            }
+            Vector3? Origin(SkillSpawnPosition origin)=>origin switch{
+                SkillSpawnPosition.HitPoint=>hitPoint,SkillSpawnPosition.Target=>target>=0?_points[target]:(Vector3?)null,
+                SkillSpawnPosition.TargetPoint=>aim,SkillSpawnPosition.EventPosition=>null,_=>Vector3.zero};
             void Mark(TargetQuery authored,EffectEvaluationContext v)
             {
                 var q=authored.Build();
-                if(showRanges)drawing.Query(q,v,caster,distance,caster.TransformPoint(q.Kind==TargetQueryKind.TargetPoint?aim:Vector3.zero));
+                var origin=Origin(q.Kind==TargetQueryKind.TargetPoint?SkillSpawnPosition.TargetPoint:q.Origin);
+                if(!origin.HasValue)return;
+                if(showRanges)drawing.Query(q,v,caster,caster.TransformPoint(origin.Value));
                 if(!TagsMatch(TargetTags,authored.requiredTags,authored.blockedTags) || count==0 || q.Kind==TargetQueryKind.Self)return;
                 if(q.Kind==TargetQueryKind.FixedTarget){if(target>=0)_hit.Add(target);return;}
-                var center=q.Kind==TargetQueryKind.TargetPoint?aim:Vector3.zero;_ordered.Clear();
+                var center=origin.Value;_ordered.Clear();
                 for(int i=0;i<count;i++)if((authored.layerMask.value & (1<<_units[i].layer))!=0 && Contains(q,v,_points[i]-center,DummyRadius))_ordered.Add(i);
                 _ordered.Sort((a,b)=>(_points[a]-center).sqrMagnitude.CompareTo((_points[b]-center).sqrMagnitude));
                 for(int j=0;j<Mathf.Min(_ordered.Count,q.MaxTargets);j++)_hit.Add(_ordered[j]);
@@ -86,31 +121,69 @@ namespace ZFramework.GAS.Editor
             void Visit(SkillAction action,float at,EffectEvaluationContext v,int depth)
             {
                 if(action==null || depth>8)return;
-                float age=now-at;bool pulse=age>=0 && age<.15f;
+                float age=now-at;bool pulse=age>=0 && age<ImpactPulse;
                 void Branch(SkillAction[] children,float when,EffectEvaluationContext vals){if(children!=null)foreach(var child in children)Visit(child,when,vals,depth+1);}
+                void Step(bool first){
+                    var seq=chain.action;if(seq==null || target<0 || chain.used>=chain.limit || (!seq.allowRepeat && chain.seen.Contains(target)))return;
+                    chain.used++;chain.seen.Add(target);int last=chain.index;chain.index=first?0:last+1;
+                    var parameters = TargetSequenceAction.StepParameters(chain.values.Parameters, seq.indexParameterId, seq.scaleParameterId, chain.index, seq.retention.Resolve(chain.values));
+                    var stepValues = chain.values.WithParameters(parameters);
+                    foreach(var child in (first?seq.first:seq.next)??Array.Empty<SkillAction>())Visit(child,at,stepValues,chain.depth+1);
+                    chain.index=last;
+                }
                 switch(action)
                 {
+                    case TargetSequenceAction seq:
+                        var outer=chain;chain=(seq,Record(seq.sharedRecord),Mathf.Clamp((int)seq.maxTargets.Resolve(v),0,64),0,0,depth,v);
+                        Step(true);chain=outer;break;
+                    case NextTargetStepAction:Step(false);break;
+                    case SelectTargetsAction pick:
+                        var query=pick.targets.Build();
+                        var center=Origin(query.Kind==TargetQueryKind.TargetPoint?SkillSpawnPosition.TargetPoint:query.Origin);
+                        if(!center.HasValue || !TagsMatch(TargetTags,pick.targets.requiredTags,pick.targets.blockedTags))break;
+                        if(showRanges && pulse)drawing.Query(query,v,caster,caster.TransformPoint(center.Value));
+                        int take=Math.Min(query.MaxTargets,(int)pick.count.Resolve(v)),oldTarget=target;var oldAim=aim;
+                        var record=!string.IsNullOrEmpty(pick.sharedRecord)?Record(pick.sharedRecord):null;
+                        var candidates=Enumerable.Range(0,count).Where(i=>query.Kind==TargetQueryKind.FixedTarget?i==oldTarget:
+                            query.Kind!=TargetQueryKind.Self && (pick.targets.layerMask.value&(1<<_units[i].layer))!=0 && Contains(query,v,_points[i]-center.Value,DummyRadius))
+                            .OrderBy(i=>(_points[i]-center.Value).sqrMagnitude).ToArray();
+                        foreach(int unit in candidates){
+                            if(take<=0 || chain.action!=null && chain.used>=chain.limit)break;
+                            if(pick.excludeCurrent && unit==oldTarget || pick.excludeVisited && (record?.Contains(unit)==true ||
+                                chain.action!=null && !chain.action.allowRepeat && chain.seen.Contains(unit)))continue;
+                            take--;target=unit;aim=_points[unit]+Vector3.up*DummyRadius;if(pick.recordSelection)record?.Add(unit);
+                            Branch(pick.actions,at,v);
+                        }target=oldTarget;aim=oldAim;break;
+                    case ShowTargetLinkAction link:
+                        float until=at+link.duration.Resolve(v);End=Mathf.Max(End,Mathf.Max(until,at+ImpactPulse));
+                        if(target>=0 && Origin(link.from) is Vector3 startLink){
+                            if(routes)_legs.Add(new PreviewLeg(FromUnit(link.from),target,startLink,aim,at,at,true));
+                            if(drawing!=null && (routes || showEffects && now>=at && now<until)){
+                                Color color=now<at?new Color(.22f,.55f,.60f):now<until?Color.cyan:new Color(.17f,.7f,.78f);
+                                Route(startLink,aim,color,now<at);
+                            }
+                        }
+                        break;
                     case ApplyEffectAction a when pulse:Mark(a.targets,v);break;
                     case LaunchProjectileAction p:
-                        float limit=p.lifetime.Resolve(v),speed=Mathf.Max(.001f,p.speed.Resolve(v)),flight=Mathf.Min(limit,aim.magnitude/speed);
-                        End=Mathf.Max(End,at+flight);
-                        if(showEffects && age>=0 && age<=flight)
-                        {
-                            Vector3 At(float t)=>caster.TransformPoint(aim*t+Vector3.up*(4*p.arcHeight*t*(1-t)));
-                            float fraction=speed/Mathf.Max(.001f,aim.magnitude),end=Mathf.Clamp01(flight*fraction);
-                            for(int i=0;i<24;i+=2)drawing.Line(At(end*i/24),At(end*(i+1)/24),Color.yellow);
-                            drawing.Circle(At(Mathf.Clamp01(age*fraction)),Mathf.Max(.04f,p.radius),Color.yellow);
+                        if(Origin(p.origin) is not Vector3 start || p.onlySelectedTarget && target<0)break;
+                        var destination=aim;float length=Vector3.Distance(start,destination);
+                        float limit=p.lifetime.Resolve(v),speed=Mathf.Max(.001f,p.speed.Resolve(v)),flight=Mathf.Min(limit,length/speed);
+                        Vector3 Path(float ageOfShot){
+                            float traveled = ageOfShot * speed;
+                            var flat = Vector3.MoveTowards(start, destination, traveled);
+                            flat.y += LaunchProjectileAction.ArcOffset(p.arcHeight, traveled, length);
+                            return flat;
                         }
                         // Sweep the projectile sphere against the same explicit dummy proxy used by area queries.
-                        var hits=new List<(float time,int unit)>(); var previous=Vector3.zero;
+                        var hits=new List<(float time,int unit)>(); var previous=start;
                         float extent=DummyRadius+Mathf.Max(0,p.radius);
                         for(int step=1;step<=48;step++)
                         {
-                            float f=step/48f, u=Mathf.Clamp01(f*flight*speed/Mathf.Max(.00001f,aim.magnitude));
-                            var next=aim*u+Vector3.up*(4*p.arcHeight*u*(1-u));var span=next-previous;
+                            var next=Path(flight*step/48f);var span=next-previous;
                             for(int i=0;i<count;i++)
                             {
-                                if((p.collision.layerMask.value & (1<<_units[i].layer))==0 || hits.Exists(h=>h.unit==i))continue;
+                                if(p.onlySelectedTarget && i!=target || (p.collision.layerMask.value & (1<<_units[i].layer))==0 || hits.Exists(h=>h.unit==i))continue;
                                 var from=previous-_points[i]-Vector3.up*DummyRadius;
                                 float len=span.magnitude,proj=len>0?Vector3.Dot(from,span)/len:0,c=from.sqrMagnitude-extent*extent;
                                 float disc=proj*proj-c;float entry=c<=0?0:disc>=0?-proj-Mathf.Sqrt(disc):float.PositiveInfinity;
@@ -118,9 +191,37 @@ namespace ZFramework.GAS.Editor
                             }
                             previous=next;
                         }
-                        hits.Sort((x,y)=>x.time.CompareTo(y.time));
-                        if(TagsMatch(TargetTags,p.collision.requiredTags,p.collision.blockedTags))
-                            foreach(var impact in hits.Take(Math.Max(1,p.maxHits))){if(now>=impact.time && now-impact.time<.15f)_hit.Add(impact.unit);int prior=target;var previousAim=aim; target=impact.unit;aim=_points[target];Branch(p.onHit,impact.time,v);target=prior;aim=previousAim;}
+                        hits.Sort((x,y)=>x.time!=y.time?x.time.CompareTo(y.time):x.unit.CompareTo(y.unit));
+                        int accepted=TagsMatch(TargetTags,p.collision.requiredTags,p.collision.blockedTags)
+                            ?Math.Min(hits.Count,Math.Max(1,p.maxHits)):0;
+                        float stop=accepted==Math.Max(1,p.maxHits)?hits[accepted-1].time:at+flight;
+                        End=Mathf.Max(End,stop);
+                        if(drawing!=null && (routes || showEffects && age>=0 && now<stop)){
+                            bool pending=now<at;
+                            Color color=pending?new Color(.62f,.52f,.24f):now<stop?Color.yellow:new Color(.9f,.66f,.22f);
+                            int stride=pending || !routes?2:1;
+                            for(int i=0;i<24;i+=stride)drawing.Line(caster.TransformPoint(Path((stop-at)*i/24)),
+                                caster.TransformPoint(Path((stop-at)*(i+1)/24)),color);
+                            if(age>=0 && now<stop)drawing.Circle(caster.TransformPoint(Path(age)),Mathf.Max(.04f,p.radius),Color.yellow);
+                        }
+                        for(int i=0;i<accepted;i++){
+                            var impact=hits[i];var projectileCenter=Path(impact.time-at);var body=_points[impact.unit]+Vector3.up*DummyRadius;
+                            // ClosestPoint for an overlap inside the dummy is the projectile position itself.
+                            var contact=body+Vector3.ClampMagnitude(projectileCenter-body,DummyRadius);
+                            if(routes){
+                                _legs.Add(new PreviewLeg(FromUnit(p.origin),impact.unit,start,contact,at,impact.time,false));
+                                if(drawing!=null){
+                                    Route(projectileCenter,contact,now<at?Color.gray:Color.yellow,false);
+                                    drawing.Circle(caster.TransformPoint(contact),.06f,now>=impact.time?Color.yellow:Color.gray);
+                                }
+                            }
+                            // Leave the last impact visible before a looping preview starts its next cast.
+                            End=Mathf.Max(End,impact.time+ImpactPulse);
+                            if(now>=impact.time && now-impact.time<ImpactPulse)_hit.Add(impact.unit);
+                            int prior=target,priorUnit=hitUnit;var previousAim=aim;var priorHit=hitPoint;
+                            target=hitUnit=impact.unit;hitPoint=contact;aim=_points[target];
+                            Branch(p.onHit,impact.time,v);target=prior;aim=previousAim;hitPoint=priorHit;hitUnit=priorUnit;
+                        }
                         break;
                     case CreateAreaAction a:
                         float life=a.duration.Resolve(v); if(life<=0)life=Mathf.Max(0,(root.Animation?.Duration??now)-at); End=Mathf.Max(End,at+life);
@@ -128,7 +229,7 @@ namespace ZFramework.GAS.Editor
                         {var q=a.targets.Build();Mark(a.targets,v);float period=a.period.Resolve(v);
                          if(showEffects)
                          {
-                             drawing.Query(q,v,caster,distance,caster.TransformPoint(q.Kind==TargetQueryKind.TargetPoint?aim:Vector3.zero));
+                             drawing.Query(q,v,caster,caster.TransformPoint(q.Kind==TargetQueryKind.TargetPoint?aim:Vector3.zero));
                              if(period>0 && age>=period && Mathf.Repeat(age,period)<.15f)
                                  drawing.Circle(caster.TransformPoint(q.Kind==TargetQueryKind.TargetPoint?aim:Vector3.zero),q.Radius.Resolve(v),Color.yellow);
                          }
@@ -158,8 +259,9 @@ namespace ZFramework.GAS.Editor
             {
                 var m=markers.GetArrayElementAtIndex(i);float at=m.FindPropertyRelative("time").floatValue;
                 var list=m.FindPropertyRelative("actions");for(int j=0;j<list.arraySize;j++) Visit(list.GetArrayElementAtIndex(j).managedReferenceValue as SkillAction,at,values,1);
-                if(m.FindPropertyRelative("effect").objectReferenceValue!=null && m.FindPropertyRelative("target").enumValueIndex==(int)AnimationMarkerTarget.Target && now>=at && now-at<.15f && target>=0)_hit.Add(target);
             }
+            // Preserve authored order for simultaneous arrivals (including zero-length hops).
+            if(_legs.Count>1){var ordered=_legs.OrderBy(leg=>leg.Arrival).ToArray();_legs.Clear();_legs.AddRange(ordered);}
             for(int i=0;i<count;i++)
             {
                 if(prefab!=null)

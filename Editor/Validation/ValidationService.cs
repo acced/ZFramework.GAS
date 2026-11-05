@@ -74,6 +74,22 @@ namespace ZFramework.GAS.Editor
         }
         public void Dispose() { _doc.Changed -= Schedule; EditorApplication.update -= Update; }
     }
+    public sealed class ModuleCallersRule : ISkillValidationRule
+    {
+        public string Id => "GAS_MODULE_CALLERS";
+        public void Validate(ValidationContext context, ScriptableObject asset, List<Issue> issues)
+        {
+            if(asset is not SkillActionModuleAsset)return;
+            string path=AssetDatabase.GetAssetPath(asset);if(string.IsNullOrEmpty(path))return;
+            foreach(string guid in AssetDatabase.FindAssets("t:GameplayAbilityAsset")) {
+                string callerPath=AssetDatabase.GUIDToAssetPath(guid);
+                if(!AssetDatabase.GetDependencies(callerPath).Contains(path))continue;
+                var caller=AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(callerPath);
+                try { caller.BuildActions(); if(caller.Animation!=null)_=caller.Animation.Definition; }
+                catch(Exception error) { context.Add(issues,Id,caller,"activationActions",callerPath+": "+error.Message); }
+            }
+        }
+    }
     public sealed class CostRule : ISkillValidationRule
     {
         public string Id => "GAS001";
@@ -195,7 +211,7 @@ namespace ZFramework.GAS.Editor
             var starts = new HashSet<float>();
             foreach (var section in animation.sections) if (section != null) starts.Add(section.start);
             var so = c.Document.Serialized(animation);
-            foreach (string track in new[] { "markers", "taskEvents" })
+            foreach (string track in new[] { "markers" })
             {
                 var events = so.FindProperty(track);
                 for (int i = 0; i < events.arraySize; i++)
@@ -281,15 +297,13 @@ namespace ZFramework.GAS.Editor
                     c.Add(issues, Id, asset, path, "自定义过渡曲线至少需要两个键。", track: "@field", elementId: path);
                 if (backend == null) return;
                 var caps = backend.BlendCapabilities;
-                if(backend is PlayableAnimationBackend && c.Document.PreviewPrefab.GetComponentInChildren<Animator>(true) is { } animator &&
-                    (animator.isHuman || !animator.hasTransformHierarchy))caps &= ~AnimationBlendCapabilities.Inertialize;
                 var missing = new List<string>();
                 if(earlyInput)
                     missing.Add("混入尚未结束就输入连招并跳到同一状态时，Animator 会直接定位；需要连续姿势可使用 Playables");
                 if (section && (caps & AnimationBlendCapabilities.SeekBlend) == 0) missing.Add("跳段将直接定位");
                 if (spec.curve != SkillBlendCurve.Linear && (caps & AnimationBlendCapabilities.Curve) == 0) missing.Add("曲线退回后端默认过渡");
                 if (spec.mode == SkillBlendMode.Freeze && (caps & AnimationBlendCapabilities.Freeze) == 0 ||
-                    spec.mode == SkillBlendMode.Inertialize && (caps & AnimationBlendCapabilities.Inertialize) == 0) missing.Add("模式退回普通过渡");
+                    !Enum.IsDefined(typeof(SkillBlendMode),spec.mode)) missing.Add("模式退回普通过渡");
                 if (missing.Count > 0) c.Add(issues, Id, asset, path, backend.BackendId + "：" + string.Join("；", missing), IssueSeverity.Warning, track: "@field", elementId: path);
             }
             Check("blendInCurve", animation.BlendInSpec, false); Check("blendOutCurve", animation.BlendOutSpec, false);
@@ -433,22 +447,6 @@ namespace ZFramework.GAS.Editor
                 while (controller is AnimatorOverrideController overrides) controller = overrides.runtimeAnimatorController;
                 if (controller is UnityEditor.Animations.AnimatorController ac && backend.layer >= ac.layers.Length)
                     c.Add(issues, Id, asset, "", "Animator 层索引越界", IssueSeverity.Warning);
-            }
-        }
-    }
-    public sealed class TaskEventRule : ISkillValidationRule
-    {
-        public string Id => "GAS032";
-        public void Validate(ValidationContext c, ScriptableObject asset, List<Issue> issues)
-        {
-            if (asset is not SkillAnimationAsset) return;
-            var array = c.Document.Serialized(asset).FindProperty("taskEvents");
-            for (int i = 0; i < array.arraySize; i++)
-            {
-                var item = array.GetArrayElementAtIndex(i); var spawner = item.FindPropertyRelative("spawner").managedReferenceValue;
-                string error = spawner == null ? "任务没有选择生成器" : spawner is ProjectileSpawner p && (!(p.speed > 0) || p.visualPrefab == null) ? "投射物任务需要视觉预制体和正速度" :
-                    spawner is AreaEffectSpawner a && (a.enterEffect == null || !(a.radius > 0) || a.maxOccupants < 1) ? "区域任务需要效果、正半径和容量" : null;
-                if (error != null) c.Add(issues, Id, asset, item.propertyPath, error, track: "taskEvents", elementId: item.FindPropertyRelative("id").stringValue);
             }
         }
     }

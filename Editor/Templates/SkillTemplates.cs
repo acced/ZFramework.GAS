@@ -50,7 +50,7 @@ namespace ZFramework.GAS.Editor
             using var so = new SerializedObject(animation); so.FindProperty("clipName").stringValue = "Attack"; so.FindProperty("duration").floatValue = length;
             var markers = so.FindProperty("markers"); markers.arraySize = 1; var marker = markers.GetArrayElementAtIndex(0);
             new EventTrack().InitializeNew(marker, length * .45f, hit); marker.FindPropertyRelative("key").stringValue = key;
-            marker.FindPropertyRelative("target").enumValueIndex = self ? 1 : 0;
+            if(hit!=null)((ApplyEffectAction)marker.FindPropertyRelative("actions").GetArrayElementAtIndex(0).managedReferenceValue).targets.kind=self?TargetQueryKind.Self:TargetQueryKind.FixedTarget;
             so.ApplyModifiedProperties(); Bind(root, "animation", animation); return animation;
         }
         internal static void Cooldown(GameplayAbilityAsset root, float duration)
@@ -85,9 +85,9 @@ namespace ZFramework.GAS.Editor
         {
             var damage = SkillTemplateRegistry.Effect(ability, "伤害 · 投射物", EffectDurationPolicy.Instant, 0, 1, -20);
             var animation = SkillTemplateRegistry.Animation(ability, null, "发射", 1);
-            using var so = new SerializedObject(animation); so.FindProperty("markers").ClearArray(); var array = so.FindProperty("taskEvents"); array.arraySize = 1;
-            var item = array.GetArrayElementAtIndex(0); new TaskTrack().InitializeNew(item, .4f, null);
-            item.FindPropertyRelative("spawner").managedReferenceValue = new ProjectileSpawner { impactEffect = damage };
+            using var so = new SerializedObject(animation);
+            var actions=so.FindProperty("markers").GetArrayElementAtIndex(0).FindPropertyRelative("actions");actions.arraySize=1;
+            actions.GetArrayElementAtIndex(0).managedReferenceValue=new LaunchProjectileAction{onHit=new SkillAction[]{new ApplyEffectAction{effect=damage}}};
             so.ApplyModifiedProperties(); SkillTemplateRegistry.Cooldown(ability, 1);
         }
     }

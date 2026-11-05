@@ -68,11 +68,10 @@ namespace ZFramework.GAS.Editor
             if (AssetDatabase.IsAssetImportWorkerProcess()) return;
             // Queries may run in the same editor update as a synchronous reimport. Dropping
             // cached documents only uses recorded paths; defer asset enumeration/UI refresh.
-            SkillReferenceGuard.Changed(imported.Concat(deleted).Concat(moved).Concat(oldPaths));
             var touched=new HashSet<string>(imported.Concat(deleted).Concat(moved).Concat(oldPaths)
                 .Where(p=>p.EndsWith(".asset",StringComparison.OrdinalIgnoreCase)));
             if(touched.Count==0)return;
-            SkillContentIndex.InvalidatePaths(touched);ModuleCallIndex.Invalidate(touched);
+            SkillContentIndex.InvalidatePaths(touched);
             Imported.UnionWith(imported); Imported.UnionWith(moved); Deleted.UnionWith(deleted); Deleted.UnionWith(oldPaths);
             if (_queued) return; _queued = true;
             EditorApplication.delayCall += () =>
@@ -101,7 +100,7 @@ namespace ZFramework.GAS.Editor
             var tabs=new Toolbar(); tabs.Add(new ToolbarButton(()=>{_parameters=false;Refresh();}){text="资产"});
             tabs.Add(new ToolbarButton(()=>{_parameters=true;Refresh();}){text="参数"}); Add(tabs);
             _paramView.style.display=DisplayStyle.None;Add(_paramView);
-            _search = new ToolbarSearchField(); _search.AddToClassList("library-search"); _search.RegisterValueChangedCallback(_ => Refresh()); Add(_search);
+            _search = new ToolbarSearchField(); _search.AddToClassList("library-search"); _search.RegisterValueChangedCallback(_ => RefreshList()); Add(_search);
             _library = new ScrollView { style = { flexGrow = 1, minHeight = 100 } }; Add(_library);
             _largeLibrary = new ListView { itemsSource = _visible, fixedItemHeight = 30, selectionType = SelectionType.None,
                 style = { flexGrow = 1, minHeight = 100, display = DisplayStyle.None } }; Add(_largeLibrary);
@@ -132,15 +131,14 @@ namespace ZFramework.GAS.Editor
         private void Changed(ChangeSet change)
         { if (_parameters) RefreshParameters();
           if (change.Structure || change.Paths.Any(p => p == "m_Name" || p.Contains("displayName") || p.Contains("cue"))) RefreshOutline(); }
-        private bool Matches(UnityEngine.Object asset)
-        {
-            string query = _search.value?.Trim(); if (string.IsNullOrEmpty(query)) return true;
-            return SkillIndex.SearchText(asset).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-        }
         public void Refresh()
+        { RefreshList(); if (!_parameters) RefreshOutline(); }
+        private void RefreshList()
         {
             _paramView.style.display=_parameters?DisplayStyle.Flex:DisplayStyle.None;
             if(_parameters){_largeLibrary.style.display=_library.style.display=DisplayStyle.None; RefreshParameters(); return;}
+            string query = _search.value?.Trim();
+            bool Matches(UnityEngine.Object asset) => string.IsNullOrEmpty(query) || SkillIndex.SearchText(asset).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
             bool large = SkillIndex.Abilities.Count >= 150;
             _library.style.display = large ? DisplayStyle.None : DisplayStyle.Flex;
             _largeLibrary.style.display = large ? DisplayStyle.Flex : DisplayStyle.None;
@@ -148,7 +146,7 @@ namespace ZFramework.GAS.Editor
             {
                 _visible.Clear(); foreach (var asset in SkillIndex.Abilities) if (Matches(asset)) _visible.Add(asset);
                 foreach (var asset in SkillIndex.Effects) if (!AssetDatabase.IsSubAsset(asset) && Matches(asset)) _visible.Add(asset);
-                _largeLibrary.RefreshItems(); RefreshOutline(); return;
+                _largeLibrary.RefreshItems(); return;
             }
             _library.Clear();
             var groups = SkillIndex.Abilities.Where(Matches).GroupBy(a => Path.GetDirectoryName(AssetDatabase.GetAssetPath(a))?.Replace('\\', '/'));
@@ -175,7 +173,6 @@ namespace ZFramework.GAS.Editor
             foreach (var effect in SkillIndex.Effects.Where(e => !AssetDatabase.IsSubAsset(e) && Matches(e))) shared.Add(Row(effect, "↗", SkillColors.Instant, () => { _doc.AddLoose(effect); _doc.Selection.Select(effect); }));
             if (SkillIndex.Abilities.Count == 0)
                 _library.Add(new HelpBox("还没有技能。点击「新建技能」选择模板开始。", HelpBoxMessageType.Info));
-            RefreshOutline();
         }
         private void RefreshParameters()
         {
@@ -199,6 +196,7 @@ namespace ZFramework.GAS.Editor
         {
             var button = new Button(click) { text = icon + "  " + asset.name, userData = asset, tooltip = AssetDatabase.GetAssetPath(asset) };
             button.AddToClassList("library-row"); button.style.borderLeftColor = color;
+            button.EnableInClassList("selected-row", asset == _doc.Selection.Asset);
             InstallAssetDrag(button);
             return button;
         }

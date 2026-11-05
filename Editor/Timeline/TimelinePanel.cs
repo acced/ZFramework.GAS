@@ -65,7 +65,7 @@ namespace ZFramework.GAS.Editor
             speed.style.width = 72; speed.RegisterValueChangedCallback(e => { doc.Playback.Speed = float.Parse(e.newValue.Substring(1), System.Globalization.CultureInfo.InvariantCulture); Rebuild(new ChangeSet(doc.Root)); }); toolbar.Add(speed);
             var add = new ToolbarMenu { text = "+ 轨道" };
             foreach (var type in TrackTypeRegistry.Types) { var track = type; add.menu.AppendAction(track.DisplayName, _ => Add(track)); } toolbar.Add(add);
-            toolbar.Add(new ToolbarButton(Fit) { text = "适应", tooltip = "缩放至完整动画" }); Add(toolbar);
+            toolbar.Add(new ToolbarButton(Fit) { text = "适应", tooltip = "缩放至完整动画及预演中的后续命中" }); Add(toolbar);
             _clipRow = new VisualElement(); _clipRow.AddToClassList("clip-picker-row"); Add(_clipRow);
             _ruler = new VisualElement { style = { height = 24, marginLeft = HeaderWidth, overflow = Overflow.Hidden } }; _ruler.AddToClassList("time-ruler"); Add(_ruler);
             _scroll = new ScrollView(ScrollViewMode.Vertical) { style = { flexGrow = 1, minHeight = 0 } };
@@ -299,7 +299,7 @@ namespace ZFramework.GAS.Editor
             if(label==null || _animation==null)return;
             var a=_doc.Serialized(_animation);var markers=a.FindProperty("markers");float first=float.PositiveInfinity,last=0;
             for(int i=0;i<markers.arraySize;i++)
-            {var m=markers.GetArrayElementAtIndex(i);if(m.FindPropertyRelative("effect").objectReferenceValue==null && m.FindPropertyRelative("actions").arraySize==0)continue;
+            {var m=markers.GetArrayElementAtIndex(i);if(m.FindPropertyRelative("actions").arraySize==0)continue;
              float at=m.FindPropertyRelative("time").floatValue;first=Mathf.Min(first,at);last=Mathf.Max(last,at);}
             int Frame(float t)=>Mathf.RoundToInt(t*Fps/Mathf.Max(.001f,_doc.Playback.Speed));
             var ranges=new List<string>();
@@ -589,7 +589,7 @@ namespace ZFramework.GAS.Editor
         {
             _head.EnableInClassList("live-playhead", _doc.Playback.Live);
             _play.SetEnabled(!_doc.Playback.Live);
-            _clock.text = (_doc.Playback.Live ? "运行时 · " : "") + $"{_doc.Playback.Time:0.00}s / {Duration:0.00}s · {Mathf.RoundToInt(_doc.Playback.Time * Fps)}f";
+            _clock.text = (_doc.Playback.Live ? "运行时 · " : "") + $"{_doc.Playback.Time:0.00}s / {Mathf.Max(Duration,_doc.PreviewEnd):0.00}s · {Mathf.RoundToInt(_doc.Playback.Time * Fps)}f";
             _play.text = _doc.Playback.Playing ? "Ⅱ" : "▶";
             // 用刚算出的位置判断：resolvedStyle 要等下一次布局才更新，读它会让平移后的显隐慢一拍。
             float headX = TimelineMath.X(_doc.Playback.Time, _zoom, _offset);

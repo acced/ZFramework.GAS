@@ -11,6 +11,13 @@ namespace ZFramework.GAS.Editor
     {
         private Action<Type> _choose;
         private static readonly Type[] Types=TypeCache.GetTypesDerivedFrom<SkillAction>().Where(t=>!t.IsAbstract && t.GetConstructor(Type.EmptyTypes)!=null).OrderBy(t=>t.Name).ToArray();
+        internal static string MenuName(Type t){
+            if(t==typeof(TargetSequenceAction))return "有限目标序列 · "+t.Name;
+            if(t==typeof(SelectTargetsAction))return "选择目标 · "+t.Name;
+            if(t==typeof(NextTargetStepAction))return "继续到所选目标 · "+t.Name;
+            if(t==typeof(ShowTargetLinkAction))return "显示目标连线 · "+t.Name;
+            return t.Name;
+        }
         private static string Key(Type t)=>t.AssemblyQualifiedName;
         public static void Open(Vector2 position,Action<Type> select)
         {var p=CreateInstance<SkillActionSearch>();p.hideFlags=HideFlags.HideAndDontSave;p._choose=select;SearchWindow.Open(new SearchWindowContext(position),p);}
@@ -18,7 +25,7 @@ namespace ZFramework.GAS.Editor
         public List<SearchTreeEntry> CreateSearchTree(SearchWindowContext _)
         {
             var r=new List<SearchTreeEntry>{new SearchTreeGroupEntry(new GUIContent("搜索动作"),0)};
-            void Group(string label,IEnumerable<Type> items){var list=items.ToArray();if(list.Length==0)return;r.Add(new SearchTreeGroupEntry(new GUIContent(label),1));foreach(var t in list)r.Add(new SearchTreeEntry(new GUIContent(t.Name)){level=2,userData=t});}
+            void Group(string label,IEnumerable<Type> items){var list=items.ToArray();if(list.Length==0)return;r.Add(new SearchTreeGroupEntry(new GUIContent(label),1));foreach(var t in list)r.Add(new SearchTreeEntry(new GUIContent(MenuName(t))){level=2,userData=t});}
             Group("收藏",Types.Where(t=>EditorPrefs.GetBool("GAS.FavoriteAction."+Key(t)))); Group("最近使用",EditorPrefs.GetString("GAS.RecentActions").Split('|').Select(s=>Types.FirstOrDefault(t=>Key(t)==s)).Where(t=>t!=null));Group("全部动作",Types);return r;
         }
         public bool OnSelectEntry(SearchTreeEntry entry,SearchWindowContext _)

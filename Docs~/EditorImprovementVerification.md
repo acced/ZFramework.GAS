@@ -1,6 +1,6 @@
 # GAS 编辑器五阶段改进：验收记录
 
-编辑器与 PlayMode 回归更新于 2026-11-04；平台测试单独标注。对照[改进方案](EditorImprovementPlan.html)，在 Unity 6000.3.14f1、Windows 10、i5-14400F、RTX 5060 上运行。验证工程是独立的 `GASRefactorValidation~`，引用本仓库的包与测试；BasicCombat 用生成器创建。以下把编辑器、独立播放器和性能测试分开记录。
+2026-11-05 的基础库精简和最新测试见[本页末尾](#基础功能库精简重构2026-11-05)。以下 11 月 4 日记录用于历史对照。对照[改进方案](EditorImprovementPlan.html)，在 Unity 6000.3.14f1、Windows 10、i5-14400F、RTX 5060 上运行。验证工程是独立的 `GASRefactorValidation~`，引用本仓库的包与测试；BasicCombat 用生成器创建。以下把编辑器、独立播放器和性能测试分开记录。
 
 ## 从一个真实技能看改动
 
@@ -10,7 +10,7 @@
 
 ![模块内的条件分支以及命中一个假人的几何预演](Images/EditorImprovements/flow-module.png)
 
-两图取自实际 Unity 窗口。右侧为同一时刻的几何预演：三个假人中一个在范围内。进 Play 后，打开 **Window → ZFramework GAS → 运行时调试**，选骑士，在模块内点圆点设断点。按 **1** 施放斩击；按 **Q** 切换剑斩／斧劈，再按 **1** 可看同一技能换动作。具体操作见[编辑器指南](EditorGuide.md)和[示例说明](../Samples/BasicCombat/README.md)。
+两图取自实际 Unity 窗口。右侧为同一时刻的几何预演：三个假人中一个在范围内。进 Play 后，打开 **Window → ZFramework GAS → 运行时调试**，选骑士，在模块内点圆点设断点。按 **1** 施放斩击；按 **E** 切换剑斩／斧劈，再按 **1** 可看同一技能换动作。具体操作见[编辑器指南](EditorGuide.md)和[示例说明](../Samples/BasicCombat/README.md)。
 
 ## 五个阶段分别验证了什么
 
@@ -140,6 +140,14 @@ Windows 主线程动画前读取／手动求值的差值（百万周期／帧，
 
 回归：EditMode 257 项、PlayMode 49 项、Windows Mono 独立播放器 7 项通过。用例另行验证：只有 X 曲线的 Controller 不能当作已覆盖整个位置向量；降频的非采样帧修改武器偏移，停止时仍能还给装备；技能播放期间换掉 Controller 会重新监视失去覆盖的骨骼；惯性过渡期间作业会实际接入。基准测的是预热后连续播放，不能外推到独占挂点很多的角色、Humanoid、第一次建图或正在释放骨骼的那几帧。
 
+## 历史验证：拆分资产前的能量弹
+
+这一节记录拆分前的结果：当时 Q 切换同一资产的模式。当前生成器已改为两份技能资产共享扣费和冷却，见本页最后的精简重构记录。验证工程从生成器重建训练场和所有资产，未修补生成的场景文件。
+
+- PlayMode 实际移动两个次假人，使 A 只能搜到 B、B 可以搜到 C。第一发离手后切换 Q，原先的分叉仍只命中 A、B；下一次逐跳施放在命中 A 后才把 C 移到 B 附近，随后 B、C 依次受击。C 进入 A 的半径时，分叉一次命中三个单位，检查两条 LineRenderer 从同一接触点出发，终点不同。
+- EditMode 在四十多米外另建一组碰撞体，重复施放同一个技能，验证去重先于人数截断、序号和命中记录按施放隔离；几何预演分别检查三个假人首次受击的时刻。
+- Windows Mono 独立播放器运行生成的 BasicCombat 场景。在这次运行中分叉三次伤害的场景时间为 **4.60、4.60、4.60 秒**，逐跳为 **7.70、8.76、10.32 秒**；五个技能全部完成，日志输出 `GAS_Mono_SMOKE_PASSED`。具体时刻依赖帧调度；验收的是同帧与逐次的关系。
+
 ## 如何复现
 
 1. 从仓库根执行 `dotnet run -c Release --project Tests~/Core/Core.csproj`。独立 Unity 验证工程通过包引用本仓库，并已接入 `Tests~/Editor` 和 `Tests~/PlayMode`；用 BasicCombat 生成器准备场景。
@@ -151,4 +159,46 @@ Windows 主线程动画前读取／手动求值的差值（百万周期／帧，
 & '.\Tests~\Smoke\WindowsIL2CPP.ps1' -Unity 'C:\Program Files\Unity 6000.3.14f1\Editor\Unity.exe' -ValidationProject 'C:\Users\pc\Testproject\GASRefactorValidation~'
 ```
 
-5. Android：在装有 Android Build Support、SDK、NDK 和 JDK 的验证工程运行 `Unity.exe -batchmode -quit -buildTarget Android -projectPath <验证工程> -executeMethod ZFramework.GAS.Samples.BasicCombat.Editor.BasicCombatSmokeBuild.AndroidIL2CPP`。产物为 `GASValidation~/Android/GASSmoke.apk`。要实际运行骨骼回归，连接可运行 ARM64 APK 的 Android 设备，使用 `-buildTarget Android -runTests -testPlatform Android -testFilter ResourcesPrefabResolvesLateLoadedReplacementInPlayer -testSettingsFile <settings.json> -testResults <result.xml>`，其中 settings.json 指定 `{"scriptingBackend":"IL2CPP","playerGraphicsAPI":"OpenGLES3"}`。
+5. Android：在装有 Android Build Support、SDK、NDK 和 JDK 的验证工程运行 `Unity.exe -batchmode -quit -buildTarget Android -projectPath <验证工程> -executeMethod ZFramework.GAS.Samples.BasicCombat.Editor.BasicCombatSmokeBuild.AndroidIL2CPP`。产物为 `GASValidation~/Android/GASSmoke.apk`。本轮未验证 Android。
+
+## 基础功能库精简重构（2026-11-05）
+
+BasicCombat 由生成器重建。五个槽共授予六份技能资产：第 2 槽的「分叉闪电」和「逐个弹射」共享参数集、消耗、冷却和伤害定义。Q 选择下一次施放的资产；已经发射的弹体保留原来的动作。修改两种路线分别打开对应资产，几何预演跟随当前资产。
+
+**代码量与回归。** Runtime / Editor 按各自目录下所有 `*.cs` 的物理行统计（含注释和空行，不含可选 Spine 程序集）。各阶段增删按进入本次重构时的工作区快照用 `git diff --no-index --stat` 比较，包括测试、示例与文档；不拿工作区原有改动充作本轮删减。阶段 3–5 的交叉修改按职责归组，再将中间包放入独立验证工程复测。Core 每阶段均通过 24 组。
+
+| 阶段 | Runtime | Editor | 新增 / 删除 | 净行数 | EditMode / PlayMode 通过数 |
+|---|---:|---:|---:|---:|---:|
+| 开始 | 10,281 | 8,789 | — | — | — |
+| 1 · Core | 9,834 | 8,741 | 163 / 975 | −812 | 251 / 50 |
+| 2 · 动作与施放 | 9,002 | 8,690 | 506 / 1,474 | −968 | 239 / 50 |
+| 3 · 动画与施放集成 | 7,693 | 8,642 | 381 / 2,651 | −2,270 | 241 / 17 |
+| 4 · 编辑器 | 7,690 | 7,702 | 214 / 1,913 | −1,699 | 211 / 17 |
+| 5 · 示例、文档与最终集成校验 | 7,696 | 7,706 | 276 / 355 | −79 | 213 / 17 |
+
+Runtime 减少 2,585 行（25.1%），Editor 减少 1,083 行（12.3%）。Playable 后端从 946 行降到 459 行。两目录仍略高于约 7,000 行，后端高于约 350 行。删除的功能不提供旧 API 或序列化迁移；提取和内联模块是确认后保存的不可撤销操作。
+
+**200 单位。** 机器和片段同上：Unity 6000.3.14f1，i5-14400F；200 个真实骑士，每个 84 根骨骼，Slash 驱动 19 条路径。预热后分别测 120 帧，P95 是整批 ASC 和动画调度的墙钟耗时。参照是上轮已记录的无交接对照组；不是同帧配对。
+
+| 采样频率 | 历史无交接对照 P95 | 三次 P95（ms） | P95 中位数 | 求值次数 | 标记次数 | 主线程 GC.Alloc 调用 |
+|---|---:|---|---:|---:|---:|---:|
+| 每帧 | 5.92 ms | 4.47 / 9.21 / 6.27 | **6.27 ms** | 24,000 | 400 | 0 |
+| 每四帧 | 6.41 ms | 1.41 / 3.58 / 2.88 | **2.88 ms** | 6,000 | 400 | 0 |
+
+以三次 P95 的中位数看，每帧档比历史预算高 0.35 ms（约 6%），未稳定达标；每四帧档三次都达标。独立工程回放阶段 3 和 4 的 P95 分别为 8.74／2.41 ms、10.54／2.81 ms；两次的每帧档都超出旧对照。这些是独立 Editor 进程中的墙钟数据，受同机其他工作影响，不能把单次读数当作性能保证。
+
+同机另外重建了阶段 2 的包，原样重跑旧的配对基准。无交接对照组这次为 **14.85／15.82 ms**，两档各 400 次标记。新实现的三次结果都优于这次旧包，但不据此调宽原定的 5.92 ms 目标。
+
+基础 Controller 与技能层现在由同一张图同时求值。非采样帧不读写骨骼；使用根运动时逐帧采样。只有配置了逐骨权重的层才读取所列骨骼的基础姿势。旧基准还单独调用 `Animator.Update`；在新结构里那会重复推进 Controller，本次没有重复计时。历史数值、分段均值和测量范围保存在 [SkillPerformanceBaseline.json](SkillPerformanceBaseline.json) 的 `runtimeSimplified` 及历史字段。
+
+**分配与功能。** Core 预热后 10 万次激活／结束、1 万次带消耗／冷却／DoT 且属性变化的施放均为 0 B。EditMode 的 1,000 次预热动画施放交替使用两个播放时长，检查标记触发、Stop 次数与分配；另有带模块和伤害求值的施放。上述数字不包含首次构建、新覆盖数组、生成场景对象、异步任务启动或编辑器刷新。
+
+Windows Mono 播放器完成五个技能槽及能量弹两种变体，输出 `GAS_Mono_SMOKE_PASSED`。一次实际运行中，分叉三次命中均在 4.54 秒，弹射分别在 7.64、8.70、10.26 秒。PlayMode 另验证切换 Q 不绕过共享冷却、Controller 的 Trigger 和 Float 得以保留、降频不闪回基础姿势、Seek 不产生根运动。各阶段通过的测试日志均无 C# 编译警告。编译警告按 GAS 包与外部包分开统计；干净项目首次导入时 GameplayTags 的旧版 TreeView API 会产生 CS0618。
+
+### 施放参数、模块与编辑器复测（2026-11-05）
+
+对比上表阶段 5 的工作区，Runtime **7,696 → 7,683** 行，Editor **7,706 → 7,621** 行。删除了无调用方的动画时钟组件、预览范围遍历和按内部 ID 猜测模块入口的编辑器方法 `SkillActionNavigation.RootId`；调试扩展可以读取断点帧的 `NavigationId`。几何预演与实战共享逐跳序号、衰减和抛物线高度计算。Undo 恢复子资产仍保留，只在重建文档引用时遍历一次。
+
+Core 24 组、EditMode 216 项、PlayMode 17 项通过；另单跑两项规模测试。Windows Mono 播放器通过五个技能槽与两种能量弹：分叉在 4.54 s 同时命中三个目标；弹射在 7.64、8.70、10.26 s 依次命中。新增回归覆盖同一模块从两个调用点等待恢复后的定位、逐跳模块参数释放，以及已预热的两份覆盖数组交替施放 1,000 次（主线程 GC.Alloc 为 0 次）。上述结果不包含首次解析或新建任务的分配。
+
+500 技能、100 节点，同机两个独立编辑器进程对照：库内搜索（含可见行刷新）热操作 P95 **80.11 → 8.15 ms**，平均每次操作的托管分配调用 **9,509 → 310**。输入搜索不再重建当前技能大纲，已折叠的分组保持原状。最终字段编辑 P95 3.80 ms，拖动与同步重绘 15.14 ms；首次技能索引搜索 228.59 ms、首次打开窗口 1,002.87 ms，Undo/Redo P95 556.72 ms。200 单位的单次复测每帧／每四帧 P95 为 6.17／1.62 ms，两档各 400 次标记、主线程 0 次分配；不据此归因动画性能变化。原始精度和测量范围见 [SkillPerformanceBaseline.json](SkillPerformanceBaseline.json) 的 `scopeAndLibraryReview`。

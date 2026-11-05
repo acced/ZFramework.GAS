@@ -24,11 +24,6 @@ namespace ZFramework.GAS.Tests
             var effect=ScriptableObject.CreateInstance<GameplayEffectAsset>();AssetDatabase.CreateAsset(effect,path);
             try{
                 using var so=new SerializedObject(effect);
-                so.FindProperty("editorCopyOrigin").stringValue="fixture:101";
-                so.FindProperty("editorCopyHash").stringValue="source hash";
-                so.FindProperty("editorCopyLocalHash").stringValue="destination hash";
-                so.FindProperty("editorCopyAcceptedHash").stringValue="accepted source revision";
-                so.FindProperty("editorCopyVersion").intValue=3;
                 so.FindProperty("durationPolicy").enumValueIndex=(int)EffectDurationPolicy.Duration;
                 so.FindProperty("duration").floatValue=7.25f;so.FindProperty("period").floatValue=1.5f;
                 so.ApplyModifiedPropertiesWithoutUndo();AssetDatabase.SaveAssetIfDirty(effect);
@@ -46,7 +41,6 @@ namespace ZFramework.GAS.Tests
             Assert.IsNotEmpty(dir);
             var bundle=AssetBundle.LoadFromFile(Path.Combine(dir,Bundle));Assert.IsNotNull(bundle);
             try{var effect=bundle.LoadAsset<GameplayEffectAsset>("effect");Assert.IsNotNull(effect);
-                StringAssert.Contains("accepted source revision",JsonUtility.ToJson(effect));
                 var def=effect.Definition;Assert.AreEqual(EffectDurationPolicy.Duration,def.DurationPolicy);
                 Assert.AreEqual(7.25f,def.Duration);Assert.AreEqual(1.5f,def.Period);
             }finally{bundle.Unload(true);}

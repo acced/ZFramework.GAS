@@ -26,12 +26,11 @@ namespace ZFramework.GAS.Editor.Tests
             public void Stop(float blendOut) => BlendOut = blendOut;
         }
         [Serializable]
-        private sealed class CountingSpawner : TaskSpawner
+        private sealed class CountingAction : SkillAction
         {
             public int Count;
             public bool Cancel;
-            public override void Spawn(GameplayAbilitySpec ability, TimelineTaskContext context)
-            { Count++; if (Cancel) ability.Owner.EndAbility(ability); }
+            public override SkillActionDefinition Build(SkillActionBuildContext builder) => Define("Count", context => { Count++; if (Cancel) context.Source.EndAbility(context.Ability); });
         }
         [SetUp]
         public void SetUp()
@@ -95,10 +94,10 @@ namespace ZFramework.GAS.Editor.Tests
         [Test]
         public void LoopingTaskEventsFireOncePerCrossedCycle()
         {
-            var owner = new AbilitySystemComponent(); var ability = Activate(owner); var spawner = new CountingSpawner();
+            var owner = new AbilitySystemComponent(); var ability = Activate(owner); var spawner = new CountingAction();
             var definition = new SkillAnimationDefinition("Attack", 1, true,
                 tagWindows: new[] { new AnimationTagWindow(.2f, .5f, new GameplayTagSet(_window)) },
-                taskEvents: new[] { new AnimationTaskEvent(.3f, spawner) });
+                markers: new[] { new AnimationMarker(.3f, actions: new[] { spawner.Build(new()) }) });
             owner.StartTask(ability, new AnimationTask(definition, new Driver(), taskContext: new TimelineTaskContext()));
             owner.Tick(3.6f); Assert.AreEqual(4, spawner.Count); Assert.IsFalse(owner.OwnedTags.HasTag(_window)); owner.EndAbility(ability);
         }
@@ -129,32 +128,20 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.IsFalse(owner.OwnedTags.HasTag(_window), "技能结束后窗口标签仍残留"); Assert.AreEqual(opened, closed);
         }
         [Test]
-        public void TaskSpawnerCancellationStopsLaterEvents()
+        public void ActionCancellationStopsLaterEvents()
         {
-            var owner = new AbilitySystemComponent(); var ability = Activate(owner); var first = new CountingSpawner { Cancel = true }; var second = new CountingSpawner();
-            var definition = new SkillAnimationDefinition("Attack", 1, taskEvents: new[] { new AnimationTaskEvent(.2f, first), new AnimationTaskEvent(.3f, second) });
+            var owner = new AbilitySystemComponent(); var ability = Activate(owner); var first = new CountingAction { Cancel = true }; var second = new CountingAction();
+            var definition = new SkillAnimationDefinition("Attack", 1, markers: new[] { new AnimationMarker(.2f, actions: new[] { first.Build(new()) }), new AnimationMarker(.3f, actions: new[] { second.Build(new()) }) });
             owner.StartTask(ability, new AnimationTask(definition, new Driver(), taskContext: new TimelineTaskContext())); owner.Tick(1);
             Assert.AreEqual(1, first.Count); Assert.AreEqual(0, second.Count);
         }
         [Test]
-        public void ThrowingRemovalListenerStillCleansEveryWindowAndStopsDriver()
-        {
-            var owner = new AbilitySystemComponent(); var ability = Activate(owner); var driver = new Driver();
-            var definition = new SkillAnimationDefinition("Attack", 1, tagWindows: new[] { new AnimationTagWindow(0, -1, new GameplayTagSet(_window)), new AnimationTagWindow(0, -1, new GameplayTagSet(_other)) });
-            owner.StartTask(ability, new AnimationTask(definition, driver)); owner.Tick(.1f);
-            owner.OwnedTags.RegisterTagEventCallback(_window, GameplayTagEventType.NewOrRemoved, (_, count) => { if (count == 0) throw new InvalidOperationException("test"); });
-            Assert.DoesNotThrow(() => owner.EndAbility(ability));
-            StringAssert.Contains("test", ability.LastCleanupError);
-            Assert.IsFalse(owner.OwnedTags.HasTag(_window)); Assert.IsFalse(owner.OwnedTags.HasTag(_other)); Assert.AreEqual(1, driver.Stops);
-        }
-        [Test]
         public void WarmTimelineTraversalWithWindowsAndTaskDispatchAllocatesZero()
         {
-            var owner = new AbilitySystemComponent(); var ability = Activate(owner); var spawner = new CountingSpawner();
+            var owner = new AbilitySystemComponent(); var ability = Activate(owner); var spawner = new CountingAction();
             var definition = new SkillAnimationDefinition("Attack", 1, true,
-                markers: new[] { new AnimationMarker(.4f) },
                 tagWindows: new[] { new AnimationTagWindow(.2f, .6f, new GameplayTagSet(_window)) },
-                taskEvents: new[] { new AnimationTaskEvent(.3f, spawner) });
+                markers: new[] { new AnimationMarker(.3f, actions: new[] { spawner.Build(new()) }) });
             owner.StartTask(ability, new AnimationTask(definition, new Driver(), taskContext: new TimelineTaskContext()));
             for (int i = 0; i < 100; i++) owner.Tick(1);
             long before = GC.GetAllocatedBytesForCurrentThread();

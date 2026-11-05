@@ -111,7 +111,7 @@ namespace ZFramework.GAS.Editor
             if(_selected==null || !_nodes.TryGetValue(_selected,out var node) || node is not FlowNode f)return;
             string path=f.Path; int split=path.LastIndexOf(".Array.data[",StringComparison.Ordinal);string list=path.Substring(0,split);
             Edit("复制动作",so=>SkillActionClipboard.Duplicate(so.FindProperty(list),SkillFlowCommands.IndexIn(list,path)+1,
-                (SkillAction)so.FindProperty(path).managedReferenceValue,ActionEffectOwnership.ConfirmCopy));
+                (SkillAction)so.FindProperty(path).managedReferenceValue));
         }
         private void Changed(ChangeSet change)
         {
@@ -146,22 +146,6 @@ namespace ZFramework.GAS.Editor
                 _entries.menu.AppendAction(title,_=>Choose(anim,id));
                 if (_owner==anim && id==_marker) { _rootPath=m.propertyPath+".actions"; entry=title; }
             }
-            if(anim!=null)
-            {
-                var tasks=_doc.Serialized(anim).FindProperty("taskEvents");
-                for(int i=0;i<tasks.arraySize;i++)
-                {
-                    var p=tasks.GetArrayElementAtIndex(i);string id=p.FindPropertyRelative("id").stringValue;
-                    string name=p.FindPropertyRelative("spawner").managedReferenceValue?.GetType().Name??"未配置";
-                    _entries.menu.AppendAction("任务 · "+name+" "+p.FindPropertyRelative("time").floatValue+"s",_=>{
-                        _owner=anim;_marker=id;_rootPath=null;
-                        _graph.ClearSelection();foreach(var e in _graph.graphElements.ToList())_graph.RemoveElement(e);
-                        _nodes.Clear();_crumb.text="任务执行器 › "+name;
-                        var node=new Node{title=name};node.extensionContainer.Add(new Button(()=>TryEdit(()=>SkillFlowCommands.ConvertTask(_doc,anim,id))){text="转换为动作"});
-                        node.RefreshExpandedState();node.SetPosition(new Rect(20,20,200,90));_graph.AddElement(node);_doc.Selection.Select(anim,"taskEvents",id);
-                    });
-                }
-            }
             if (_owner is SkillActionModuleAsset) { _rootPath="actions"; entry=_owner.name; }
             else if (_rootPath==null) { _owner=_doc.Root; _rootPath="activationActions"; }
         }
@@ -184,12 +168,6 @@ namespace ZFramework.GAS.Editor
             _layoutKey=AssetReferences.Key(_owner)+"#"+(_marker ?? _rootPath);
             _crumb.text=Breadcrumb(entry);
             var root=_entryNode=new Node{title=entry,userData="$entry"}; AddNode(root,"$entry",0,0);
-            if(_owner==anim && _marker!=null)
-            {
-                var marker=TimelineCommands.Find(_doc.Serialized(anim),"markers",_marker);
-                if(marker?.FindPropertyRelative("effect").objectReferenceValue is GameplayEffectAsset legacy)
-                    root.extensionContainer.Add(new Label("首先施加："+legacy.name));
-            }
             int lane=0;
             void Walk(SerializedProperty list,Node previous, string branch,int col,int row, int depth)
             {
@@ -212,11 +190,11 @@ namespace ZFramework.GAS.Editor
                         if(action!=null)e.menu.AppendAction("收藏 / 取消收藏此类型",_=>SkillActionSearch.Favorite(action.GetType()));
                         e.menu.AppendAction("切换断点 (F9)",_=>{SkillActionDebugger.Toggle(action?.Id); Rebuild();});
                         e.menu.AppendAction("复制到剪贴板",_=>SkillActionClipboard.Copy(action));
-                        e.menu.AppendAction("粘贴到后面",_=>Edit("粘贴动作",so=>SkillActionClipboard.Paste(so.FindProperty(listPath),index+1,ActionEffectOwnership.ConfirmCopy)),_=>SkillActionClipboard.Available?DropdownMenuAction.Status.Normal:DropdownMenuAction.Status.Disabled);
+                        e.menu.AppendAction("粘贴到后面",_=>Edit("粘贴动作",so=>SkillActionClipboard.Paste(so.FindProperty(listPath),index+1)),_=>SkillActionClipboard.Available?DropdownMenuAction.Status.Normal:DropdownMenuAction.Status.Disabled);
                         e.menu.AppendAction("上移",_=>Edit("上移动作",so=>so.FindProperty(listPath).MoveArrayElement(index,index-1)),_=>index>0?DropdownMenuAction.Status.Normal:DropdownMenuAction.Status.Disabled);
                         e.menu.AppendAction("下移",_=>Edit("下移动作",so=>so.FindProperty(listPath).MoveArrayElement(index,index+1)),_=>index+1<_doc.Serialized(_owner).FindProperty(listPath).arraySize?DropdownMenuAction.Status.Normal:DropdownMenuAction.Status.Disabled);
                         e.menu.AppendAction("提取为共享模块…",_=>Extract(listPath,index));
-                        if(action is CallModuleAction) e.menu.AppendAction("内联模块",_=>TryEdit(()=>SkillFlowCommands.Inline(_doc,_owner,listPath,index,ActionEffectOwnership.ConfirmCopy)));
+                        if(action is CallModuleAction) e.menu.AppendAction("内联模块",_=>TryEdit(()=>SkillFlowCommands.Inline(_doc,_owner,listPath,index)));
                         e.menu.AppendAction("删除",_=>Edit("删除动作",so=>so.FindProperty(listPath).DeleteArrayElementAtIndex(index)));
                     }));
                     string id=action?.Id ?? path; AddNode(node,id,col,row); if(action!=null) _nodes[id]=node;
@@ -228,7 +206,7 @@ namespace ZFramework.GAS.Editor
                     {
                         var children=p.FindPropertyRelative(field.Name); if(children==null) continue;
                         string label=field.GetCustomAttribute<FlowBranchAttribute>()?.Label??field.Name;
-                        bool detached=field.Name=="onCancel" || action is LaunchProjectileAction projectile && projectile.ownership==SkillTaskOwnership.Scene && field.Name=="onHit" ||
+                        bool detached=action is TargetSequenceAction && field.Name=="next" || field.Name=="onCancel" || action is LaunchProjectileAction projectile && projectile.ownership==SkillTaskOwnership.Scene && field.Name=="onHit" ||
                             action is CreateAreaAction area && area.ownership==SkillTaskOwnership.Scene && field.Name=="onPeriod";
                         Walk(children,node,label+(detached?" · 独立回调":""),col+1,useCurrentRow?row:++lane,depth+1);useCurrentRow=false;
                     }
@@ -251,6 +229,7 @@ namespace ZFramework.GAS.Editor
         internal static string ActionTitle(SkillAction action)=>!string.IsNullOrEmpty(action?.displayName)?action.displayName:action switch
         {
             InlineParameterScopeAction=>"内联参数", ConditionalAction=>"条件分支", ApplyEffectAction=>"施加效果", CallModuleAction=>"调用共享模块",
+            TargetSequenceAction=>"有限目标序列", SelectTargetsAction=>"选择目标", NextTargetStepAction=>"继续到所选目标", ShowTargetLinkAction=>"显示目标连线",
             LaunchProjectileAction=>"发射投射物", CreateAreaAction=>"创建区域", SpawnPrefabAction=>"生成预制体",
             WaitSkillAction=>"等待", SendGameplayEventAction=>"发送玩法事件", null=>"未配置动作",
             _=>ObjectNames.NicifyVariableName(action.GetType().Name)
@@ -289,6 +268,9 @@ namespace ZFramework.GAS.Editor
                     if(condition.requiredTags?.Length>0)node.extensionContainer.Add(new Label("需要："+string.Join("、",condition.requiredTags.Select(t=>t.m_Name))));
                     break;
                 case ApplyEffectAction: Field("effect","效果");Field("targets.kind","选敌");break;
+                case TargetSequenceAction: Field("maxTargets","总目标数（含首击）");Field("retention","每跳保留");break;
+                case SelectTargetsAction: Field("targets.origin","搜索原点");Field("count","最多选择");break;
+                case ShowTargetLinkAction: Field("prefab","连线特效");break;
                 case CallModuleAction: Field("module","模块");break;
                 case WaitSkillAction: Field("kind","等待");break;
                 case SendGameplayEventAction: Field("tag","事件");break;
@@ -306,7 +288,7 @@ namespace ZFramework.GAS.Editor
         {
             var port=new FlowPort(Direction.Output,this);
             port.userData=(list,index); port.portName=name; node.outputContainer.Add(port);
-            port.AddManipulator(new ContextualMenuManipulator(e=> {foreach(var type in Types) e.menu.AppendAction("添加/"+type.Name,_=>Insert(list,type,index));}));
+            port.AddManipulator(new ContextualMenuManipulator(e=> {foreach(var type in Types) e.menu.AppendAction("添加/"+SkillActionSearch.MenuName(type),_=>Insert(list,type,index));}));
             return port;
         }
         private void Insert(string path, Type type,int index=-1) => Edit("添加动作",so=>
@@ -322,7 +304,7 @@ namespace ZFramework.GAS.Editor
             int[] indices=paths.Length==0?new[]{fallback}:paths.Select(p=>SkillFlowCommands.IndexIn(list,p)).OrderBy(i=>i).ToArray();
             if(indices[0]<0 || indices.Last()-indices[0]+1!=indices.Length){_doc.Report("请选择同一分支内连续的动作。");return;}
             var path=EditorUtility.SaveFilePanelInProject("提取为模块","动作模块","asset","选择独立模块的位置");
-            if(!string.IsNullOrEmpty(path)) TryEdit(()=>SkillFlowCommands.Extract(_doc,_owner,list,indices[0],indices.Length,path,ActionEffectOwnership.ConfirmMove));
+            if(!string.IsNullOrEmpty(path)) TryEdit(()=>SkillFlowCommands.Extract(_doc,_owner,list,indices[0],indices.Length,path,ActionEffectOwnership.Confirm));
         }
         private void Live(RuntimeSnapshot snapshot)
         {

@@ -9,13 +9,12 @@ namespace ZFramework.GAS.Unity
     {
         private void OnValidate() => DefinitionSource.InvalidateDependents(this);
         public SkillParameter[] parameters = Array.Empty<SkillParameter>();
-        internal void AddTo(Dictionary<string, SkillParameterValue> values, int level)
+        internal static void AddTo(Dictionary<string, SkillParameterValue> values, SkillParameter[] parameters, int level)
         {
             foreach (var parameter in parameters)
             {
-                if (parameter == null || string.IsNullOrEmpty(parameter.Id)) throw new InvalidOperationException($"{name}: 参数缺少稳定 ID");
-                if (values.ContainsKey(parameter.Id)) throw new InvalidOperationException($"{name}: 参数 ID 重复 {parameter.Id}");
-                values.Add(parameter.Id, parameter.Resolve(level));
+                if (parameter == null || string.IsNullOrEmpty(parameter.Id)) throw new InvalidOperationException("技能参数缺少稳定 ID");
+                if (!values.TryAdd(parameter.Id, parameter.Resolve(level))) throw new InvalidOperationException("重复参数 ID: " + parameter.Id);
             }
         }
         internal static void Apply(Dictionary<string, SkillParameterValue> values, SkillParameterOverride[] overrides, int level)

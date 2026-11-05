@@ -2,7 +2,6 @@ using GameplayTags;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Runtime.ExceptionServices;
 using System.Threading;
 
 namespace ZFramework.GAS
@@ -91,7 +90,7 @@ namespace ZFramework.GAS
             BeginOperation();
             try
             {
-                return ApplyCore(spec, out handle);
+                return ApplyCore(spec, out handle, default, false, 0, 0);
             }
             finally
             {
@@ -99,8 +98,15 @@ namespace ZFramework.GAS
             }
         }
 
+        internal EffectApplicationResult ApplyResolved(in GameplayEffectSpec spec, ReadOnlySpan<float> magnitudes, float duration, float period)
+        {
+            BeginOperation();
+            try { return ApplyCore(spec, out _, magnitudes, true, duration, period); }
+            finally { EndOperation(); }
+        }
+
         private EffectApplicationResult ApplyCore(
-            GameplayEffectSpec spec, out ActiveGameplayEffectHandle handle)
+            GameplayEffectSpec spec, out ActiveGameplayEffectHandle handle, ReadOnlySpan<float> magnitudes, bool resolved, float duration, float period)
         {
             handle = default;
             GameplayEffectDefinition definition = spec.Definition;
@@ -114,7 +120,8 @@ namespace ZFramework.GAS
             if (definition.DurationPolicy == EffectDurationPolicy.Instant)
             {
                 if (definition.ConditionalEffects.Length != 0) spec = spec.Snapshot();
-                ApplyInstant(spec, stackCount: 1);
+                if (resolved) ApplyMagnitudes(definition.Modifiers, magnitudes, 1);
+                else ApplyInstant(spec, stackCount: 1);
                 GasDebugHooks.Apply(_owner, definition, spec.Source, 1);
                 RemoveEffectsWithAnyTag(tags.RemoveEffectsWith);
                 DispatchCues(definition, GameplayCueEvent.Executed, spec.Source, 1);
@@ -122,7 +129,7 @@ namespace ZFramework.GAS
                 return EffectApplicationResult.Completed;
             }
 
-            float period = ResolvePeriod(spec), duration = ResolveDuration(spec);
+            if (!resolved) { period = ResolvePeriod(spec); duration = ResolveDuration(spec); }
             ActiveGameplayEffect existing = FindStackable(spec);
             if (existing != null)
             {
@@ -156,77 +163,21 @@ namespace ZFramework.GAS
             active.Spec = spec;
             handle = active.Handle;
 
-            // Prepare：先解析全部数值。此时 active 尚未发布到 _active，也没有修改属性或标签；
-            // 任一 Resolve 失败都只会归还未发布对象，不会留下半初始化效果或部分 Modifier。
             EffectModifier[] modifiers = definition.Modifiers;
-            try
+            if (resolved)
             {
-                ResolveMagnitudes(spec, active, modifiers);
+                if (active.ResolvedMagnitudes == null || active.ResolvedMagnitudes.Length < modifiers.Length)
+                    active.ResolvedMagnitudes = new float[modifiers.Length];
+                magnitudes.CopyTo(active.ResolvedMagnitudes);
             }
-            catch
-            {
-                handle = default;
-                ReturnUnpublished(active);
-                throw;
-            }
-
-            // Commit：全部 magnitude 已解析成功后才让效果对查询、Tick 与回调可见。
+            else ResolveMagnitudes(spec, active, modifiers);
             _active.Add(active);
-
             if (active.ResolvedPeriod <= 0f)
             {
                 PrepareModifierAttributes(active, modifiers);
-                try
-                {
-                    for (int i = 0; i < active.ModifierAttributeCount; i++)
-                    {
-                        GameplayAttribute attribute = active.ModifierAttributes[i];
-                        ref readonly EffectModifier modifier = ref modifiers[i];
-                        if (attribute == null)
-                        {
-                            continue;
-                        }
-
-                        attribute.AddModifier(
-                            new AttributeModifier(modifier.Target, modifier.Operation, active.ResolvedMagnitudes[i]), active);
-                    }
-                }
-                catch (Exception error)
-                {
-                    // AddModifier 在 Recalculate/事件前已写入结构；逐项清理并验证脱钩后才能回池。
-                    Exception firstError = error;
-                    for (int i = 0; i < active.ModifierAttributeCount; i++)
-                    {
-                        GameplayAttribute attribute = active.ModifierAttributes[i];
-                        if (attribute == null)
-                        {
-                            continue;
-                        }
-
-                        try
-                        {
-                            attribute.RemoveModifiersFromSource(active);
-                        }
-                        catch (Exception cleanupError)
-                        {
-                            CaptureFirstException(ref firstError, cleanupError);
-                        }
-                    }
-
-                    _active.Remove(active);
-                    handle = default;
-                    if (HasModifierReferences(active))
-                    {
-                        Discard(active);
-                    }
-                    else
-                    {
-                        ReturnUnpublished(active);
-                    }
-
-                    ExceptionDispatchInfo.Capture(firstError).Throw();
-                    throw;
-                }
+                for (int i = 0; i < modifiers.Length && !active.PendingRemove; i++)
+                    active.ModifierAttributes[i]?.AddModifier(
+                        new AttributeModifier(modifiers[i].Target, modifiers[i].Operation, active.ResolvedMagnitudes[i]), active);
             }
 
             GasDebugHooks.Apply(_owner, definition, spec.Source, active.StackCount);
@@ -490,40 +441,13 @@ namespace ZFramework.GAS
 
         private void FlushPendingRemovals()
         {
-            Exception firstError = null;
-            // PendingRemove 本身就是待删集合，不再维护第二份队列。倒序扫一遍即可 O(n) 完成槽位删除。
             for (int i = _active.Count - 1; i >= 0; i--)
             {
-                ActiveGameplayEffect effect = _active[i];
-                if (!effect.PendingRemove)
-                {
-                    continue;
-                }
-
-                try
-                {
-                    int last = _active.Count - 1;
-                    _active[i] = _active[last];
-                    _active.RemoveAt(last);
-
-                    if (effect.FullyDetached)
-                    {
-                        ReturnToPool(effect);
-                    }
-                    else
-                    {
-                        Discard(effect);
-                    }
-                }
-                catch (Exception error)
-                {
-                    CaptureFirstException(ref firstError, error);
-                }
-            }
-
-            if (firstError != null)
-            {
-                ExceptionDispatchInfo.Capture(firstError).Throw();
+                var effect = _active[i];
+                if (!effect.PendingRemove) continue;
+                int last = _active.Count - 1;
+                _active[i] = _active[last]; _active.RemoveAt(last);
+                if (effect.FullyDetached) ReturnToPool(effect);
             }
         }
 
@@ -539,18 +463,10 @@ namespace ZFramework.GAS
             return effect;
         }
 
-        private void ReturnUnpublished(ActiveGameplayEffect effect) => ReturnToPool(effect);
-
         private void ReturnToPool(ActiveGameplayEffect effect)
         {
             effect.PrepareForPool();
             _pool.Push(effect);
-        }
-
-        private static void Discard(ActiveGameplayEffect effect)
-        {
-            // 不进入池，也不由容器保存引用；遗留 Modifier 脱钩后即可由 GC 回收。
-            effect.Discard();
         }
 
         private static ActiveGameplayEffectHandle NextHandle()
@@ -567,91 +483,13 @@ namespace ZFramework.GAS
 
         private void DetachEffect(ActiveGameplayEffect effect)
         {
-            Exception firstError = null;
-            GameplayTagSet granted = effect.Definition.Tags.Granted;
-
-            // 每个属性单独清理。Recalculate/OnCurrentValueChanged 抛错时，当前属性的结构删除已经完成；
-            // 记录异常后继续清理其余属性，不能让一个宿主回调留下别处的 Source 引用。
             for (int i = 0; i < effect.ModifierAttributeCount; i++)
-            {
-                GameplayAttribute attribute = effect.ModifierAttributes[i];
-                if (attribute == null)
-                {
-                    continue;
-                }
-
-                try
-                {
-                    attribute.RemoveModifiersFromSource(effect);
-                }
-                catch (Exception error)
-                {
-                    CaptureFirstException(ref firstError, error);
-                }
-            }
-
-            // 标签同样逐项移除，避免一个 标签移除回调阻断后续标签的结构清理。
-            for (int i = 0; i < granted.Count; i++)
-            {
-                try
-                {
-                    _ownedTags.RemoveTag(granted[i]);
-                }
-                catch (Exception error)
-                {
-                    CaptureFirstException(ref firstError, error);
-                }
-            }
-
-            try
-            {
-                GasDebugHooks.Remove(_owner, effect.Definition, effect.Source, effect.StackCount);
-                DispatchCues(effect.Definition, GameplayCueEvent.Removed, effect.Source, effect.StackCount);
-            }
-            catch (Exception error)
-            {
-                CaptureFirstException(ref firstError, error);
-            }
-
-            try
-            {
-                ApplyConditional(effect.Spec, EffectTrigger.Removed);
-            }
-            catch (Exception error)
-            {
-                CaptureFirstException(ref firstError, error);
-            }
-
-            // 只记录脱钩结果；列表槽位删除与 Retire/Discard 由 lifecycle 在最外层退出时完成。
-            effect.FullyDetached = !HasModifierReferences(effect);
-
-            if (firstError != null)
-            {
-                ExceptionDispatchInfo.Capture(firstError).Throw();
-            }
-        }
-
-        private bool HasModifierReferences(ActiveGameplayEffect effect)
-        {
-            // 检查应用时实际保存 Source 的属性，而不是重新查询可变 AttributeSet。
-            for (int i = 0; i < effect.ModifierAttributeCount; i++)
-            {
-                GameplayAttribute attribute = effect.ModifierAttributes[i];
-                if (attribute != null && attribute.HasModifiersFromSource(effect))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static void CaptureFirstException(ref Exception firstError, Exception error)
-        {
-            if (firstError == null)
-            {
-                firstError = error;
-            }
+                effect.ModifierAttributes[i]?.RemoveModifiersFromSource(effect);
+            effect.Definition.Tags.Granted.RemoveFrom(_ownedTags);
+            GasDebugHooks.Remove(_owner, effect.Definition, effect.Source, effect.StackCount);
+            DispatchCues(effect.Definition, GameplayCueEvent.Removed, effect.Source, effect.StackCount);
+            ApplyConditional(effect.Spec, EffectTrigger.Removed);
+            effect.FullyDetached = true;
         }
 
         private ActiveGameplayEffect FindByHandle(ActiveGameplayEffectHandle handle)
@@ -836,14 +674,16 @@ namespace ZFramework.GAS
                 // Each nested application owns its buffer. Resolve against the pre-effect state
                 // before the first write/notification, just like a persistent effect's prepare phase.
                 for (int i = 0; i < modifiers.Length; i++) resolved[i] = spec.Resolve(modifiers[i].Magnitude, _attributes);
-                for (int i = 0; i < modifiers.Length; i++)
-                {
-                    ref readonly EffectModifier modifier = ref modifiers[i];
-                    if (_attributes.TryGet(modifier.Target, out GameplayAttribute attribute))
-                        ApplyToBase(attribute, modifier.Operation, resolved[i], stackCount);
-                }
+                ApplyMagnitudes(modifiers, resolved, stackCount);
             }
             finally { if (rented != null) ArrayPool<float>.Shared.Return(rented); }
+        }
+
+        private void ApplyMagnitudes(EffectModifier[] modifiers, ReadOnlySpan<float> values, int stacks)
+        {
+            for (int i = 0; i < modifiers.Length; i++)
+                if (_attributes.TryGet(modifiers[i].Target, out var attribute))
+                    ApplyToBase(attribute, modifiers[i].Operation, values[i], stacks);
         }
 
         private static void ApplyToBase(

@@ -49,16 +49,16 @@ namespace ZFramework.GAS.Editor
         public override string Label(SerializedProperty e)
         {
             string key = e.FindPropertyRelative("key").stringValue;
-            var effect = e.FindPropertyRelative("effect").objectReferenceValue;
-            return (string.IsNullOrEmpty(key) ? "事件" : key) + (effect != null ? " → " + effect.name : "");
+            var actions = e.FindPropertyRelative("actions");
+            return (string.IsNullOrEmpty(key) ? "事件" : key) + (actions.arraySize > 0 ? " · " + actions.arraySize + " 动作" : "");
         }
         public override bool AcceptsDrop(Object dropped) => dropped is GameplayEffectAsset;
         public override void InitializeNew(SerializedProperty e, float time, Object dropped)
         {
             base.InitializeNew(e, time, dropped);
             e.FindPropertyRelative("key").stringValue = "";
-            e.FindPropertyRelative("effect").objectReferenceValue = dropped as GameplayEffectAsset;
-            e.FindPropertyRelative("target").enumValueIndex = 0;
+            var actions=e.FindPropertyRelative("actions");actions.ClearArray();
+            if(dropped is GameplayEffectAsset effect){actions.arraySize=1;actions.GetArrayElementAtIndex(0).managedReferenceValue=new ApplyEffectAction{effect=effect};}
         }
     }
     public sealed class CueRegionTrack : TrackType
@@ -84,15 +84,6 @@ namespace ZFramework.GAS.Editor
         }
         public override void InitializeNew(SerializedProperty e, float time, Object dropped)
         { base.InitializeNew(e, time, dropped); e.FindPropertyRelative("tags").ClearArray(); }
-    }
-    public sealed class TaskTrack : TrackType
-    {
-        public override string DisplayName => "任务";
-        public override Color Color => SkillColors.Task;
-        public override string PropertyPath => "taskEvents";
-        public override string Label(SerializedProperty e) => e.FindPropertyRelative("spawner").managedReferenceValue?.GetType().Name ?? "选择任务类型";
-        public override void InitializeNew(SerializedProperty e, float time, Object dropped)
-        { base.InitializeNew(e, time, dropped); e.FindPropertyRelative("spawner").managedReferenceValue = new ProjectileSpawner(); }
     }
     public sealed class SectionTrack : TrackType
     {

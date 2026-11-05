@@ -15,15 +15,12 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private float time;
         [Tooltip("回调据此分辨是哪一下，可留空")]
         [SerializeField] private string key;
-        [SerializeField] private GameplayEffectAsset effect;
-        [SerializeField] private AnimationMarkerTarget target = AnimationMarkerTarget.Target;
 
         [SerializeReference] public SkillAction[] actions = Array.Empty<SkillAction>();
         public AnimationMarker Build(ScriptableObject owner = null) => Build(owner,new SkillActionBuildContext(owner));
         internal AnimationMarker Build(ScriptableObject owner,SkillActionBuildContext builder)
         {
-            DefinitionSource.DependsOn(owner, effect);
-            return new(time, key, effect != null ? effect.Definition : null, target, id, builder.Build(actions));
+            return new(time, key, id, builder.Build(actions));
         }
     }
 
@@ -94,7 +91,6 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private AnimationMarkerAsset[] markers = Array.Empty<AnimationMarkerAsset>();
         [SerializeField] private AnimationCueRegionAsset[] cueRegions = Array.Empty<AnimationCueRegionAsset>();
         [SerializeField] private AnimationTagWindowAsset[] tagWindows = Array.Empty<AnimationTagWindowAsset>();
-        [SerializeField] private AnimationTaskEventAsset[] taskEvents = Array.Empty<AnimationTaskEventAsset>();
 
         [NonSerialized] private SkillAnimationDefinition _definition;
 
@@ -131,10 +127,8 @@ namespace ZFramework.GAS.Unity
 
             var builtWindows = new AnimationTagWindow[tagWindows.Length];
             for (int i = 0; i < tagWindows.Length; i++) builtWindows[i] = tagWindows[i].Build();
-            var builtTasks = new AnimationTaskEvent[taskEvents.Length];
-            for (int i = 0; i < taskEvents.Length; i++) builtTasks[i] = taskEvents[i].Build();
             DefinitionSource.DependsOn(this,boneWeights);
-            var definition = new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray(), builtWindows, builtTasks,
+            var definition = new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray(), builtWindows,
                 blendIn, blendOut, Array.ConvertAll(sections, section => section.Build()),
                 Array.ConvertAll(runtimeTracks, track => track.Build()), BlendInSpec, BlendOutSpec, mask, additive, layerWeight, boneWeights?.Build());
             DefinitionSource.Register(definition, this);
