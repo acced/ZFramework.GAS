@@ -4,6 +4,7 @@
     "references": [
         "ZFramework.GAS",
         "ZFramework.GAS.Unity",
+        "ZFramework.GAS.Unity.Realtime",
         "ZFramework.GameplayTags"
     ],
     "includePlatforms": [

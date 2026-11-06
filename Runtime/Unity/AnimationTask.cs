@@ -211,8 +211,8 @@ namespace ZFramework.GAS.Unity
             if (!(jumping && transition.duration > 0 && _driver is IAdvancedBlendingDriver advanced &&
                 (advanced.Capabilities & AnimationBlendCapabilities.SeekBlend) != 0 && advanced.SeekBlend(NormalizedTime, transition)))
             {
-                if (!jumping && _driver is PlayableAnimationDriver playable) playable.SetEntryTime(NormalizedTime);
-                else if ((jumping || _driver is not AnimatorAnimationDriver) && _driver is ISeekableAnimationDriver seekable) seekable.Seek(NormalizedTime);
+                if (_driver is ISeekableAnimationDriver seekable) seekable.Seek(NormalizedTime);
+                else _driver.Advance(NormalizedTime);
                 else _driver.Advance(NormalizedTime);
             }
             if (!IsActive || version != _jumpVersion) return false;

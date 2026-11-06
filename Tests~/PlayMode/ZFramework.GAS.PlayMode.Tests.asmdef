@@ -1,6 +1,6 @@
 {
   "name": "ZFramework.GAS.PlayMode.Tests",
-  "references": ["ZFramework.GAS", "ZFramework.GAS.Unity", "ZFramework.GameplayTags", "ZFramework.GAS.Samples.BasicCombat"],
+  "references": ["ZFramework.GAS", "ZFramework.GAS.Unity", "ZFramework.GAS.Unity.Realtime", "ZFramework.GameplayTags", "ZFramework.GAS.Samples.BasicCombat"],
   "optionalUnityReferences": ["TestAssemblies"],
   "versionDefines": [
     { "name": "com.unity.modules.assetbundle", "expression": "1.0.0", "define": "GAS_TEST_ASSET_BUNDLE" }
