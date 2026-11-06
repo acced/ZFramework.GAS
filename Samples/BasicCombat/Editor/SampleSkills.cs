@@ -67,17 +67,17 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var cooldown = Cooldown(ability, .6f, SampleTags.CooldownSlash);
             var damage = Effect(ability, "伤害 · 斩击", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 1.2f, NormalDamage), SampleTags.CueHit);
             var empowered = Effect(ability, "伤害 · 强化斩击", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, 2, EmpoweredDamage), SampleTags.CueHit);
-            var animation = Animation(ability, "动画 · 斩击", "Slash", T.SlashLength, so =>
+            var animation = Animation(ability, "动画 · 斩击", "Slash", T.SlashLength, t =>
             {
-                Actions(so, T.SlashHit, "命中", new ConditionalAction {
+                t.Marker("impact", T.SlashHit, "命中", new ConditionalAction {
                     requiredTags = new[] { new GameplayTags.GameplayTag { m_Name = SampleTags.Empowered } },
                     whenTrue = new SkillAction[] { new ApplyEffectAction { effect = empowered, targets = new TargetQuery {
-                        kind = TargetQueryKind.Sector, radius = Number(ability, "范围", 3), angle = new SkillNumber(110) } } },
-                    whenFalse = new SkillAction[] { new ApplyEffectAction { effect = damage, targets = new TargetQuery { kind = TargetQueryKind.Sector, radius = Number(ability, "基础范围", 2.5f), angle = new SkillNumber(90) } } }
+                        kind = TargetQueryKind.Sector, relation = TargetRelation.Enemy, radius = Number(ability, "范围", 3), angle = new SkillNumber(110) } } },
+                    whenFalse = new SkillAction[] { new ApplyEffectAction { effect = damage, targets = new TargetQuery { kind = TargetQueryKind.Sector, relation = TargetRelation.Enemy, radius = Number(ability, "基础范围", 2.5f), angle = new SkillNumber(90) } } }
                 });
-                Region(so, T.SlashTrailStart, T.SlashTrailEnd, SampleTags.CueSwordTrail);
-                Window(so, .12f, .4f, SampleTags.SuperArmor);
-                Window(so, .55f, .85f, SampleTags.ComboWindow);
+                t.Cue("trail", T.SlashTrailStart, T.SlashTrailEnd, SampleTags.CueSwordTrail);
+                t.TagWindow("armor", .12f, .4f, SampleTags.SuperArmor);
+                t.TagWindow("combo", .55f, .85f, SampleTags.ComboWindow);
             }, .08f, .2f);
             return Bind(ability, cost, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
@@ -103,11 +103,12 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 Damage(so,ability,1.6f);
                 so.FindProperty("modifiers").GetArrayElementAtIndex(0).FindPropertyRelative("magnitude.multiplierParameterId").stringValue=scale;
             },SampleTags.CueHit);
-            SkillAction Hit()=>new ApplyEffectAction{effect=damage};
-            SelectTargetsAction Pick(SkillNumber n)=>new(){targets=new TargetQuery{kind=TargetQueryKind.Circle,origin=SkillSpawnPosition.HitPoint,radius=range,maxTargets=64},
+            SkillAction Hit()=>new ApplyEffectAction{effect=damage, targets=new TargetQuery{relation=TargetRelation.Enemy}};
+            SelectTargetsAction Pick(SkillNumber n)=>new(){targets=new TargetQuery{kind=TargetQueryKind.Circle,relation=TargetRelation.Enemy,origin=SkillSpawnPosition.HitPoint,radius=range,maxTargets=64},
                 count=n,actions=new SkillAction[]{new NextTargetStepAction()}};
             LaunchProjectileAction Shot(SkillSpawnPosition origin,params SkillAction[] onHit)=>new(){prefab=visual,origin=origin,
-                onlySelectedTarget=true,speed=speed,lifetime=life,radius=.3f,arcHeight=.25f,onHit=onHit};
+                onlySelectedTarget=true,collision=new TargetQuery{kind=TargetQueryKind.Circle,relation=TargetRelation.Enemy},
+                speed=speed,lifetime=life,radius=.3f,arcHeight=.25f,onHit=onHit};
             string shared=folder+"/Shared";SampleArt.EnsureFolder(shared);
             var set=ScriptableObject.CreateInstance<SkillParameterSetAsset>();set.parameters=ability.parameters;
             AssetDatabase.CreateAsset(set,shared+"/能量弹参数.asset");ability.parameters=Array.Empty<SkillParameter>();
@@ -118,8 +119,8 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                     first=new SkillAction[]{Shot(SkillSpawnPosition.Caster,Hit(),Pick(fork?limit:new SkillNumber(1)))},
                     next=fork?new SkillAction[]{new ShowTargetLinkAction{prefab=lightning},Hit()}:
                         new SkillAction[]{Shot(SkillSpawnPosition.HitPoint,Hit(),Pick(new SkillNumber(1)))}};
-                var animation=Animation(variant,"动画 · "+variant.displayName,"Bolt",T.BoltLength,so=>{
-                    Region(so,T.BoltChargeStart,T.BoltRelease,SampleTags.CueBoltCharge);Actions(so,T.BoltRelease,"发射",sequence);
+                var animation=Animation(variant,"动画 · "+variant.displayName,"Bolt",T.BoltLength,t=>{
+                    t.Cue("charge",T.BoltChargeStart,T.BoltRelease,SampleTags.CueBoltCharge);t.Marker("release",T.BoltRelease,"发射",sequence);
                 },.12f,.22f);
                 Bind(variant,cost,cooldown,animation,so=>Tags(so.FindProperty("activationBlockedTags"),SampleTags.Channeling));
             }
@@ -134,12 +135,12 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var ability = Ability(folder, "战吼", SampleTags.AbilityWarcry);
             var cooldown = Cooldown(ability, 8, SampleTags.CooldownWarcry);
             var buff = Effect(ability, "增益 · 战意", EffectDurationPolicy.Duration, 6, so => { Modifier(so, Attack, 10); Tags(so.FindProperty("tags.granted"), SampleTags.Empowered); });
-            var animation = Animation(ability, "动画 · 战吼", "Warcry", T.WarcryLength, so =>
+            var animation = Animation(ability, "动画 · 战吼", "Warcry", T.WarcryLength, t =>
             {
-                Actions(so, T.WarcryShout, "怒吼", new ApplyEffectAction { effect = buff, targets = new TargetQuery { kind = TargetQueryKind.Self } });
-                Region(so, T.WarcryAuraStart, T.WarcryLength, SampleTags.CueWarcryAura);
-                Region(so, .2f, .9f, SampleTags.CueGroundTest);
-                Window(so, .2f, .9f, SampleTags.SuperArmor);
+                t.Marker("shout", T.WarcryShout, "怒吼", new ApplyEffectAction { effect = buff, targets = new TargetQuery { kind = TargetQueryKind.Self } });
+                t.Cue("aura", T.WarcryAuraStart, T.WarcryLength, SampleTags.CueWarcryAura);
+                t.Cue("ground", .2f, .9f, SampleTags.CueGroundTest);
+                t.TagWindow("armor", .2f, .9f, SampleTags.SuperArmor);
             }, .15f, .28f);
             return Bind(ability, null, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
@@ -154,15 +155,15 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 so.FindProperty("executePeriodicOnApplication").boolValue = true;
                 Modifier(so, Health, 6);
             });
-            var animation = Animation(ability, "动画 · 圣域引导", "Sanctuary", T.SanctuaryLength, so =>
+            var animation = Animation(ability, "动画 · 圣域引导", "Sanctuary", T.SanctuaryLength, t =>
             {
-                Actions(so, T.SanctuaryBegin, "开始引导", new CreateAreaAction {
-                    targets = new TargetQuery { kind = TargetQueryKind.Circle, excludeSelf = false, radius = Number(ability, "范围", 3) },
+                t.Marker("open", T.SanctuaryBegin, "开始引导", new CreateAreaAction {
+                    targets = new TargetQuery { kind = TargetQueryKind.Circle, relation = TargetRelation.Ally, excludeSelf = false, radius = Number(ability, "范围", 3) },
                     duration = Number(ability, "引导时长", T.SanctuaryEnd - T.SanctuaryBegin), enterEffect = heal,
                     removeOnExit = true, ownership = SkillTaskOwnership.Ability
                 });
-                Region(so, T.SanctuaryBegin, T.SanctuaryEnd, SampleTags.CueSanctuary);
-                Window(so, T.SanctuaryBegin, T.SanctuaryEnd, SampleTags.Channeling);
+                t.Cue("field", T.SanctuaryBegin, T.SanctuaryEnd, SampleTags.CueSanctuary);
+                t.TagWindow("channel", T.SanctuaryBegin, T.SanctuaryEnd, SampleTags.Channeling);
             }, .2f, .35f);
             return Bind(ability, null, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
@@ -172,14 +173,14 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             var ability = Ability(folder, "召唤", SampleTags.AbilitySummon);
             var cooldown = Cooldown(ability, 12, SampleTags.CooldownSummon);
             var pulse = Effect(ability, "伤害 · 召唤领域", EffectDurationPolicy.Instant, 0, so => Damage(so, ability, .4f), SampleTags.CueHit);
-            var animation = Animation(ability, "动画 · 召唤", "Summon", T.SummonLength, so =>
+            var animation = Animation(ability, "动画 · 召唤", "Summon", T.SummonLength, t =>
             {
-                Actions(so, T.SummonStrike, "召唤", new SpawnPrefabAction {
+                t.Marker("spawn", T.SummonStrike, "召唤", new SpawnPrefabAction {
                     prefab = guardianPrefab, offset = T.SummonPoint, lifetime = Number(ability, "召唤寿命", 5), count = Number(ability, "召唤数量", 1), spacing = Vector3.right
-                }, new CreateAreaAction { targets = new TargetQuery { kind = TargetQueryKind.TargetPoint, radius = Number(ability, "领域范围", 2) },
+                }, new CreateAreaAction { targets = new TargetQuery { kind = TargetQueryKind.TargetPoint, relation = TargetRelation.Enemy, radius = Number(ability, "领域范围", 2) },
                     duration = Number(ability, "领域寿命", 5), period = Number(ability, "领域周期", 1), ownership = SkillTaskOwnership.Scene,
                     onPeriod = new SkillAction[] { new ApplyEffectAction { effect = pulse } } });
-                Region(so, T.SummonCircleStart, T.SummonCircleEnd, SampleTags.CueSummon);
+                t.Cue("circle", T.SummonCircleStart, T.SummonCircleEnd, SampleTags.CueSummon);
             }, .15f, .28f);
             return Bind(ability, null, cooldown, animation, so => Tags(so.FindProperty("activationBlockedTags"), SampleTags.Channeling));
         }
@@ -228,14 +229,6 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             owner.parameters = list.ToArray(); EditorUtility.SetDirty(owner);
             return new SkillNumber(value) { parameterId = parameter.Id };
         }
-        private static void Actions(SerializedObject so, float time, string name, params SkillAction[] actions)
-        {
-            Marker(so, time, name);
-            var list = so.FindProperty("markers"); var item = list.GetArrayElementAtIndex(list.arraySize - 1).FindPropertyRelative("actions");
-            item.arraySize = actions.Length;
-            for (int i = 0; i < actions.Length; i++) item.GetArrayElementAtIndex(i).managedReferenceValue = actions[i];
-        }
-
         private static void Damage(SerializedObject so, GameplayAbilityAsset ability, float scale, string parameterName = "伤害系数")
         {
             var number = Number(ability, parameterName, scale);
@@ -264,18 +257,14 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             magnitude.FindPropertyRelative("captureFrom").enumValueIndex = (int)MagnitudeCapture.Source;
         }
 
-        private static SkillAnimationAsset Animation(GameplayAbilityAsset owner, string name, string state, float length, Action<SerializedObject> timeline,
+        private static SkillAnimationAsset Animation(GameplayAbilityAsset owner, string name, string state, float length, Action<SkillTimelineAuthoring> timeline,
             float blendIn = .12f, float blendOut = .2f)
         {
             var animation = SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(owner, name);
-            Edit(animation, so =>
+            SkillTimelineAuthoring.Edit(animation, t =>
             {
-                so.FindProperty("clipName").stringValue = "Base Layer." + state;
-                so.FindProperty("duration").floatValue = length;
-                so.FindProperty("frameRate").floatValue = 30;
-                so.FindProperty("blendIn").floatValue = blendIn;
-                so.FindProperty("blendOut").floatValue = blendOut;
-                timeline(so);
+                t.Clip("Base Layer." + state, length, 30, blendIn, blendOut);
+                timeline(t);
             });
             // Presentation samples are authored on the same timeline as project-defined tracks.
             if(state=="Slash") animation.runtimeTracks=new SkillRuntimeTrack[]{
@@ -290,32 +279,6 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             return animation;
         }
 
-        private static void Marker(SerializedObject so, float time, string key)
-        {
-            var list = so.FindProperty("markers");
-            var m = list.GetArrayElementAtIndex(list.arraySize++);
-            m.FindPropertyRelative("time").floatValue = time;
-            m.FindPropertyRelative("key").stringValue = key;
-        }
-
-        private static void Region(SerializedObject so, float start, float end, string cueTag)
-        {
-            var list = so.FindProperty("cueRegions");
-            var r = list.GetArrayElementAtIndex(list.arraySize++);
-            r.FindPropertyRelative("start").floatValue = start;
-            r.FindPropertyRelative("end").floatValue = end;
-            r.FindPropertyRelative("cueTag.m_Name").stringValue = cueTag;
-        }
-
-        private static void Window(SerializedObject so, float start, float end, params string[] tags)
-        {
-            var list = so.FindProperty("tagWindows");
-            var w = list.GetArrayElementAtIndex(list.arraySize++);
-            w.FindPropertyRelative("start").floatValue = start;
-            w.FindPropertyRelative("end").floatValue = end;
-            Tags(w.FindPropertyRelative("tags"), tags);
-        }
-
         private static void Tags(SerializedProperty array, params string[] names)
         {
             array.arraySize = names.Length;
@@ -325,11 +288,11 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
         private static GameplayAbilityAsset Bind(GameplayAbilityAsset ability, GameplayEffectAsset cost, GameplayEffectAsset cooldown,
             SkillAnimationAsset animation, Action<SerializedObject> extra)
         {
+            SkillAssetFactory.SetMainAnimation(ability, animation);
             Edit(ability, so =>
             {
                 so.FindProperty("cost").objectReferenceValue = cost;
                 so.FindProperty("cooldown").objectReferenceValue = cooldown;
-                so.FindProperty("animation").objectReferenceValue = animation;
                 extra(so);
             });
             return ability;

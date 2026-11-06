@@ -16,6 +16,36 @@ namespace ZFramework.GAS.Editor.Tests
     }
     public sealed class SkillCancelInitializer : MonoBehaviour, ISkillSpawnInitializer
     { public void InitializeSpawn(SkillExecutionContext context) => context.Source.EndAbility(context.Ability); }
+
+    // A project-owned action: no reference to this type in the GAS runtime, graph or preview.
+    [Serializable, System.ComponentModel.DisplayName("延迟落点")]
+    public sealed class TravelBranchAction : SkillAction
+    {
+        [FlowField("飞行时长")] public SkillNumber travel = new(.4f);
+        public SkillTaskOwnership lifetime;
+        [SerializeReference, FlowBranch("抵达")] public SkillAction[] afterTravel;
+        public override bool IsDetachedBranch(string field) => field == nameof(afterTravel) && lifetime == SkillTaskOwnership.Scene;
+        public override SkillActionDefinition Build(SkillActionBuildContext builder)
+        {
+            if (lifetime == SkillTaskOwnership.Ability) builder.RequireAbilityTask(Id);
+            var next = BuildBranch(builder,nameof(afterTravel),afterTravel);
+            var owner=lifetime; var duration=travel; var id=Id;
+            return Define("延迟落点", c => c.Start(new Flight(c,id,duration.Resolve(c.Values),next),owner));
+        }
+        private sealed class Flight : SkillActionTask
+        {
+            private float _remaining;
+            private readonly SkillActionDefinition[] _next;
+            public Flight(SkillExecutionContext c,string id,float duration,SkillActionDefinition[] next) : base(c,id)
+            { _remaining=duration; _next=next; }
+            public override string State => "飞行中";
+            protected override void Tick(float dt) { if ((_remaining-=dt)<=0) { Complete(); Execution.Execute(_next); } }
+        }
+        [InitializeOnLoadMethod] private static void RegisterPreview() =>
+            SkillActionPreview.Register<TravelBranchAction>((a,f)=>f.Visit(a.afterTravel,a.travel.Resolve(f.Values)));
+    }
+    internal sealed class TravelFixtureAsset : ScriptableObject
+    { [SerializeReference] public SkillAction[] stages; }
     public sealed class SkillActionTests
     {
         private readonly List<Object> _objects = new();
@@ -71,6 +101,149 @@ namespace ZFramework.GAS.Editor.Tests
         private TimelineTaskContext Services(Transform origin, Transform target = null, Pool pool = null)
             => new TimelineTaskContext { Origin = origin, Target = target, TargetPosition = target != null ? target.position : Vector3.forward * 3,
                 Objects = pool ?? new Pool(), Searcher = new TargetSearcher(), SceneTasks = _scene };
+
+        [Test] public void BoundServicesUseAssetRelationAndDoNotLeakAimBetweenCasts()
+        {
+            Assert.That(SkillActionFields.For(typeof(ApplyEffectAction)).Inline, Does.Contain(("targets.relation", "目标关系")));
+            Assert.That(SkillActionFields.For(typeof(LaunchProjectileAction)).Inline, Does.Contain(("collision.relation", "目标关系")));
+            var source = Unit("caster", Vector3.zero); var ally = Unit("ally", Vector3.right);
+            var enemy = Unit("enemy", Vector3.forward); Physics.SyncTransforms();
+            var services = new SkillUnitServices { Origin = source.transform, TargetRelations = (from, to, relation) =>
+                from == source.AbilitySystem.SourceIdentity && (relation == TargetRelation.Enemy) == (to == enemy.AbilitySystem) };
+            var runner = new SkillRunner(source.AbilitySystem, null, services);
+            GameplayAbilityAsset Area(TargetRelation side, float amount) => Skill(new ApplyEffectAction {
+                effect = Effect(amount), targets = new TargetQuery { kind = TargetQueryKind.Circle, relation = side, excludeSelf = false } });
+            var attack = Area(TargetRelation.Enemy, -20); var heal = Area(TargetRelation.Ally, 5);
+            runner.Grant(attack); runner.Grant(heal);
+            runner.TryCast(attack, new SkillCastTarget(enemy.AbilitySystem, enemy.transform, Vector3.zero));
+            Assert.AreEqual(Vector3.zero, runner.GetExecution(attack).Services.RequireTargetPosition());
+            runner.TryCast(heal, SkillCastTarget.Ground(Vector3.right));
+            float HP(SkillActionTestUnit u) => u.AbilitySystem.Attributes.GetCurrent(new AttributeId(1));
+            Assert.AreEqual(80, HP(enemy)); Assert.AreEqual(105, HP(ally)); Assert.AreEqual(105, HP(source));
+            runner.TryCast(attack, new SkillCastTarget(enemy.AbilitySystem, enemy.transform));
+            Assert.AreEqual(enemy.transform.position, runner.GetExecution(attack).Services.RequireTargetPosition());
+            runner.TryCast(attack);
+            var cast = runner.GetExecution(attack);
+            Assert.IsNull(cast.Target); Assert.IsNull(cast.Services.Target); Assert.IsFalse(cast.Services.HasTargetPosition);
+            Assert.AreSame(source.transform, cast.Services.Origin);
+            // An unconfigured project cannot accidentally damage friends. Any remains compatible.
+            var noTeams = new SkillRunner(ally.AbilitySystem, null);
+            noTeams.Grant(attack); noTeams.TryCast(attack, new SkillCastTarget(enemy.AbilitySystem));
+            Assert.AreEqual(40, HP(enemy));
+        }
+
+        [Test] public void DetachedProjectActionUsesOriginalTeamIdentityAfterSourceRecycle()
+        {
+            var owner = Unit("caster", Vector3.zero).AbilitySystem; var oldIdentity = owner.SourceIdentity;
+            var enemy = Unit("enemy", Vector3.forward);
+            var skill = Skill(new TravelBranchAction { afterTravel = new SkillAction[] {
+                new ApplyEffectAction { effect = Effect(), targets = new TargetQuery { relation = TargetRelation.Enemy } } } });
+            var runner = new SkillRunner(owner, null, new SkillUnitServices { SceneTasks = _scene,
+                TargetRelations = (from, to, side) => from == oldIdentity && to == enemy.AbilitySystem && side == TargetRelation.Enemy });
+            runner.Grant(skill); runner.TryCast(skill, new SkillCastTarget(enemy.AbilitySystem, enemy.transform));
+            owner.Clear(); Assert.AreNotSame(oldIdentity, owner.SourceIdentity);
+            _scene.Tick(1);
+            Assert.AreEqual(90, enemy.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
+        }
+
+        [TestCase(true, 80)]
+        [TestCase(false, 95)]
+        public void ProjectActionCanHandOffToConfiguredEventSuccessOrTimeout(bool signal, int expectedHealth)
+        {
+            var owner = Unit("caster", Vector3.zero).AbilitySystem; var enemy = Unit("target", Vector3.forward);
+            var skill = Skill(new TravelBranchAction { lifetime = SkillTaskOwnership.Ability,
+                afterTravel = new SkillAction[] { new WaitSkillAction { kind = SkillWaitKind.GameplayEvent, eventTag = "Test.Other",
+                    timeout = new SkillNumber(.5f), onSuccess = new SkillAction[] { new ApplyEffectAction { effect = Effect(-20) } },
+                    onTimeout = new SkillAction[] { new ApplyEffectAction { effect = Effect(-5) } } } } });
+            var runner = new SkillRunner(owner, null); runner.Grant(skill);
+            runner.TryCast(skill, new SkillCastTarget(enemy.AbilitySystem));
+            owner.Tick(.41f);
+            if (signal) owner.Events.Send(new GameplayEvent("Test.Other", owner.SourceIdentity, new SkillParameterValue(1)));
+            owner.Tick(signal ? .01f : .51f);
+            Assert.AreEqual(expectedHealth, enemy.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
+            Assert.IsFalse(runner.IsActive(skill));
+        }
+
+        [Test] public void ProjectBranchDrivesGraphReferencesAndBothOwnershipChecks()
+        {
+            var branch = new TravelBranchAction { afterTravel = new SkillAction[]{new WaitSkillAction()} };
+            var fixture = New<TravelFixtureAsset>(); fixture.stages = new SkillAction[]{branch};
+            using var so = new SerializedObject(fixture);
+            Assert.Throws<InvalidOperationException>(()=>SkillFlowCommands.ValidateStructure(so.FindProperty("stages")));
+            Assert.Catch<SkillActionException>(()=>new SkillActionBuildContext().Build(fixture.stages));
+            branch.lifetime=SkillTaskOwnership.Ability; so.Update();
+            Assert.DoesNotThrow(()=>SkillFlowCommands.ValidateStructure(so.FindProperty("stages")));
+            Assert.DoesNotThrow(()=>new SkillActionBuildContext().Build(fixture.stages));
+            var hit = Effect(); branch.afterTravel = new SkillAction[]{new ApplyEffectAction{effect=hit}};
+            var links = new List<AssetLink>(PortRules.Links(fixture));
+            Assert.AreEqual(1,links.Count); Assert.AreSame(hit,links[0].Child);
+            Assert.AreEqual("stages.Array.data[0].afterTravel.Array.data[0].effect",links[0].Port.ElementId);
+            Assert.AreEqual("延迟落点",SkillFlowView.ActionTitle(branch));
+            Assert.That(SkillActionFields.For(typeof(TravelBranchAction)).Inline, Does.Contain(("travel","飞行时长")));
+        }
+
+        [Test] public void ProjectPreviewAndSceneTaskAgreeOnDelayedHitWithLevelBoundTimeAndHierarchicalTags()
+        {
+            var source=Unit("caster",Vector3.zero); var victim=Unit("victim",Vector3.forward*2);
+            var parent=GameplayTagManager.RequestTag("Test.VFX"); var child=GameplayTagManager.RequestTag("Test.VFX.Ground");
+            victim.AbilitySystem.OwnedTags.AddTag(child);
+            var p=new SkillParameter{levels=new[]{2f,.4f}};
+            var action=new TravelBranchAction{travel=new SkillNumber(0){parameterId=p.Id},afterTravel=new SkillAction[]{
+                new ApplyEffectAction{effect=Effect(),targets=new TargetQuery{kind=TargetQueryKind.FixedTarget,anyTags=new[]{parent}}}}};
+            var skill=Skill(action); skill.parameters=new[]{p};
+            var path=AssetDatabase.GenerateUniqueAssetPath("Assets/GASTravelPreview.asset");
+            AssetDatabase.CreateAsset(skill,path);
+            var preview=new PreviewRenderUtility();
+            try {
+                var runner=new SkillRunner(source.AbilitySystem,null); runner.Grant(skill,2);
+                runner.TryCast(skill,victim.AbilitySystem,Services(source.transform,victim.transform));
+                Assert.IsFalse(runner.IsActive(skill));
+                using var doc=new SkillDocument();doc.Open(skill);
+                using var sim=new SkillPreviewSimulation(preview){TargetTags="Test.VFX.Ground"};
+                float time=0;
+                foreach(float dt in new[]{.3f,.11f}) {
+                    time+=dt; _scene.Tick(dt); doc.Playback.Seek(time,1);
+                    sim.Sample(doc,source.transform,1,DummyLayout.直线,2,null,2,false,null);
+                    bool arrived=time>.4f;
+                    Assert.AreEqual(arrived?90:100,victim.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
+                    Assert.AreEqual(arrived,sim.WasHit(0)); Assert.Greater(sim.End,.4f);
+                }
+                sim.TargetTags="Test.Other"; sim.Sample(doc,source.transform,1,DummyLayout.直线,2,null,2,false,null);
+                Assert.IsFalse(sim.WasHit(0));
+            } finally {preview.Cleanup();AssetDatabase.DeleteAsset(path);}
+        }
+
+        [Test] public void SceneTaskStartedByCancellationKeepsItsCastWhenSkillIsRecast()
+        {
+            var source=Unit("caster",Vector3.zero); var first=Unit("first",Vector3.forward); var second=Unit("second",Vector3.right);
+            var skill=Skill(new WaitSkillAction{onCancel=new SkillAction[]{new TravelBranchAction{afterTravel=new SkillAction[]{
+                new ApplyEffectAction{effect=Effect()}}}}});
+            var runner=Granted(source.AbilitySystem,null,skill);
+            runner.TryCast(skill,first.AbilitySystem,Services(source.transform,first.transform));
+            var cancelled=runner.GetExecution(skill); cancelled.SetChannel("sample",7);
+            source.AbilitySystem.EndAbility(runner.GetSpec(skill)); Assert.AreEqual(1,_scene.Count);
+            runner.TryCast(skill,second.AbilitySystem,Services(source.transform,second.transform));
+            Assert.AreNotSame(cancelled,runner.GetExecution(skill)); Assert.AreEqual(7,cancelled.Channels["sample"]);
+            Assert.IsFalse(runner.GetExecution(skill).Channels.ContainsKey("sample"));
+            _scene.Tick(1);
+            Assert.AreEqual(90,first.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
+            Assert.AreEqual(100,second.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
+            source.AbilitySystem.EndAbility(runner.GetSpec(skill)); _scene.Tick(1);
+            Assert.AreEqual(90,second.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
+        }
+
+        [Test] public void LastSceneCallbackCanRecastWithoutClearingTheFinishingCast()
+        {
+            var source=Unit("source",Vector3.zero);
+            var skill=Skill(new TravelBranchAction{afterTravel=new SkillAction[]{new SendGameplayEventAction{tag=GameplayTagManager.RequestTag("Test.Cue")}}});
+            var runner=Granted(source.AbilitySystem,null,skill); var services=Services(source.transform);
+            runner.TryCast(skill,taskContext:services);
+            var first=runner.GetExecution(skill); first.SetChannel("sample",9);
+            source.AbilitySystem.Events.Received+=_=>runner.TryCast(skill,taskContext:services);
+            _scene.Tick(1);
+            Assert.AreNotSame(first,runner.GetExecution(skill)); Assert.AreEqual(9,first.Channels["sample"]);
+            Assert.IsFalse(runner.GetExecution(skill).Channels.ContainsKey("sample"));
+        }
 
         [Test] public void WarmParameterizedCastsWithRealCostAndSourceFormulaAllocateNothing()
         {

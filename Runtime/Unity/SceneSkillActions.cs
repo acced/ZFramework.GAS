@@ -5,23 +5,31 @@ using UnityEngine.SceneManagement;
 
 namespace ZFramework.GAS.Unity
 {
-    public enum SkillTaskOwnership { Scene, Ability }
+    public enum SkillTaskOwnership { [InspectorName("打断后继续（场景）")] Scene, [InspectorName("随施放取消（技能）")] Ability }
     public enum SkillSpawnPosition { Caster, Target, TargetPoint, HitPoint, EventPosition, LaunchPoint }
 
-    internal abstract class SkillActionTask : GameplayAbilityTask, ISkillTaskState
+    public abstract class SkillActionTask : GameplayAbilityTask, ISkillTaskState
     {
-        public SkillExecutionContext Execution { get; private set; }
+        public SkillExecutionContext Execution { get; }
         public string ActionId { get; }
         public abstract string State { get; }
-        protected SkillActionTask(SkillExecutionContext context, string id) { Execution = context.ForTask(); ActionId = id; Execution.RetainTask(); }
-        internal void Detach() => Execution = Execution.Independent();
-        protected sealed override void OnBegin() => BeginAction();
+        protected SkillActionTask(SkillExecutionContext context, string id) { Execution = context.ForTask(); ActionId = id; }
+        internal void Detach() => Execution.DetachTask();
+        protected sealed override void OnBegin()
+        {
+            Execution.Retain(); // Until OnEnd.
+            Execution.Retain(); // BeginAction may complete and immediately recast.
+            try { BeginAction(); } finally { Execution.Release(); }
+        }
         protected virtual void BeginAction() { }
         protected sealed override void OnTick(float deltaTime)
-        { Execution.RefreshAsyncTargets(); Tick(deltaTime); }
+        {
+            Execution.Retain(); // Complete() may precede the last callback in this tick.
+            try { Execution.RefreshAsyncTargets(); Tick(deltaTime); } finally { Execution.Release(); }
+        }
         protected abstract void Tick(float deltaTime);
         protected sealed override void OnEnd(bool cancelled)
-        { try { EndAction(cancelled); } finally { Execution.ReleaseTask(); } }
+        { try { EndAction(cancelled); } finally { Execution.Release(); } }
         protected virtual void EndAction(bool cancelled) { }
     }
 
@@ -48,9 +56,10 @@ namespace ZFramework.GAS.Unity
     }
 
     [Serializable]
+    [System.ComponentModel.DisplayName("生成预制体")]
     public sealed class SpawnPrefabAction : SkillAction
     {
-        public GameObject prefab;
+        [FlowField("预制体")] public GameObject prefab;
         public SkillSpawnPosition position;
         public Vector3 offset;
         public Vector3 rotation;
@@ -59,14 +68,14 @@ namespace ZFramework.GAS.Unity
         public SkillNumber lifetime = new SkillNumber(5);
         public SkillNumber count = new SkillNumber(1);
         public Vector3 spacing;
-        public SkillTaskOwnership ownership;
+        [FlowField("归属")] public SkillTaskOwnership ownership;
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             if(prefab==null)throw new InvalidOperationException("缺少生成 Prefab。");
             builder.Number(lifetime,0);builder.Number(count,1,256,true);
             var visual = prefab; var where = position; var localOffset = offset; var euler = rotation;
-            var path = anchor; bool follows = follow, independent = ownership == SkillTaskOwnership.Scene;
-            if (!independent) builder.RequireAbilityTask(Id);
+            var path = anchor; bool follows = follow; var owner = ownership;
+            if (owner == SkillTaskOwnership.Ability) builder.RequireAbilityTask(Id);
             var duration = lifetime; var id = Id;
             var quantity = count; var separation = spacing;
             if (visual == null) throw new InvalidOperationException("生成对象缺少 Prefab。");
@@ -83,7 +92,7 @@ namespace ZFramework.GAS.Unity
                     var instance = SkillSpawn.Create(context, visual, point + facing * (localOffset + separation * i), facing * Quaternion.Euler(euler));
                     if (instance == null) return;
                     context.Start(new SpawnLifetimeTask(context, id, instance, duration.Resolve(context.Values), follows ? parent : null,
-                        localOffset + separation * i, Quaternion.Euler(euler), where == SkillSpawnPosition.Target), independent);
+                        localOffset + separation * i, Quaternion.Euler(euler), where == SkillSpawnPosition.Target), owner);
                 }
             });
         }
@@ -110,9 +119,10 @@ namespace ZFramework.GAS.Unity
     }
 
     [Serializable]
+    [System.ComponentModel.DisplayName("发射投射物")]
     public sealed class LaunchProjectileAction : SkillAction
     {
-        public GameObject prefab;
+        [FlowField("预制体")] public GameObject prefab;
         public SkillNumber speed = new SkillNumber(8);
         public SkillNumber lifetime = new SkillNumber(5);
         public float radius = .15f;
@@ -122,8 +132,9 @@ namespace ZFramework.GAS.Unity
         public SkillSpawnPosition origin;
         public bool onlySelectedTarget;
         public TargetQuery collision = new TargetQuery { kind = TargetQueryKind.Circle };
-        public SkillTaskOwnership ownership;
+        [FlowField("归属")] public SkillTaskOwnership ownership;
         [SerializeReference, FlowBranch("命中时")] public SkillAction[] onHit = Array.Empty<SkillAction>();
+        public override bool IsDetachedBranch(string field) => field == nameof(onHit) && ownership == SkillTaskOwnership.Scene;
         public static float ArcOffset(float height, float traveled, float initialDistance)
         {
             float t = initialDistance > .001f ? Mathf.Clamp01(traveled / initialDistance) : 1;
@@ -132,9 +143,9 @@ namespace ZFramework.GAS.Unity
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             var visual = prefab; var velocity = speed; var duration = lifetime; float size = radius, arc = arcHeight;
-            bool track = tracking, independent = ownership == SkillTaskOwnership.Scene;
-            if (!independent) builder.RequireAbilityTask(Id);
-            int limit = Math.Max(1, maxHits); var query = collision.Build(); var hit = independent ? builder.BuildDetached(onHit) : builder.Build(onHit); var id = Id;var start=origin;bool targeted=onlySelectedTarget;
+            bool track = tracking; var owner = ownership;
+            if (owner == SkillTaskOwnership.Ability) builder.RequireAbilityTask(Id);
+            int limit = Math.Max(1, maxHits); var query = collision.Build(); var hit = BuildBranch(builder, nameof(onHit), onHit); var id = Id;var start=origin;bool targeted=onlySelectedTarget;
             if (visual == null) throw new InvalidOperationException("投射物缺少 Prefab。");
             builder.Query(collision); builder.Number(speed,float.Epsilon); builder.Number(lifetime,float.Epsilon);
             if (!float.IsFinite(radius) || radius<=0 || !float.IsFinite(arcHeight) || maxHits<1) throw new InvalidOperationException("投射物形状或命中上限无效。");
@@ -143,7 +154,7 @@ namespace ZFramework.GAS.Unity
                 var instance = SkillSpawn.Create(context, visual, context.OriginAt(start), Quaternion.LookRotation(context.Forward));
                 if (instance == null) return;
                 context.Start(new SkillProjectileTask(context, id, instance, velocity.Resolve(context.Values),
-                    duration.Resolve(context.Values), size, arc, track, limit, query, hit,targeted), independent);
+                    duration.Resolve(context.Values), size, arc, track, limit, query, hit,targeted), owner);
             });
         }
     }
@@ -211,17 +222,19 @@ namespace ZFramework.GAS.Unity
     }
 
     [Serializable]
+    [System.ComponentModel.DisplayName("创建区域")]
     public sealed class CreateAreaAction : SkillAction
     {
-        public GameObject prefab;
+        [FlowField("预制体")] public GameObject prefab;
         public TargetQuery targets = new TargetQuery { kind = TargetQueryKind.Circle };
         public SkillNumber duration = new SkillNumber(3);
         public SkillNumber period = new SkillNumber(1);
         public GameplayEffectAsset enterEffect;
         public GameplayEffectAsset exitEffect;
         public bool removeOnExit = true;
-        public SkillTaskOwnership ownership;
+        [FlowField("归属")] public SkillTaskOwnership ownership;
         [SerializeReference, FlowBranch("每个周期")] public SkillAction[] onPeriod = Array.Empty<SkillAction>();
+        public override bool IsDetachedBranch(string field) => field == nameof(onPeriod) && ownership == SkillTaskOwnership.Scene;
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             builder.Query(targets);builder.Number(duration,0);builder.Number(period,0);
@@ -229,16 +242,16 @@ namespace ZFramework.GAS.Unity
             builder.DependsOn(enterEffect); builder.DependsOn(exitEffect);
             var enter = enterEffect != null ? enterEffect.Definition : null;
             var exit = exitEffect != null ? exitEffect.Definition : null;
-            bool remove = removeOnExit, independent = ownership == SkillTaskOwnership.Scene;
-            if (!independent) builder.RequireAbilityTask(Id);
-            var periodic = independent ? builder.BuildDetached(onPeriod) : builder.Build(onPeriod); var id = Id;
+            bool remove = removeOnExit; var owner = ownership;
+            if (owner == SkillTaskOwnership.Ability) builder.RequireAbilityTask(Id);
+            var periodic = BuildBranch(builder, nameof(onPeriod), onPeriod); var id = Id;
             return Define("创建持续区域", context =>
             {
                 var center = query.Center(context);
                 var instance = visual != null ? SkillSpawn.Create(context, visual, center, Quaternion.LookRotation(context.Forward)) : null;
                 if (!context.CanContinue) return;
                 context.Start(new SkillAreaTask(context, id, instance, center, query, life.Resolve(context.Values),
-                    interval.Resolve(context.Values), enter, exit, remove, periodic), independent);
+                    interval.Resolve(context.Values), enter, exit, remove, periodic), owner);
             });
         }
     }

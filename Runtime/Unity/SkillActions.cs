@@ -6,6 +6,14 @@ using UnityEngine;
 namespace ZFramework.GAS.Unity
 {
     [AttributeUsage(AttributeTargets.Field)]
+    public sealed class FlowFieldAttribute : Attribute
+    {
+        public string Label { get; }
+        public string Child { get; }
+        public FlowFieldAttribute(string label, string child = null) { Label = label; Child = child; }
+    }
+
+    [AttributeUsage(AttributeTargets.Field)]
     public sealed class FlowBranchAttribute : Attribute
     {
         public string Label { get; }
@@ -19,6 +27,10 @@ namespace ZFramework.GAS.Unity
         public string Id => id;
         public string displayName;
         public abstract SkillActionDefinition Build(SkillActionBuildContext builder);
+        // A normal branch inherits its caller's lifetime. A detached one cannot start ability-owned tasks.
+        public virtual bool IsDetachedBranch(string field) => false;
+        protected SkillActionDefinition[] BuildBranch(SkillActionBuildContext builder, string field, SkillAction[] children)
+            => IsDetachedBranch(field) ? builder.BuildDetached(children) : builder.Build(children);
         protected SkillActionDefinition Define(string label, Action<SkillExecutionContext> execute) => new DelegateSkillAction(id,
                 string.IsNullOrEmpty(displayName) ? label : displayName, execute);
     }
@@ -145,12 +157,13 @@ namespace ZFramework.GAS.Unity
     }
 
     [Serializable]
+    [System.ComponentModel.DisplayName("施加效果")]
     public sealed class ApplyEffectAction : SkillAction
     {
         private static void Apply(SkillExecutionContext context, GameplayEffectDefinition effect, AbilitySystemComponent target)
         { if (target == null) throw new InvalidOperationException("效果目标已失效。"); target.Effects.Apply(context.Effect(effect)); }
-        public GameplayEffectAsset effect;
-        public TargetQuery targets = new TargetQuery();
+        [FlowField("效果")] public GameplayEffectAsset effect;
+        [FlowField("选敌", nameof(TargetQuery.kind))] public TargetQuery targets = new TargetQuery();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             if (effect == null) throw new InvalidOperationException("缺少效果资产。");
@@ -174,15 +187,16 @@ namespace ZFramework.GAS.Unity
 
     public enum SkillComparison { GreaterOrEqual, Greater, LessOrEqual, Less, Equal, NotEqual }
     [Serializable]
+    [System.ComponentModel.DisplayName("条件分支")]
     public sealed class ConditionalAction : SkillAction
     {
         public static bool Compare(SkillComparison op,float a,float b) => op switch { SkillComparison.Greater => a > b, SkillComparison.GreaterOrEqual => a >= b,
                     SkillComparison.Less => a < b, SkillComparison.LessOrEqual => a <= b,
                     SkillComparison.Equal => a == b, _ => a != b };
-        public bool requireTarget;
+        [FlowField("需要目标")] public bool requireTarget;
         [SkillParameterReference] public string booleanParameterId;
         public bool testTarget;
-        public GameplayTag[] requiredTags = Array.Empty<GameplayTag>();
+        [FlowField("必需标签")] public GameplayTag[] requiredTags = Array.Empty<GameplayTag>();
         public GameplayTag[] blockedTags = Array.Empty<GameplayTag>();
         public bool compareAttribute;
         [AttributeIdField] public int attribute;
@@ -190,12 +204,13 @@ namespace ZFramework.GAS.Unity
         public SkillNumber value = new SkillNumber(0);
         [SerializeReference, FlowBranch("满足")] public SkillAction[] whenTrue = Array.Empty<SkillAction>();
         [SerializeReference, FlowBranch("不满足")] public SkillAction[] whenFalse = Array.Empty<SkillAction>();
+        public GameplayTagRequirements BuildTagRequirements() =>
+            GameplayTagRequirements.Create(TagAssetUtility.ToSet(blockedTags).AsSpan(), TagAssetUtility.ToSet(requiredTags).AsSpan());
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             builder.RequireKind(booleanParameterId, SkillParameterKind.Bool);
             if (compareAttribute) builder.Number(value);
-            var required = TagAssetUtility.ToSet(requiredTags); var blocked = TagAssetUtility.ToSet(blockedTags);
-            var requirements = GameplayTagRequirements.Create(blocked.AsSpan(), required.AsSpan());
+            var requirements = BuildTagRequirements();
             bool needTarget = requireTarget, target = testTarget, compare = compareAttribute;
             var id = new AttributeId(attribute); var op = comparison; var number = value;
             string booleanId = booleanParameterId;
@@ -216,9 +231,10 @@ namespace ZFramework.GAS.Unity
     }
 
     [Serializable]
+    [System.ComponentModel.DisplayName("发送玩法事件")]
     public sealed class SendGameplayEventAction : SkillAction
     {
-        public GameplayTag tag;
+        [FlowField("事件")] public GameplayTag tag;
         public TargetQuery targets = new TargetQuery { kind = TargetQueryKind.Self };
         public bool includePosition;
         public SkillSpawnPosition position;
@@ -258,9 +274,10 @@ namespace ZFramework.GAS.Unity
         public string callerParameterId;
     }
     [Serializable]
+    [System.ComponentModel.DisplayName("调用共享模块")]
     public sealed class CallModuleAction : ParameterScopeAction
     {
-        public SkillActionModuleAsset module;
+        [FlowField("模块")] public SkillActionModuleAsset module;
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             SkillActionDefinition[] actions;
@@ -272,6 +289,7 @@ namespace ZFramework.GAS.Unity
         }
     }
     [Serializable]
+    [System.ComponentModel.DisplayName("内联参数")]
     public sealed class InlineParameterScopeAction : ParameterScopeAction
     {
         public SkillParameter[] parameters=Array.Empty<SkillParameter>();
@@ -282,6 +300,15 @@ namespace ZFramework.GAS.Unity
     public abstract class ParameterScopeAction : SkillAction
     {
         public ModuleParameterBinding[] bindings = Array.Empty<ModuleParameterBinding>();
+        public static SkillParameterValues ResolveParameters(EffectEvaluationContext caller, SkillParameter[] defaults, ModuleParameterBinding[] bindings)
+        {
+            if (defaults == null || defaults.Length == 0) return SkillParameterValues.Empty;
+            var values = new Dictionary<string, SkillParameterValue>(defaults.Length);
+            SkillParameterSetAsset.AddTo(values, defaults, caller.Level);
+            foreach (var binding in bindings)
+                values[binding.moduleParameterId] = caller.Parameters.Get(binding.callerParameterId);
+            return new SkillParameterValues(values);
+        }
         protected SkillActionDefinition Bind(SkillActionBuildContext builder, SkillActionDefinition[] actions, SkillParameter[] parameters)
         {
             foreach (var binding in bindings) builder.CheckBinding(binding, parameters);
@@ -293,7 +320,7 @@ namespace ZFramework.GAS.Unity
     {
         internal readonly SkillActionDefinition[] Actions;
         private readonly ModuleParameterBinding[] _bindings;
-        private readonly (string id, SkillParameterKind kind, float value, float[] levels)[] _defaults;
+        private readonly SkillParameter[] _defaults;
 #if UNITY_EDITOR
         internal readonly bool IsExternalCall;
 #endif
@@ -305,26 +332,10 @@ namespace ZFramework.GAS.Unity
             IsExternalCall = call is CallModuleAction;
 #endif
             _bindings = (ModuleParameterBinding[])call.bindings.Clone();
-            _defaults = new (string, SkillParameterKind, float, float[])[parameters.Length];
-            for (int i = 0; i < parameters.Length; ++i)
-            {
-                var p = parameters[i];
-                _defaults[i] = (p.Id, p.kind, p.defaultValue, p.levels == null ? Array.Empty<float>() : (float[])p.levels.Clone());
-            }
+            _defaults = Array.ConvertAll(parameters, p => p.Snapshot());
         }
         internal SkillParameterValues Resolve(EffectEvaluationContext caller)
-        {
-            if (_defaults.Length == 0) return SkillParameterValues.Empty;
-            var values = new Dictionary<string, SkillParameterValue>(_defaults.Length);
-            foreach (var p in _defaults)
-            {
-                float v = p.levels.Length == 0 ? p.value : p.levels[Mathf.Clamp(caller.Level - 1, 0, p.levels.Length - 1)];
-                values.Add(p.id, SkillParameterValue.FromNumber(p.kind, v));
-            }
-            foreach (var binding in _bindings)
-                values[binding.moduleParameterId] = caller.Parameters.Get(binding.callerParameterId);
-            return new SkillParameterValues(values);
-        }
+            => ParameterScopeAction.ResolveParameters(caller, _defaults, _bindings);
         public override void Execute(SkillExecutionContext context) => context.ExecuteModule(this);
     }
 }

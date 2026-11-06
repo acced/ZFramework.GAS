@@ -27,11 +27,48 @@ namespace ZFramework.GAS.Unity
         }
     }
 
-    /// <summary>Host-owned scene services. The library does not create visual objects or own their pool.</summary>
-    public sealed class TimelineTaskContext
+    /// <summary>Bind once per unit. Each cast copies these service references into its own context.</summary>
+    public class SkillUnitServices
     {
         public Transform Origin;
         public Transform LaunchPoint;
+        public TargetSearcher Searcher;
+        public ITargetFilter TargetFilter;
+        public SkillTargetRelationFilter TargetRelations;
+        public ISkillObjectService Objects;
+        public ISkillTargetSelection TargetSelection;
+        public ISkillAudioService Audio;
+        public ISkillCameraService Camera;
+        public ISkillTimeService Time;
+        public ISkillRigService Rig;
+        public GameplayTaskHost SceneTasks;
+        public UnityEngine.SceneManagement.Scene Scene;
+
+        internal void CopyServicesFrom(SkillUnitServices source)
+        {
+            Origin = source.Origin; LaunchPoint = source.LaunchPoint; Searcher = source.Searcher;
+            TargetFilter = source.TargetFilter; TargetRelations = source.TargetRelations; Objects = source.Objects;
+            TargetSelection = source.TargetSelection; Audio = source.Audio; Camera = source.Camera;
+            Time = source.Time; Rig = source.Rig; SceneTasks = source.SceneTasks; Scene = source.Scene;
+        }
+    }
+
+    /// <summary>Per-cast input. An explicit point, including world zero, takes precedence over the aim transform.</summary>
+    public readonly struct SkillCastTarget
+    {
+        public readonly AbilitySystemComponent Unit;
+        public readonly Transform Aim;
+        public readonly Vector3? Point;
+        public SkillCastTarget(AbilitySystemComponent unit, Transform aim = null, Vector3? point = null)
+        { Unit = unit; Aim = aim; Point = point; }
+        public static SkillCastTarget Ground(Vector3 point) => new(null, point: point);
+        internal static SkillCastTarget From(AbilitySystemComponent unit, TimelineTaskContext context)
+            => new(unit, context?.Target, context?.HasTargetPosition == true ? context.TargetPosition : (Vector3?)null);
+    }
+
+    /// <summary>Services and aim for a single execution branch; also accepted by the original casting API.</summary>
+    public sealed class TimelineTaskContext : SkillUnitServices
+    {
         public Transform Target;
         private Vector3 _targetPosition;
         public bool HasTargetPosition { get; private set; }
@@ -43,27 +80,16 @@ namespace ZFramework.GAS.Unity
                 throw new InvalidOperationException("缺少有效的目标点（需要显式设置 TargetPosition）。");
             return _targetPosition;
         }
-        public TargetSearcher Searcher;
-        public ITargetFilter TargetFilter;
         internal bool FilterHasSnapshot;
-        public ISkillObjectService Objects;
-        public ISkillTargetSelection TargetSelection;
-        public ISkillAudioService Audio;
-        public ISkillCameraService Camera;
-        public ISkillTimeService Time;
-        public ISkillRigService Rig;
-        public GameplayTaskHost SceneTasks;
-        public UnityEngine.SceneManagement.Scene Scene;
         public SkillExecutionContext Execution { get; internal set; }
         public TimelineTaskContext Snapshot() => (TimelineTaskContext)MemberwiseClone();
         internal void RebindTarget(Transform target)
         { Target = target; if (target != null) TargetPosition = target.position; }
         internal void CopyFrom(TimelineTaskContext source)
         {
-            Origin = source.Origin; LaunchPoint=source.LaunchPoint; Target = source.Target; _targetPosition = source._targetPosition; HasTargetPosition = source.HasTargetPosition;
-            Searcher = source.Searcher;
-            TargetFilter = source.TargetFilter; FilterHasSnapshot = source.FilterHasSnapshot; Objects = source.Objects;
-            TargetSelection = source.TargetSelection; Audio = source.Audio; Camera=source.Camera; Time=source.Time; Rig=source.Rig; SceneTasks = source.SceneTasks; Scene = source.Scene;
+            CopyServicesFrom(source);
+            Target = source.Target; _targetPosition = source._targetPosition;
+            HasTargetPosition = source.HasTargetPosition; FilterHasSnapshot = source.FilterHasSnapshot;
         }
     }
 

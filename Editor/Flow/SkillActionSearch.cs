@@ -10,14 +10,8 @@ namespace ZFramework.GAS.Editor
     internal sealed class SkillActionSearch : ScriptableObject, ISearchWindowProvider
     {
         private Action<Type> _choose;
-        private static readonly Type[] Types=TypeCache.GetTypesDerivedFrom<SkillAction>().Where(t=>!t.IsAbstract && t.GetConstructor(Type.EmptyTypes)!=null).OrderBy(t=>t.Name).ToArray();
-        internal static string MenuName(Type t){
-            if(t==typeof(TargetSequenceAction))return "有限目标序列 · "+t.Name;
-            if(t==typeof(SelectTargetsAction))return "选择目标 · "+t.Name;
-            if(t==typeof(NextTargetStepAction))return "继续到所选目标 · "+t.Name;
-            if(t==typeof(ShowTargetLinkAction))return "显示目标连线 · "+t.Name;
-            return t.Name;
-        }
+        internal static readonly Type[] Types=TypeCache.GetTypesDerivedFrom<SkillAction>().Where(t=>!t.IsAbstract && t.GetConstructor(Type.EmptyTypes)!=null).OrderBy(t=>t.Name).ToArray();
+        internal static string MenuName(Type t) => SkillActionFields.For(t).Title + " · " + t.Name;
         private static string Key(Type t)=>t.AssemblyQualifiedName;
         public static void Open(Vector2 position,Action<Type> select)
         {var p=CreateInstance<SkillActionSearch>();p.hideFlags=HideFlags.HideAndDontSave;p._choose=select;SearchWindow.Open(new SearchWindowContext(position),p);}

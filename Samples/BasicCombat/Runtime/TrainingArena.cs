@@ -36,14 +36,10 @@ namespace ZFramework.GAS.Samples.BasicCombat
         private float[] _resetAt;
         private bool _fan=true,_qHeld;
         public bool FanMode=>_fan;
-        private sealed class EnemyFilter : ITargetFilterSnapshot{
-            private readonly HashSet<object> _enemies=new();
-            public void Include(CombatUnit u)=>_enemies.Add(u.AbilitySystem.SourceIdentity);
-            public ITargetFilter Capture(AbilitySystemComponent source)=>this;
-            public bool Allows(AbilitySystemComponent source,AbilitySystemComponent target)=>
-                _enemies.Contains(target.SourceIdentity) && target.Attributes.GetCurrent(CombatUnit.Health)>0;
-        }
-        private TimelineTaskContext _boltContext;
+        private readonly Dictionary<AbilitySourceIdentity, int> _teams = new();
+        private bool MatchesTeam(AbilitySourceIdentity source, AbilitySystemComponent target, TargetRelation relation)
+            => _teams.TryGetValue(source, out int from) && _teams.TryGetValue(target.SourceIdentity, out int to)
+                && target.Attributes.GetCurrent(CombatUnit.Health) > 0 && (relation == TargetRelation.Ally ? from == to : from != to);
         private SkillAnimator _equipped;
         [Tooltip("体力每秒回复")]
         [SerializeField] private float staminaRegen = 16;
@@ -52,8 +48,6 @@ namespace ZFramework.GAS.Samples.BasicCombat
         [SerializeField] private Mesh burstMesh;
 
         private GameplayCueRouter _router;
-        private TargetSearcher _searcher;
-        private TimelineTaskContext _context;
         private ArenaPresentation _presentation;
         private Animator _dummyAnimator;
         private readonly List<Popup> _popups = new();
@@ -74,19 +68,21 @@ namespace ZFramework.GAS.Samples.BasicCombat
         {
             if (!TagsRegistered()) { enabled = false; return; }
             _router = new GameplayCueRouter();
-            hero.Initialize(_router);
-            dummy.Initialize(_router);
-            _dummyAnimator = dummy.GetComponentInChildren<Animator>();
-            _resetAt=new float[secondary.Length];var enemies=new EnemyFilter();enemies.Include(dummy);
-            for(int i=0;i<secondary.Length;i++){var u=secondary[i];u.Initialize(_router);u.HealthChanged+=OnHealthChanged;enemies.Include(u);_resetAt[i]=-1;}
-            _searcher = new TargetSearcher(16);
-            _presentation=gameObject.AddComponent<ArenaPresentation>();
-            _context = new TimelineTaskContext
+            _presentation = gameObject.AddComponent<ArenaPresentation>();
+            var searcher = new TargetSearcher(16);
+            void Bind(CombatUnit unit, int team, Transform launch = null)
             {
-                Camera=_presentation, Time=_presentation, Rig=_presentation,
-                Origin = hero.transform, LaunchPoint=castPoint, Target = aimPoint, Searcher = _searcher, Scene = gameObject.scene,
-            };
-            _boltContext=_context.Snapshot();_boltContext.TargetFilter=enemies;
+                unit.Initialize(_router, new SkillUnitServices {
+                    Origin = unit.transform, LaunchPoint = launch, TargetRelations = MatchesTeam, Searcher = searcher,
+                    Camera = _presentation, Time = _presentation, Rig = _presentation, Scene = gameObject.scene
+                });
+                _teams.Add(unit.AbilitySystem.SourceIdentity, team);
+            }
+            Bind(hero, 0, castPoint);
+            Bind(dummy, 1);
+            _dummyAnimator = dummy.GetComponentInChildren<Animator>();
+            _resetAt = new float[secondary.Length];
+            for(int i=0;i<secondary.Length;i++){var u=secondary[i];Bind(u,1);u.HealthChanged+=OnHealthChanged;_resetAt[i]=-1;}
             if (abilitySet != null) abilitySet.GrantTo(hero.SkillRunner);
             else { foreach (var skill in skills) hero.SkillRunner.Grant(skill.asset);hero.SkillRunner.Grant(bounceSkill); }
 
@@ -185,11 +181,9 @@ namespace ZFramework.GAS.Samples.BasicCombat
         public bool TryCast(int index)
         {
             if (index < 0 || index >= skills.Length) return false;
-            var skill = skills[index];
-            bool bolt=skill.asset==boltSkill;
-            var asset=Selected(skill);
+            var asset=Selected(skills[index]);
             AbilityActivationResult result;
-            try { result = hero.SkillRunner.TryCast(asset, dummy.AbilitySystem, bolt?_boltContext:_context); }
+            try { result = hero.SkillRunner.TryCast(asset, new SkillCastTarget(dummy.AbilitySystem, aimPoint)); }
             catch (Exception error) { Debug.LogException(error, this); hero.SkillRunner.Cancel(asset); return false; }
             if (result != AbilityActivationResult.Activated)
             {

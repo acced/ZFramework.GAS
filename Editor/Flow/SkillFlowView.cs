@@ -52,9 +52,9 @@ namespace ZFramework.GAS.Editor
         private string _marker, _layoutKey, _rootPath, _selected;
         private GameplayAbilityAsset _root;
         private readonly Dictionary<string, Node> _nodes = new();
+        private readonly List<(string ownerPath,string field,bool detached)> _branchModes = new();
         private Node _entryNode;
         private readonly Dictionary<string, float> _liveStrength = new();
-        private static readonly Type[] Types = TypeCache.GetTypesDerivedFrom<SkillAction>().Where(t=>!t.IsAbstract && t.GetConstructor(Type.EmptyTypes)!=null).OrderBy(t=>t.Name).ToArray();
         public SkillFlowView(SkillDocument doc, ValidationService validation)
         {
             _doc=doc; _validation=validation; style.flexGrow=1;
@@ -129,8 +129,15 @@ namespace ZFramework.GAS.Editor
                 RefreshEntries(out string entry);
                 if(_entryNode?.parent!=null){_entryNode.title=entry;_crumb.text=Breadcrumb(entry);}
             }
-            if(change.Asset==_owner && change.Paths.Any(p=>p.EndsWith(".displayName") || p.EndsWith(".ownership") || p.Contains(".requiredTags")))
-                Rebuild();
+            if (change.Asset != _owner) return;
+            if (change.Paths.Any(p=>p.EndsWith(".displayName"))) { Rebuild(); return; }
+            foreach (string path in change.Paths)
+            foreach (var branch in _branchModes)
+            {
+                if (!path.StartsWith(branch.ownerPath,StringComparison.Ordinal)) continue;
+                var action = _doc.Serialized(_owner).FindProperty(branch.ownerPath)?.managedReferenceValue as SkillAction;
+                if (action != null && action.IsDetachedBranch(branch.field) != branch.detached) { Rebuild(); return; }
+            }
         }
         private void RefreshEntries(out string entry)
         {
@@ -161,7 +168,7 @@ namespace ZFramework.GAS.Editor
         {
             _graph.ClearSelection();
             foreach(var e in _graph.graphElements.ToList()) _graph.RemoveElement(e);
-            _nodes.Clear(); _entries.menu.MenuItems().Clear(); _rootPath=null; _crumb.text="";
+            _nodes.Clear(); _branchModes.Clear(); _entries.menu.MenuItems().Clear(); _rootPath=null; _crumb.text="";
             if (_doc.Root==null) return;
             RefreshEntries(out string entry);
             var anim=_doc.Root.Animation;
@@ -169,10 +176,10 @@ namespace ZFramework.GAS.Editor
             _crumb.text=Breadcrumb(entry);
             var root=_entryNode=new Node{title=entry,userData="$entry"}; AddNode(root,"$entry",0,0);
             int lane=0;
-            void Walk(SerializedProperty list,Node previous, string branch,int col,int row, int depth)
+            void Walk(SerializedProperty list,Node previous, string branch,int col,int row, int depth,bool detached=false)
             {
                 if (depth>8 || list==null) return;
-                Port output=Output(previous,branch,list.propertyPath,0);
+                Port output=Output(previous,detached ? branch+" · 独立回调" : branch,list.propertyPath,0);
                 for(int i=0;i<list.arraySize;i++)
                 {
                     var p=list.GetArrayElementAtIndex(i); var action=p.managedReferenceValue as SkillAction;
@@ -199,18 +206,18 @@ namespace ZFramework.GAS.Editor
                     }));
                     string id=action?.Id ?? path; AddNode(node,id,col,row); if(action!=null) _nodes[id]=node;
                     var edge=output.ConnectTo(input);_graph.AddElement(edge);
-                    if(branch.EndsWith(" · 独立回调",StringComparison.Ordinal) && i==0)MarkDetached(edge);
-                    var branchFields=action==null?Array.Empty<FieldInfo>():SkillActionClipboard.Branches(action.GetType());
+                    if(detached && i==0)MarkDetached(edge);
+                    var fields = action == null ? null : SkillActionFields.For(action.GetType());
                     bool useCurrentRow=i==list.arraySize-1;
-                    foreach(var field in branchFields)
+                    if (fields != null) foreach(var field in fields.Branches)
                     {
                         var children=p.FindPropertyRelative(field.Name); if(children==null) continue;
                         string label=field.GetCustomAttribute<FlowBranchAttribute>()?.Label??field.Name;
-                        bool detached=action is TargetSequenceAction && field.Name=="next" || field.Name=="onCancel" || action is LaunchProjectileAction projectile && projectile.ownership==SkillTaskOwnership.Scene && field.Name=="onHit" ||
-                            action is CreateAreaAction area && area.ownership==SkillTaskOwnership.Scene && field.Name=="onPeriod";
-                        Walk(children,node,label+(detached?" · 独立回调":""),col+1,useCurrentRow?row:++lane,depth+1);useCurrentRow=false;
+                        bool childDetached=action.IsDetachedBranch(field.Name);
+                        _branchModes.Add((path,field.Name,childDetached));
+                        Walk(children,node,label,col+1,useCurrentRow?row:++lane,depth+1,childDetached);useCurrentRow=false;
                     }
-                    AddInlineFields(node,p,action);
+                    if (fields != null) AddInlineFields(node,p,fields);
                     if(action!=null)
                     {
                         var mark=new Button(()=>{SkillActionDebugger.Toggle(id);Rebuild();}){text=SkillActionDebugger.Has(id)?"●":"○",tooltip="切换动作断点"};
@@ -226,14 +233,8 @@ namespace ZFramework.GAS.Editor
             _doc.Layout.PruneFlow(_layoutKey,_nodes.Keys);
         }
         private sealed class FlowNode:Node { public string Path; }
-        internal static string ActionTitle(SkillAction action)=>!string.IsNullOrEmpty(action?.displayName)?action.displayName:action switch
-        {
-            InlineParameterScopeAction=>"内联参数", ConditionalAction=>"条件分支", ApplyEffectAction=>"施加效果", CallModuleAction=>"调用共享模块",
-            TargetSequenceAction=>"有限目标序列", SelectTargetsAction=>"选择目标", NextTargetStepAction=>"继续到所选目标", ShowTargetLinkAction=>"显示目标连线",
-            LaunchProjectileAction=>"发射投射物", CreateAreaAction=>"创建区域", SpawnPrefabAction=>"生成预制体",
-            WaitSkillAction=>"等待", SendGameplayEventAction=>"发送玩法事件", null=>"未配置动作",
-            _=>ObjectNames.NicifyVariableName(action.GetType().Name)
-        };
+        internal static string ActionTitle(SkillAction action) => action == null ? "未配置动作" :
+            string.IsNullOrEmpty(action.displayName) ? SkillActionFields.For(action.GetType()).Title : action.displayName;
         private static void MarkDetached(Edge edge)
         {
             edge.userData="detached";edge.tooltip="独立回调：不允许等待或技能归属任务";
@@ -249,32 +250,17 @@ namespace ZFramework.GAS.Editor
                 for(int i=0;i<count;i+=2){p.MoveTo(At((float)i/count));p.LineTo(At((i+1f)/count));}p.Stroke();
             };
         }
-        private void AddInlineFields(Node node,SerializedProperty item,SkillAction action)
+        private void AddInlineFields(Node node,SerializedProperty item,SkillActionFields fields)
         {
             var owner=_owner;
-            void Field(string path,string label)
+            foreach (var (path, label) in fields.Inline)
             {
-                var p=item.FindPropertyRelative(path); if(p==null)return;
+                var p=item.FindPropertyRelative(path); if(p==null)continue;
                 var f=new PropertyField(p,label);f.AddToClassList("flow-field");node.extensionContainer.Add(f);f.BindProperty(p);
                 f.RegisterCallback<SerializedPropertyChangeEvent>(e=>{
                     string changed=e.changedProperty.propertyPath;
                     schedule.Execute(()=>{if(owner!=null)_doc.NotifySerializedChange(owner,changed);});
                 });
-            }
-            switch(action)
-            {
-                case ConditionalAction condition:
-                    Field("requireTarget","需要目标");
-                    if(condition.requiredTags?.Length>0)node.extensionContainer.Add(new Label("需要："+string.Join("、",condition.requiredTags.Select(t=>t.m_Name))));
-                    break;
-                case ApplyEffectAction: Field("effect","效果");Field("targets.kind","选敌");break;
-                case TargetSequenceAction: Field("maxTargets","总目标数（含首击）");Field("retention","每跳保留");break;
-                case SelectTargetsAction: Field("targets.origin","搜索原点");Field("count","最多选择");break;
-                case ShowTargetLinkAction: Field("prefab","连线特效");break;
-                case CallModuleAction: Field("module","模块");break;
-                case WaitSkillAction: Field("kind","等待");break;
-                case SendGameplayEventAction: Field("tag","事件");break;
-                case SpawnPrefabAction: case LaunchProjectileAction:case CreateAreaAction:Field("prefab","预制体");Field("ownership","归属");break;
             }
         }
         private void AddNode(Node node,string id,int col,int row)
@@ -288,7 +274,7 @@ namespace ZFramework.GAS.Editor
         {
             var port=new FlowPort(Direction.Output,this);
             port.userData=(list,index); port.portName=name; node.outputContainer.Add(port);
-            port.AddManipulator(new ContextualMenuManipulator(e=> {foreach(var type in Types) e.menu.AppendAction("添加/"+SkillActionSearch.MenuName(type),_=>Insert(list,type,index));}));
+            port.AddManipulator(new ContextualMenuManipulator(e=> {foreach(var type in SkillActionSearch.Types) e.menu.AppendAction("添加/"+SkillActionSearch.MenuName(type),_=>Insert(list,type,index));}));
             return port;
         }
         private void Insert(string path, Type type,int index=-1) => Edit("添加动作",so=>

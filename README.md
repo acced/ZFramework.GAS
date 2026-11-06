@@ -11,7 +11,7 @@ Unity 的 Gameplay Ability System 实现。属性、标签、效果、能力、C
 
 动画支持曲线混合、Section 跳入过渡和片段替换。Playables 后端支持独立变速、按技能遮罩和按单位降频；玩法标记仍由 ASC 逐步推进。多目标预演和各后端的支持范围见 [编辑器指南](Docs~/EditorGuide.md)，真实窗口截图、规模数据和平台验证结果见 [五阶段改进验证](Docs~/EditorImprovementVerification.md)。
 
-接入、生命周期、参数覆盖规则与配置示例见 [可配置技能工作流](Docs~/ConfigurableSkills.md)，本轮测试及限制见 [实施验证记录](Docs~/SkillImplementationVerification.md)。不提供旧版本迁移功能；示例由 BasicCombat 生成器统一更新。
+接入、生命周期、参数覆盖规则与配置示例见 [可配置技能工作流](Docs~/ConfigurableSkills.md)，从现有项目制作或导入资产见[项目接入](Docs~/ConfigurableSkills.md#从现有项目接入)。测试及限制见 [实施验证记录](Docs~/SkillImplementationVerification.md)。BasicCombat 示例由其生成器更新。
 
 ## 程序集划分
 
@@ -287,9 +287,10 @@ public interface IAnimationDriver
 ### 通过技能资产施放
 
 ```csharp
-var runner = new SkillRunner(asc, () => character.GetComponent<SkillAnimator>().Driver);
+var runner = new SkillRunner(asc, () => character.GetComponent<SkillAnimator>().Driver,
+    new SkillUnitServices { Origin = character.transform, TargetRelations = MatchesTeam });
 runner.Grant(skill, level: 3); // 或 abilitySet.GrantTo(runner)
-var result = runner.TryCast(skill, targetAsc, services);
+var result = runner.TryCast(skill, new SkillCastTarget(targetAsc, aimPoint));
 ```
 
 构建定义和编辑器校验负责配置正确性。运行时只判断实际玩法门槛（标签、冷却、资源），不再遍历动作预检。配置或项目回调抛错时，在宿主入口记录原始异常并结束能力；不聚合、重试或退款。调试事件是普通 C# event，订阅者不能抛异常。
@@ -314,7 +315,7 @@ var result = runner.TryCast(skill, targetAsc, services);
 
 | 操作 | 行为 |
 |---|---|
-| 新建技能 | 近战、投射物、Buff、引导、召唤骨架五种模板 |
+| 新建技能 | 近战、投射物、Buff、持续伤害（打断后继续）、引导（随施放取消）、召唤骨架 |
 | Space／右键／端口拖到空白 | 创建内嵌资产或引用项目资产，并连接类型兼容的端口 |
 | 双击节点 | 在 Project 中定位来源资产 |
 | 删除连线 | 只清除该引用 |
@@ -396,7 +397,7 @@ var result = runner.TryCast(skill, targetAsc, services);
 | 圣域引导 | 周期治疗、引导标签窗口阻断其他技能、法阵 Cue |
 | 召唤 | 时间轴动作生成守护灵与持续区域，按配置寿命独立存活 |
 
-训练场场景 `BasicCombat.unity` 中的 `TrainingArena` 演示宿主接线：创建 Cue 路由与 ASC、通过 `hero.SkillRunner.TryCast(skill.asset, target, context)` 按资产施放、固定步长推进，以及为投射物提供场景服务。`CombatUnit` 初始化时调用 `CueVfxPlayer.Bind(asc)`，随后时间轴特效由共享配置驱动。训练场不再创建动画任务、持有 Spec 或逐标签管理时间轴特效。
+训练场场景 `BasicCombat.unity` 中的 `TrainingArena` 在单位初始化时绑定场景服务和阵营规则；输入只选择技能资产和目标，ASC 由训练场按固定步长推进。斩击和能量弹筛敌方，圣域治疗友方，筛选条件在技能资产中。`CombatUnit` 初始化时调用 `CueVfxPlayer.Bind(asc)`，时间轴特效由共享配置驱动。
 
 菜单 `Tools → ZFramework GAS → 创建 BasicCombat 示例` 同时生成独立特效、共享映射库并完成角色接线，全部资源保存在 `Assets/GAS Samples/BasicCombat` 内。战吼技能的 `Cue.Ground.Sigil` 在 0.2～0.9 秒显示普通粒子法阵，固定在地面并在结束后保留尾迹。映射位于该目录的 `CueVfxLibrary.asset`，新增特效的步骤见 [BasicCombat 说明](Samples/BasicCombat/README.md)。
 

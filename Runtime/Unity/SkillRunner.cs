@@ -9,6 +9,7 @@ namespace ZFramework.GAS.Unity
     {
         private readonly AbilitySystemComponent _owner;
         private readonly Func<IAnimationDriver> _getDriver;
+        private readonly SkillUnitServices _services;
         private readonly Dictionary<GameplayAbilityAsset, Entry> _skills = new();
         private readonly object _directGrant = new();
         private sealed class GrantSettings
@@ -39,7 +40,9 @@ namespace ZFramework.GAS.Unity
         public event Action<GameplayAbilityAsset, AnimationMarker> MarkerReached;
         public AbilityActivationCheck LastCastCheck { get; private set; }
         public SkillRunner(AbilitySystemComponent owner, Func<IAnimationDriver> getDriver)
-        { _owner=owner;_getDriver=getDriver; }
+            : this(owner, getDriver, null) { }
+        public SkillRunner(AbilitySystemComponent owner, Func<IAnimationDriver> getDriver, SkillUnitServices services)
+        { _owner = owner; _getDriver = getDriver; _services = services; }
 
         public void Grant(GameplayAbilityAsset asset, int level=1, SkillParameterOverride[] overrides=null)
             => GrantFrom(_directGrant,asset,level,overrides);
@@ -105,6 +108,14 @@ namespace ZFramework.GAS.Unity
         /// <summary>Grant explicitly before casting. Override arrays are immutable cache keys; replace the array to change values.</summary>
         public AbilityActivationResult TryCast(GameplayAbilityAsset asset, AbilitySystemComponent target=null,
             TimelineTaskContext taskContext=null,float durationOverride=0,SkillParameterOverride[] parameterOverrides=null)
+            => Cast(asset, SkillCastTarget.From(target, taskContext), taskContext ?? _services, durationOverride, parameterOverrides);
+
+        public AbilityActivationResult TryCast(GameplayAbilityAsset asset, SkillCastTarget target,
+            SkillParameterOverride[] parameterOverrides=null, float durationOverride=0)
+            => Cast(asset, target, _services, durationOverride, parameterOverrides);
+
+        private AbilityActivationResult Cast(GameplayAbilityAsset asset, SkillCastTarget target, SkillUnitServices services,
+            float durationOverride, SkillParameterOverride[] parameterOverrides)
         {
             var entry=Find(asset) ?? throw new InvalidOperationException("技能未授予: "+asset.name);
             if(entry.Spec?.IsActive==true){LastCastCheck=_owner.CheckActivation(entry.Spec);return LastCastCheck.Result;}
@@ -115,11 +126,11 @@ namespace ZFramework.GAS.Unity
             if(result!=AbilityActivationResult.Activated)return result;
             var execution=prepared.Context;
             if(execution==null || !execution.Reusable) {
-                prepared.Context=execution=new SkillExecutionContext(asset,spec,target,prepared.Values,taskContext);
+                prepared.Context=execution=new SkillExecutionContext(asset,spec,target,prepared.Values,services);
                 prepared.Lifetime=new ExecutionLifetimeTask(execution);prepared.Timeline=null;
             }
-            else execution.Reset(target,taskContext);
-            entry.Execution=execution;execution.BindActivation();execution.Executing=true;
+            else execution.Reset(target,services);
+            entry.Execution=execution;execution.BindActivation();execution.Retain();
             try{
                 _owner.StartTask(spec, prepared.Lifetime);
                 execution.Execute(entry.Actions);
@@ -127,14 +138,14 @@ namespace ZFramework.GAS.Unity
                 if(entry.Animation!=null){
                     var driver=_getDriver();
                     if(prepared.Timeline==null || prepared.Timeline.Definition!=entry.Animation)
-                        prepared.Timeline=new AnimationTask(entry.Animation,driver,target,durationOverride,entry.Marker,null,execution.Services);
-                    else prepared.Timeline.Replay(driver,target,durationOverride,execution.Services);
+                        prepared.Timeline=new AnimationTask(entry.Animation,driver,target.Unit,durationOverride,entry.Marker,null,execution.Services);
+                    else prepared.Timeline.Replay(driver,target.Unit,durationOverride,execution.Services);
                     _owner.StartTask(spec,prepared.Timeline);
                 }
                 prepared.Lifetime.FinishIfIdle();
                 return result;
             }
-            finally{execution.Executing=false;}
+            finally{execution.Release();}
         }
         private sealed class ExecutionLifetimeTask : GameplayAbilityTask, ISkillTaskState
         {

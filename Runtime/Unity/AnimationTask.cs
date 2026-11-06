@@ -149,7 +149,7 @@ namespace ZFramework.GAS.Unity
                 var execution = new SkillExecutionContext(DefinitionSource.Of(Ability.Definition) as GameplayAbilityAsset, Ability, _target, _effectValues, _taskContext);
                 _taskContext = execution.Services;
             }
-            _taskContext?.Execution?.RetainTask();
+            _taskContext?.Execution?.Retain();
             if (_taskContext?.Execution!=null && _driver is ISkillRigService rig) _taskContext.Execution.Services.Rig??=rig;
             for (int i = 0; i < _trackHandlers.Length; i++) _trackHandlers[i] = _definition.RuntimeTracks[i].Create(_taskContext.Execution);
             if (_definition.Sections.Count > 0) JumpToSection(_definition.Sections[0].Id);
@@ -335,12 +335,16 @@ namespace ZFramework.GAS.Unity
 
         protected override void OnEnd(bool cancelled)
         {
-            CloseTimelineState(cancelled);
-            if (_driver is IAdvancedBlendingDriver advanced) advanced.Stop(_definition.BlendOutSpec);
-            else if (_driver is IBlendingAnimationDriver blending) blending.Stop(_definition.BlendOut);
-            else _driver.Stop();
-            _taskContext?.Execution?.ReleaseTask();
-            _onFinished?.Invoke(this);
+            var execution = _taskContext?.Execution;
+            try
+            {
+                CloseTimelineState(cancelled);
+                if (_driver is IAdvancedBlendingDriver advanced) advanced.Stop(_definition.BlendOutSpec);
+                else if (_driver is IBlendingAnimationDriver blending) blending.Stop(_definition.BlendOut);
+                else _driver.Stop();
+                _onFinished?.Invoke(this);
+            }
+            finally { execution?.Release(); }
         }
 
         // Merge boundaries once at construction. Large ticks still observe the correct window state

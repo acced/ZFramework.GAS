@@ -575,6 +575,45 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.Greater(graph.nodes.Select(n => n.GetPosition().x).Distinct().Count(), 1);
         }
         [Test]
+        public void ImportingTimelineTwiceUpdatesOnlyTheNamedElementsAndBuildsTheSavedActions()
+        {
+            var animation = SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(_ability, "Timeline");
+            var hit = Effect();
+            SkillAssetFactory.SetMainAnimation(_ability, animation);
+            SkillTimelineAuthoring.Edit(animation, t => {
+                t.Clip("Swing", 1, 24);
+                t.Marker("impact", .25f, "Old", new ConditionalAction(), new WaitSkillAction());
+                t.Cue("fx", 0, -1, "Test.Cue");
+                t.TagWindow("armor", 0, .5f, "Test.Window");
+            });
+            var previous = animation.Definition;
+            var apply = new ApplyEffectAction { effect = hit };
+            SkillTimelineAuthoring.Edit(animation, t => {
+                t.Marker("impact", 12f/24, "Renamed", apply);
+                t.TagWindow("armor", .1f, .75f, "Test.Other");
+            });
+            // A bad external ID must not partly commit the preceding writes in its batch.
+            Assert.Throws<ArgumentException>(() => SkillTimelineAuthoring.Edit(animation, t => {
+                t.Marker("impact", .9f, "Uncommitted");
+                t.Cue("armor", 0, .5f, "Test.Cue");
+            }));
+            Assert.AreNotSame(previous, animation.Definition);
+            var path = AssetDatabase.GetAssetPath(_ability);
+            AssetDatabase.SaveAssetIfDirty(_ability);
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+            var saved = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(path).Animation;
+            Assert.AreEqual(24, saved.FrameRate);
+            var def = saved.Definition;
+            Assert.AreEqual("Swing", def.ClipName);
+            var marker = def.Markers.Single();
+            Assert.AreEqual("impact", marker.Id); Assert.AreEqual(.5f, marker.Time); Assert.AreEqual("Renamed", marker.Key);
+            Assert.AreEqual(apply.Id, marker.Actions.Single().Id);
+            Assert.AreEqual("Test.Cue", def.CueRegions.Single().CueTag.Name);
+            Assert.AreEqual(.75f, def.TagWindows.Single().End);
+            Assert.AreEqual("Test.Other", def.TagWindows.Single().Tags[0].Name);
+            Assert.IsFalse(TimelineCommands.EnsureIds(saved));
+        }
+        [Test]
         public void AllTemplatesCreateOwnedAnimations()
         {
             int index = 0;
@@ -583,7 +622,33 @@ namespace ZFramework.GAS.Editor.Tests
                 var ability = SkillTemplateRegistry.Create(Folder + "/Template" + index++ + ".asset", template);
                 Assert.IsNotNull(ability.Animation); Assert.IsTrue(AssetDatabase.IsSubAsset(ability.Animation));
             }
-            Assert.AreEqual(5, index);
+            Assert.That(SkillTemplateRegistry.Templates.Select(t => t.GetType()),
+                Is.SupersetOf(new[] { typeof(MeleeTemplate), typeof(ProjectileTemplate), typeof(BuffTemplate),
+                    typeof(ChannelTemplate), typeof(DamageOverTimeTemplate), typeof(SummonTemplate) }));
+        }
+        private sealed class TemplateClock : IAnimationDriver
+        {
+            public float Play(string clip, float duration, bool loop) => 0; // Use the authored timeline duration.
+            public void Advance(float dt) { }
+            public void Stop() { }
+        }
+        [TestCase(true)]
+        [TestCase(false)]
+        public void InterruptingGeneratedTemplateOnlyStopsChanneledDamage(bool channel)
+        {
+            SkillTemplate template = channel ? new ChannelTemplate() : new DamageOverTimeTemplate();
+            template.Build(_ability);
+            var caster = new AbilitySystemComponent(); var target = new AbilitySystemComponent();
+            var hp = target.Attributes.Add(new AttributeId(1), 100);
+            var runner = new SkillRunner(caster, () => new TemplateClock());
+            runner.Grant(_ability);
+            Assert.AreEqual(AbilityActivationResult.Activated, runner.TryCast(_ability, new SkillCastTarget(target)));
+            caster.Tick(_ability.Animation.Definition.Markers.Single().Time + .01f);
+            caster.Tick(.5f); target.Tick(.5f);
+            Assert.AreEqual(95, hp.CurrentValue, "两种模板在打断前都应已结算一次。");
+            Assert.IsTrue(runner.Cancel(_ability));
+            caster.Tick(1); target.Tick(1);
+            Assert.AreEqual(channel ? 95 : 85, hp.CurrentValue);
         }
         [UnityTest]
         public IEnumerator WindowLoadsGraphAndRetainsNodeAcrossFieldEdit()

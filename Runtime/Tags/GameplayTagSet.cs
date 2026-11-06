@@ -63,7 +63,7 @@ namespace ZFramework.GAS
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal bool HasAny(GameplayTagCountContainer container)
+        public bool HasAny(GameplayTagCountContainer container)
         {
             for (int i = 0; i < Count; i++)
                 if (container.HasTag(_tags[i]))

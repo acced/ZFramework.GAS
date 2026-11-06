@@ -11,21 +11,23 @@ namespace ZFramework.GAS.Unity
     public enum SkillWaitKind { Delay, GameplayEvent, Target }
 
     [Serializable]
+    [System.ComponentModel.DisplayName("等待")]
     public sealed class WaitSkillAction : SkillAction
     {
-        public SkillWaitKind kind;
+        [FlowField("等待")] public SkillWaitKind kind;
         public SkillNumber timeout = new SkillNumber(1);
         public GameplayTag eventTag;
         [SerializeReference, FlowBranch("成功")] public SkillAction[] onSuccess = Array.Empty<SkillAction>();
         [SerializeReference, FlowBranch("超时")] public SkillAction[] onTimeout = Array.Empty<SkillAction>();
         [SerializeReference, FlowBranch("取消")] public SkillAction[] onCancel = Array.Empty<SkillAction>();
+        public override bool IsDetachedBranch(string field) => field == nameof(onCancel);
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
             builder.RequireAbilityTask(Id);builder.Number(timeout,float.Epsilon);
             var wait = kind; var duration = timeout; var tag = eventTag.Resolve(); var id = Id;
-            var success = builder.Build(onSuccess); var timedOut = builder.Build(onTimeout); var cancelled = builder.BuildDetached(onCancel);
+            var success = builder.Build(onSuccess); var timedOut = builder.Build(onTimeout); var cancelled = BuildBranch(builder, nameof(onCancel), onCancel);
             if (wait == SkillWaitKind.GameplayEvent && !tag.IsValid) throw new InvalidOperationException("等待事件缺少有效标签。");
-            return Define("等待 · " + wait, context => context.Start(new SkillWaitTask(context, id, wait, duration.Resolve(context.Values), tag, success, timedOut, cancelled), false));
+            return Define("等待 · " + wait, context => context.Start(new SkillWaitTask(context, id, wait, duration.Resolve(context.Values), tag, success, timedOut, cancelled), SkillTaskOwnership.Ability));
         }
     }
     internal sealed class SkillWaitTask : SkillActionTask

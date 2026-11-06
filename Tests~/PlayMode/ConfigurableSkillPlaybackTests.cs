@@ -93,7 +93,13 @@ namespace ZFramework.GAS.Tests
                 Assert.Greater(host.Tasks.Count, 0, "Slow projectile must still be in flight after animation ends");
                 float beforeImpact = target.Get(CombatUnit.Health); yield return new WaitForSeconds(2.5f);
                 Assert.Less(target.Get(CombatUnit.Health), beforeImpact);
-                arena.Cast(3); yield return new WaitForSeconds(.7f);
+                hero.SetBase(CombatUnit.Health, hero.Get(CombatUnit.MaxHealth) - 40);
+                float heroBefore = hero.Get(CombatUnit.Health), enemyBefore = target.Get(CombatUnit.Health);
+                target.transform.position = hero.transform.position + Vector3.forward;
+                Physics.SyncTransforms();
+                arena.Cast(3); yield return new WaitForSeconds(.8f);
+                Assert.Greater(hero.Get(CombatUnit.Health), heroBefore, "圣域应治疗范围内的施法者。");
+                Assert.AreEqual(enemyBefore, target.Get(CombatUnit.Health), "同一范围内受伤的敌人不应被圣域治疗。");
                 Assert.IsTrue(hero.SkillRunner.Cancel(Skill("圣域引导")));
                 Assert.IsFalse(hero.AbilitySystem.OwnedTags.HasTag(GameplayTags.GameplayTagManager.RequestTag(SampleTags.Channeling)));
                 arena.Cast(4); yield return new WaitForSeconds(Skill("召唤").Animation.Duration + .2f);

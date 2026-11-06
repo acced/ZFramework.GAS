@@ -34,7 +34,7 @@ namespace ZFramework.GAS.Editor
                 for (int i = 0; i <= 60; i++) { pose(duration * i / 60); _trajectory.Add(instance.transform.position); }
             }
             if (trajectory) for (int i = 1; i < _trajectory.Count; i++) Line(_trajectory[i - 1] + Vector3.up * .04f, _trajectory[i] + Vector3.up * .04f, Color.yellow);
-            if (ghosts)
+            if (ghosts && doc.Root?.Animation != null)
             {
                 Capture(instance, pose, Mathf.Max(0, doc.Playback.Time - 3 / Mathf.Max(1, doc.Root.Animation.FrameRate)), new Color(.25f, .65f, 1, .15f));
                 Capture(instance, pose, Mathf.Min(duration, doc.Playback.Time + 3 / Mathf.Max(1, doc.Root.Animation.FrameRate)), new Color(1, .65f, .25f, .15f));
@@ -58,15 +58,15 @@ namespace ZFramework.GAS.Editor
                     _ghosts.Add((filter.sharedMesh, renderer.localToWorldMatrix, false, color));
             }
         }
-        internal void Query(TargetQueryDefinition query, EffectEvaluationContext values, Transform source, Vector3 origin)
+        internal void Query(TargetShape shape, Transform source, Vector3 origin)
         {
-            if (query.Kind < TargetQueryKind.TargetPoint) return;
-            float radius = query.Radius.Resolve(values), angle = query.Kind == TargetQueryKind.Sector ? query.Angle.Resolve(values) : 360;
+            if (shape.Kind < TargetQueryKind.TargetPoint) return;
+            float radius = shape.Radius, angle = shape.Angle;
             var center = origin + Vector3.up * .04f;
             var color = SkillColors.Cue;
-            if (query.Kind == TargetQueryKind.Line)
+            if (shape.Kind == TargetQueryKind.Line)
             {
-                float half = query.Width.Resolve(values) * .5f, height = query.Height.Resolve(values) * .5f;
+                float half = shape.HalfExtents.x, height = shape.HalfExtents.y;
                 var a = center - source.right * half; var b = center + source.right * half;
                 foreach (float y in new[] { -height, height })
                 { var up = Vector3.up * y; Line(a + up, b + up, color); Line(a + up, a + up + source.forward * radius, color); Line(b + up, b + up + source.forward * radius, color); Line(a + up + source.forward * radius, b + up + source.forward * radius, color); }
@@ -77,7 +77,7 @@ namespace ZFramework.GAS.Editor
             for (int i = 1; i <= 48; i++) Line(At(-angle / 2 + angle * (i - 1) / 48), At(-angle / 2 + angle * i / 48), color);
             if (angle < 360) { Line(center, At(-angle / 2), color); Line(center, At(angle / 2), color); }
             // Physical area is a sphere. Show its vertical radius, too.
-            if (query.Kind != TargetQueryKind.Sector)
+            if (shape.Kind != TargetQueryKind.Sector)
                 for (int i = 1; i <= 48; i++) { float a = (i - 1) * Mathf.PI / 24, b = i * Mathf.PI / 24; Line(center + new Vector3(0, Mathf.Sin(a), Mathf.Cos(a)) * radius, center + new Vector3(0, Mathf.Sin(b), Mathf.Cos(b)) * radius, color * new Color(1, 1, 1, .35f)); }
         }
         internal void Circle(Vector3 center, float radius, Color color)

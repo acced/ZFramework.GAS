@@ -44,14 +44,14 @@ namespace ZFramework.GAS.Editor
         }
         internal static void Bind(GameplayAbilityAsset ability, string field, ScriptableObject asset)
         { using var so = new SerializedObject(ability); so.FindProperty(field).objectReferenceValue = asset; so.ApplyModifiedProperties(); }
-        internal static SkillAnimationAsset Animation(GameplayAbilityAsset root, GameplayEffectAsset hit, string key, float length, bool self = false)
+        internal static void Animation(GameplayAbilityAsset root, string label, float length, params SkillAction[] actions)
         {
             var animation = SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(root, "Attack · 动画");
-            using var so = new SerializedObject(animation); so.FindProperty("clipName").stringValue = "Attack"; so.FindProperty("duration").floatValue = length;
-            var markers = so.FindProperty("markers"); markers.arraySize = 1; var marker = markers.GetArrayElementAtIndex(0);
-            new EventTrack().InitializeNew(marker, length * .45f, hit); marker.FindPropertyRelative("key").stringValue = key;
-            if(hit!=null)((ApplyEffectAction)marker.FindPropertyRelative("actions").GetArrayElementAtIndex(0).managedReferenceValue).targets.kind=self?TargetQueryKind.Self:TargetQueryKind.FixedTarget;
-            so.ApplyModifiedProperties(); Bind(root, "animation", animation); return animation;
+            SkillTimelineAuthoring.Edit(animation, t => {
+                t.Clip("Attack", length);
+                t.Marker("trigger", length * .45f, label, actions);
+            }, recordUndo: true);
+            SkillAssetFactory.SetMainAnimation(root, animation);
         }
         internal static void Cooldown(GameplayAbilityAsset root, float duration)
         {
@@ -75,7 +75,7 @@ namespace ZFramework.GAS.Editor
                 m.FindPropertyRelative("kind").enumValueIndex = 1; m.FindPropertyRelative("captureAttributeId").intValue = 3;
                 m.FindPropertyRelative("coefficient").floatValue = -1.2f; so.ApplyModifiedProperties();
             }
-            SkillTemplateRegistry.Animation(ability, damage, "命中", .8f);
+            SkillTemplateRegistry.Animation(ability, "命中", .8f, new ApplyEffectAction { effect = damage });
         }
     }
     public sealed class ProjectileTemplate : SkillTemplate
@@ -84,11 +84,10 @@ namespace ZFramework.GAS.Editor
         public override void Build(GameplayAbilityAsset ability)
         {
             var damage = SkillTemplateRegistry.Effect(ability, "伤害 · 投射物", EffectDurationPolicy.Instant, 0, 1, -20);
-            var animation = SkillTemplateRegistry.Animation(ability, null, "发射", 1);
-            using var so = new SerializedObject(animation);
-            var actions=so.FindProperty("markers").GetArrayElementAtIndex(0).FindPropertyRelative("actions");actions.arraySize=1;
-            actions.GetArrayElementAtIndex(0).managedReferenceValue=new LaunchProjectileAction{onHit=new SkillAction[]{new ApplyEffectAction{effect=damage}}};
-            so.ApplyModifiedProperties(); SkillTemplateRegistry.Cooldown(ability, 1);
+            SkillTemplateRegistry.Animation(ability, "发射", 1, new LaunchProjectileAction {
+                onHit = new SkillAction[]{ new ApplyEffectAction { effect = damage } }
+            });
+            SkillTemplateRegistry.Cooldown(ability, 1);
         }
     }
     public sealed class BuffTemplate : SkillTemplate
@@ -97,22 +96,39 @@ namespace ZFramework.GAS.Editor
         public override void Build(GameplayAbilityAsset ability)
         {
             var buff = SkillTemplateRegistry.Effect(ability, "狂暴 · 攻击加成", EffectDurationPolicy.Duration, 5, 3, 10);
-            SkillTemplateRegistry.Animation(ability, buff, "施加增益", .6f, true); SkillTemplateRegistry.Cooldown(ability, 8);
+            SkillTemplateRegistry.Animation(ability, "施加增益", .6f, new ApplyEffectAction {
+                effect = buff, targets = new TargetQuery { kind = TargetQueryKind.Self }
+            });
+            SkillTemplateRegistry.Cooldown(ability, 8);
         }
     }
     public sealed class ChannelTemplate : SkillTemplate
     {
-        public override string DisplayName => "引导";
+        public override string DisplayName => "引导（随施放取消）";
         public override void Build(GameplayAbilityAsset ability)
         {
-            var effect = SkillTemplateRegistry.Effect(ability, "引导 · 周期效果", EffectDurationPolicy.Duration, 3, 1, -5);
+            var hit = SkillTemplateRegistry.Effect(ability, "引导 · 单次伤害", EffectDurationPolicy.Instant, 0, 1, -5);
+            SkillTemplateRegistry.Animation(ability, "开始引导", 3, new CreateAreaAction {
+                targets = new TargetQuery { kind = TargetQueryKind.FixedTarget }, ownership = SkillTaskOwnership.Ability,
+                duration = new SkillNumber(3), period = new SkillNumber(.5f),
+                onPeriod = new SkillAction[] { new ApplyEffectAction { effect = hit } }
+            });
+        }
+    }
+    public sealed class DamageOverTimeTemplate : SkillTemplate
+    {
+        public override string DisplayName => "持续伤害（打断后继续）";
+        public override void Build(GameplayAbilityAsset ability)
+        {
+            var effect = SkillTemplateRegistry.Effect(ability, "持续伤害", EffectDurationPolicy.Duration, 3, 1, -5);
             using (var so = new SerializedObject(effect)) { so.FindProperty("period").floatValue = .5f; so.ApplyModifiedProperties(); }
-            SkillTemplateRegistry.Animation(ability, effect, "开始引导", 3);
+            SkillTemplateRegistry.Animation(ability, "施加持续伤害", 3, new ApplyEffectAction { effect = effect });
         }
     }
     public sealed class SummonTemplate : SkillTemplate
     {
         public override string DisplayName => "召唤骨架";
-        public override void Build(GameplayAbilityAsset ability) => SkillTemplateRegistry.Animation(ability, null, "召唤（宿主回调）", 1.5f);
+        public override void Build(GameplayAbilityAsset ability) =>
+            SkillTemplateRegistry.Animation(ability, "生成", 1.5f, new SpawnPrefabAction());
     }
 }

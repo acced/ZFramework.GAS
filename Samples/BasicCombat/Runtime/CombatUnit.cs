@@ -30,7 +30,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
         /// <summary>生命发生变化（正数为治疗，负数为伤害）。</summary>
         public event Action<CombatUnit, float> HealthChanged;
 
-        public void Initialize(GameplayCueRouter router)
+        public void Initialize(GameplayCueRouter router, SkillUnitServices services = null)
         {
             AbilitySystem?.Clear();
             AbilitySystem = new AbilitySystemComponent(5, router);
@@ -39,7 +39,7 @@ namespace ZFramework.GAS.Samples.BasicCombat
             {
                 var animator = GetComponent<SkillAnimator>();
                 return animator != null ? animator.Driver : null;
-            });
+            }, services ?? new SkillUnitServices { Origin = transform });
             var health = AbilitySystem.Attributes.Add(Health, maxHealth);
             AbilitySystem.Attributes.Add(MaxHealth, maxHealth);
             AbilitySystem.Attributes.Add(Attack, attack);

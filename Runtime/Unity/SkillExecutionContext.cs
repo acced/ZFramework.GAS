@@ -7,30 +7,48 @@ namespace ZFramework.GAS.Unity
     /// <summary>Per-cast state. Never stored in authoring assets or shared definitions.</summary>
     public sealed class SkillExecutionContext
     {
-        private readonly int _sourceGeneration;
-        private int _targetGeneration;
-        private readonly AbilitySystemComponent _source;
-        private AbilitySystemComponent _target;
-        private readonly Stack<TargetQueryBuffer> _buffers;
-        private readonly TargetSearcher _searcher;
-
-        private Vector3 _position, _forward;
-        private sealed class CastState { public int Version, Tasks; public Dictionary<string,HashSet<object>> Records; }
+        // Shared across every branch and task from one cast, including work started during cancellation.
+        private sealed class CastState
+        {
+            public readonly GameplayAbilityAsset Asset;
+            public readonly GameplayAbilitySpec Ability;
+            public readonly AbilitySourceIdentity Source;
+            public readonly TargetSearcher Searcher;
+            public readonly Stack<TargetQueryBuffer> Buffers = new();
+            public readonly Dictionary<string, float> Channels = new();
+            public Dictionary<string, HashSet<object>> Records;
+            public int Version, Users;
+            public CastState(GameplayAbilityAsset asset, GameplayAbilitySpec ability, TargetSearcher searcher)
+            {
+                Asset = asset; Ability = ability; Source = ability.Owner.SourceIdentity;
+                Version = ability.ActivationVersion;
+                Searcher = searcher ?? new TargetSearcher(256);
+            }
+        }
+        // Value copy: selecting a target or receiving an event never changes a sibling's branch.
+        private struct Branch
+        {
+            public AbilitySourceIdentity Target;
+            public Vector3 Position, Forward;
+            public Vector3? HitPoint, AimOffset;
+            public TargetSequenceFrame Sequence;
+            public GameplayEvent? Event;
+        }
         private readonly CastState _state;
-        private readonly bool _independent, _cleanup;
-        internal bool Executing;
-        internal bool Reusable => !Executing && _state.Tasks == 0;
-        internal void RetainTask() => _state.Tasks++;
-        internal void ReleaseTask() => _state.Tasks--;
-        internal TargetSequenceFrame Sequence {get;set;}
-        public Vector3? HitPoint {get;internal set;}
-        internal Vector3? AimOffset {get;private set;}
+        private Branch _branch;
+        private bool _detached;
+        internal bool Reusable => _state.Users == 0;
+        internal void Retain() => _state.Users++;
+        internal void Release() => _state.Users--;
+        internal TargetSequenceFrame Sequence { get => _branch.Sequence; set => _branch.Sequence = value; }
+        public Vector3? HitPoint { get => _branch.HitPoint; internal set => _branch.HitPoint = value; }
+        internal Vector3? AimOffset => _branch.AimOffset;
         internal HashSet<object> HitRecord(string key){
             if(string.IsNullOrEmpty(key))return new HashSet<object>();
             _state.Records??=new();if(!_state.Records.TryGetValue(key,out var record))_state.Records.Add(key,record=new());
             return record;
         }
-        internal Vector3 OriginAt(SkillSpawnPosition origin){
+        public Vector3 OriginAt(SkillSpawnPosition origin){
             return origin switch{
                 SkillSpawnPosition.Caster=>Position,
                 SkillSpawnPosition.Target=>Target!=null && Services.Target!=null?Services.Target.position:throw new InvalidOperationException("缺少当前目标。"),
@@ -49,13 +67,7 @@ namespace ZFramework.GAS.Unity
             _modules ??= new Dictionary<ModuleDefinition, SkillExecutionContext>();
             if (!_modules.TryGetValue(module, out var scope) || scope == null)
                 scope = WithParameters(module.Resolve(Values));
-            else
-            {
-                scope.Services.CopyFrom(Services); scope.Source = Source; scope.Event = Event;
-                scope._target = _target; scope._targetGeneration = _targetGeneration;
-                scope._position = Position; scope._forward = Forward; scope.Sequence = Sequence;
-                scope.HitPoint = HitPoint; scope.AimOffset = AimOffset;
-            }
+            else scope.InheritBranch(this);
             _modules[module] = null; // Reentrant calls need their own active frame.
 #if UNITY_EDITOR
             scope.EditorCallSiteId = EditorCallSiteId ?? (module.IsExternalCall ? module.Id : null);
@@ -63,12 +75,12 @@ namespace ZFramework.GAS.Unity
             try { scope.Execute(module.Actions); Status = scope.Status; }
             finally { _modules[module] = scope; }
         }
-        public GameplayAbilityAsset Asset { get; }
-        public GameplayAbilitySpec Ability { get; }
-        public AbilitySystemComponent Source { get; private set; }
-        public AbilitySystemComponent Target => _target;
+        public GameplayAbilityAsset Asset => _state.Asset;
+        public GameplayAbilitySpec Ability => _state.Ability;
+        public AbilitySystemComponent Source => _state.Source.Owner;
+        public AbilitySystemComponent Target => _branch.Target?.Owner;
         public EffectEvaluationContext Values { get; }
-        public GameplayEvent? Event { get; private set; }
+        public GameplayEvent? Event => _branch.Event;
         public TimelineTaskContext Services { get; }
 #if UNITY_EDITOR
         // Actual outer call, including continuations that outlive the synchronous action stack.
@@ -77,98 +89,103 @@ namespace ZFramework.GAS.Unity
         public string CurrentActionId { get; internal set; }
         public string Status { get; internal set; } = "就绪";
         public bool IsCastActive => Source != null && Ability.IsActive && Ability.ActivationVersion == _state.Version;
-        internal bool CanContinue => (_independent || _cleanup || IsCastActive);
+        public bool CanContinue => _detached || IsCastActive;
         internal void BindActivation() => _state.Version = Ability.ActivationVersion;
         public int Version => _state.Version;
-        private readonly Dictionary<string, float> _channels;
-        public IReadOnlyDictionary<string, float> Channels => _channels;
-        public void SetChannel(string id, float value) => _channels[id] = value;
-        public void RemoveChannel(string id) => _channels.Remove(id);
-        public Vector3 Position => Source != null && Services.Origin != null ? Services.Origin.position : _position;
-        public Vector3 Forward => Source != null && Services.Origin != null ? Services.Origin.forward : _forward;
-        // Reference identity remains constant per incarnation, independent of the pooled ASC object.
-        public object SourceIdentity { get; }
+        public IReadOnlyDictionary<string, float> Channels => _state.Channels;
+        public void SetChannel(string id, float value) => _state.Channels[id] = value;
+        public void RemoveChannel(string id) => _state.Channels.Remove(id);
+        public Vector3 Position => Source != null && Services.Origin != null ? Services.Origin.position : _branch.Position;
+        public Vector3 Forward => Source != null && Services.Origin != null ? Services.Origin.forward : _branch.Forward;
+        public object SourceIdentity => _state.Source;
 
         public SkillExecutionContext(GameplayAbilityAsset asset, GameplayAbilitySpec ability, AbilitySystemComponent target,
             EffectEvaluationContext values, TimelineTaskContext services)
+            : this(asset, ability, SkillCastTarget.From(target, services), values, services) { }
+        internal SkillExecutionContext(GameplayAbilityAsset asset, GameplayAbilitySpec ability, SkillCastTarget target,
+            EffectEvaluationContext values, SkillUnitServices services)
         {
-            _buffers = new(); _state = new CastState { Version = ability.ActivationVersion }; _channels = new();
-            Asset = asset; Ability = ability; _source = ability.Owner; _sourceGeneration = _source.Generation;
-            SourceIdentity = _source.SourceIdentity; Values = values; Services = new TimelineTaskContext();
-            _searcher = services?.Searcher ?? new TargetSearcher(256);
+            _state = new CastState(asset, ability, services?.Searcher);
+            Values = values; Services = new TimelineTaskContext();
             Reset(target, services);
         }
         internal bool Allows(TargetQueryDefinition query, AbilitySystemComponent target)
         {
             var source = Source;
             if (source == null && Services.TargetFilter != null && !Services.FilterHasSnapshot) return false;
-            return query.Allows(source, target, Services.TargetFilter);
+            return query.Allows(_state.Source, target, Services);
         }
 
-        private SkillExecutionContext(SkillExecutionContext parent, AbilitySystemComponent target,
-            EffectEvaluationContext values, bool independent = false, bool cleanup = false)
+        private SkillExecutionContext(SkillExecutionContext parent, EffectEvaluationContext values = null)
         {
-            Asset = parent.Asset; Ability = parent.Ability; Source = parent.Source; _source = parent._source; _sourceGeneration = parent._sourceGeneration;
-            _target = target; _targetGeneration = target?.Generation ?? 0; Values = values ?? parent.Values;
-            Services = parent.Services.Snapshot(); Services.Execution = this;
-            _position = parent.Position; _forward = parent.Forward; SourceIdentity = parent.SourceIdentity;
-            _buffers = parent._buffers; _searcher = parent._searcher;
-            _state = cleanup ? new CastState { Version = parent._state.Version } : parent._state;
-            _independent = independent || parent._independent; _cleanup = cleanup || parent._cleanup;
-            _channels = parent._channels;
+            _state = parent._state; Values = values ?? parent.Values;
+            Services = new TimelineTaskContext { Execution = this };
+            InheritBranch(parent);
+        }
+        private void InheritBranch(SkillExecutionContext parent)
+        {
+            _branch = parent._branch;
+            _branch.Position = parent.Position; _branch.Forward = parent.Forward;
+            _detached = parent._detached;
+            Services.CopyFrom(parent.Services);
 #if UNITY_EDITOR
             EditorCallSiteId = parent.EditorCallSiteId;
 #endif
-            Event = parent.Event; Sequence=parent.Sequence; HitPoint=parent.HitPoint; AimOffset=parent.AimOffset;
         }
         public SkillExecutionContext WithTarget(AbilitySystemComponent target, Transform transform = null)
         {
-            var scope = new SkillExecutionContext(this, target, null);
-            scope.Services.RebindTarget(transform); scope.AimOffset=null; return scope;
+            var scope = new SkillExecutionContext(this); scope._branch.Target = target?.SourceIdentity;
+            scope.Services.RebindTarget(transform); scope._branch.AimOffset = null; return scope;
         }
         internal SkillExecutionContext Selected(AbilitySystemComponent target, Transform t, Vector3 point){
             var scope=WithTarget(target,t);scope.Services.TargetPosition=point;
-            scope.AimOffset=t!=null?point-t.position:Vector3.zero;return scope;
+            scope._branch.AimOffset=t!=null?point-t.position:Vector3.zero;return scope;
         }
         public SkillExecutionContext WithParameters(SkillParameterValues parameters)
-            => new SkillExecutionContext(this, Target, Values.WithParameters(parameters));
+            => new SkillExecutionContext(this, Values.WithParameters(parameters));
         public SkillExecutionContext WithEvent(GameplayEvent message)
-        { var result = new SkillExecutionContext(this, Target, null); result.Event = message; return result; }
-        internal SkillExecutionContext ForTask()
-            => new SkillExecutionContext(this, Target, Values);
-        internal SkillExecutionContext Independent() => new SkillExecutionContext(this, Target, null, independent: true);
-        // Generation checks are made at the asynchronous resume boundary.
+        { var result = new SkillExecutionContext(this); result._branch.Event = message; return result; }
+        internal SkillExecutionContext ForTask() => new SkillExecutionContext(this);
+        internal void DetachTask() => _detached = true;
         internal void RefreshAsyncTargets()
         {
-            if (_source.Generation != _sourceGeneration) { Source = null; Services.Origin = null; Services.LaunchPoint = null; }
-            if (_target != null && _target.Generation != _targetGeneration) { _target = null; Services.Target = null; }
+            if (Source == null) { Services.Origin = null; Services.LaunchPoint = null; }
+            if (_branch.Target != null && Target == null) { _branch.Target = null; Services.Target = null; }
         }
-        private static readonly TimelineTaskContext EmptyServices = new();
-        internal void Reset(AbilitySystemComponent target, TimelineTaskContext services)
+        private static readonly SkillUnitServices EmptyServices = new();
+        internal void Reset(SkillCastTarget target, SkillUnitServices services)
         {
-            _target=target;_targetGeneration=target?.Generation??0;Source=_source;CurrentActionId=null;Status="就绪";
-            Services.CopyFrom(services ?? EmptyServices);
-            Services.Execution=this;Services.Searcher??=_searcher;Services.Objects??=InstantiateSkillObjectService.Instance;
-            if(!Services.HasTargetPosition && Services.Target!=null)Services.TargetPosition=Services.Target.position;
+            _branch = new Branch { Target = target.Unit?.SourceIdentity };
+            _detached=false;CurrentActionId=null;Status="就绪";
+            Services.CopyServicesFrom(services ?? EmptyServices);
+            Services.FilterHasSnapshot = services is TimelineTaskContext legacy && legacy.FilterHasSnapshot;
+            Services.Target = target.Aim;
+            Services.ClearTargetPosition();
+            if (target.Point.HasValue) Services.TargetPosition = target.Point.Value;
+            else if (target.Aim != null) Services.TargetPosition = target.Aim.position;
+            Services.Execution=this;Services.Searcher??=_state.Searcher;Services.Objects??=InstantiateSkillObjectService.Instance;
             if(!Services.Scene.IsValid() && Services.Origin!=null)Services.Scene=Services.Origin.gameObject.scene;
-            if(Services.TargetFilter is ITargetFilterSnapshot filter){Services.TargetFilter=filter.Capture(_source);Services.FilterHasSnapshot=true;}
-            _position=Services.Origin!=null?Services.Origin.position:Vector3.zero;_forward=Services.Origin!=null?Services.Origin.forward:Vector3.forward;
-            if (_state.Records != null) foreach (var record in _state.Records.Values) record.Clear();_channels.Clear();Sequence=null;HitPoint=null;AimOffset=null;
+            if(Services.TargetFilter is ITargetFilterSnapshot filter){Services.TargetFilter=filter.Capture(Source);Services.FilterHasSnapshot=true;}
+            _branch.Position=Services.Origin!=null?Services.Origin.position:Vector3.zero;_branch.Forward=Services.Origin!=null?Services.Origin.forward:Vector3.forward;
+            if (_state.Records != null) foreach (var record in _state.Records.Values) record.Clear();
+            _state.Channels.Clear();
         }
         internal void Cleanup(IReadOnlyList<SkillActionDefinition> actions, IDisposable request)
         {
             request?.Dispose();
-            if (actions.Count > 0) new SkillExecutionContext(this, Target, null, cleanup: true).Execute(actions);
+            if (actions.Count > 0) new SkillExecutionContext(this) { _detached = true }.Execute(actions);
         }
         public GameplayEffectSpec Effect(GameplayEffectDefinition definition)
             => new GameplayEffectSpec(definition, Source?.Attributes, SourceIdentity, context: Values);
-        public TargetQueryBuffer RentBuffer() => _buffers.Count > 0 ? _buffers.Pop() : new TargetQueryBuffer();
-        public void ReturnBuffer(TargetQueryBuffer buffer) { buffer.Clear(); _buffers.Push(buffer); }
+        public TargetQueryBuffer RentBuffer() => _state.Buffers.Count > 0 ? _state.Buffers.Pop() : new TargetQueryBuffer();
+        public void ReturnBuffer(TargetQueryBuffer buffer) { buffer.Clear(); _state.Buffers.Push(buffer); }
         public void Start(GameplayAbilityTask task, bool independent)
+            => Start(task, independent ? SkillTaskOwnership.Scene : SkillTaskOwnership.Ability);
+        public void Start(GameplayAbilityTask task, SkillTaskOwnership ownership)
         {
-            if (!independent)
+            if (ownership == SkillTaskOwnership.Ability)
             {
-                if (!IsCastActive || _cleanup || _independent) throw new InvalidOperationException("当前执行范围不能启动技能所属任务。");
+                if (!IsCastActive || _detached) throw new InvalidOperationException("当前执行范围不能启动技能所属任务。");
                 Source.StartTask(Ability, task); return;
             }
             var host = Services.SceneTasks;

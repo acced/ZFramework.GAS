@@ -46,10 +46,6 @@ namespace ZFramework.GAS.Editor
             Owner(so);
 
         }
-        internal static bool IsDetached(SkillAction action,string branch) => branch=="onCancel" ||
-            branch=="next" && action is TargetSequenceAction ||
-            branch=="onHit" && action is LaunchProjectileAction p && p.ownership==SkillTaskOwnership.Scene ||
-            branch=="onPeriod" && action is CreateAreaAction a && a.ownership==SkillTaskOwnership.Scene;
         public static void ValidateStructure(SerializedProperty list,HashSet<string> ids=null)
         {
             if(list==null)return;
@@ -69,9 +65,9 @@ namespace ZFramework.GAS.Editor
             }
             if(action is CallModuleAction c && c.module!=null)
             {var moduleIds=new HashSet<string>(); foreach(var inner in c.module.actions)Visit(inner,detached,depth+1,moduleIds);}
-            foreach(var field in SkillActionClipboard.Branches(action.GetType()))
+            foreach(var field in SkillActionFields.For(action.GetType()).Branches)
                 if(field.GetValue(action) is SkillAction[] children) foreach(var child in children)
-                    Visit(child,detached || IsDetached(action,field.Name),depth+1,scope);
+                    Visit(child,detached || action.IsDetachedBranch(field.Name),depth+1,scope);
         }
         internal static HashSet<string> RequiredEffectParameters(GameplayEffectAsset effect)
         {

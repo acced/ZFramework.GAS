@@ -15,6 +15,12 @@ namespace ZFramework.GAS.Unity
         public SkillParameterKind kind;
         public float defaultValue;
         public float[] levels = Array.Empty<float>();
+        internal SkillParameter Snapshot()
+        {
+            var copy = (SkillParameter)MemberwiseClone();
+            copy.levels = levels == null ? null : (float[])levels.Clone();
+            return copy;
+        }
         public SkillParameterValue Resolve(int level)
         {
             SkillParameterValue.FromNumber(kind, defaultValue);

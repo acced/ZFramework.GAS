@@ -11,6 +11,12 @@ namespace ZFramework.GAS.Editor
 {
     public static class SkillAssetFactory
     {
+        public static void SetMainAnimation(GameplayAbilityAsset ability, SkillAnimationAsset animation)
+        {
+            using var so = new SerializedObject(ability);
+            PortRules.Write(so, new PortId(PortKind.Animation), animation);
+            so.ApplyModifiedProperties();
+        }
         public static bool IsEmbedded(GameplayAbilityAsset root, UnityEngine.Object asset)
             => root != null && asset != null && root != asset && AssetDatabase.GetAssetPath(asset) == AssetDatabase.GetAssetPath(root);
         public static T AddEmbedded<T>(GameplayAbilityAsset root, string name) where T : ScriptableObject

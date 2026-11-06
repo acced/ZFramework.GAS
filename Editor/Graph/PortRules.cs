@@ -53,11 +53,17 @@ namespace ZFramework.GAS.Editor
                 }
             }
             var cursor = so.GetIterator();
+            int actionDepth = int.MaxValue;
             while (cursor.Next(true))
+            {
+                if (cursor.depth <= actionDepth)
+                    actionDepth = cursor.propertyType == SerializedPropertyType.ManagedReference && cursor.managedReferenceValue is SkillAction
+                        ? cursor.depth : int.MaxValue;
                 if (cursor.propertyType == SerializedPropertyType.ObjectReference && cursor.objectReferenceValue is ScriptableObject child &&
-                    (child is SkillActionModuleAsset || child is SkillParameterSetAsset || child is GameplayEffectAsset &&
-                        (cursor.propertyPath.Contains("actions.") || cursor.propertyPath.Contains("Actions.") || cursor.propertyPath.Contains("onHit.") || cursor.propertyPath.Contains("onPeriod."))))
+                    (child is SkillActionModuleAsset || child is SkillParameterSetAsset ||
+                        cursor.depth > actionDepth && (child is GameplayEffectAsset || child is SkillAnimationAsset)))
                     yield return new AssetLink(asset, new PortId(PortKind.ActionReference, cursor.propertyPath), child);
+            }
         }
         public static bool CanAttach(ScriptableObject parent, PortId port, ScriptableObject child, out string error, SkillDocument document = null)
         {

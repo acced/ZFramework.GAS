@@ -5,7 +5,7 @@ using UnityEngine;
 namespace ZFramework.GAS.Unity
 {
     // Each cast/chain owns its budget, visited incarnations and immutable starting parameters.
-    // An asynchronous projectile retains the frame through ForTask/Independent. Nothing ticks here:
+    // An asynchronous projectile retains the frame through its task context. Nothing ticks here:
     // only an explicitly authored continuation (typically in onHit) advances the sequence.
     internal sealed class TargetSequenceFrame
     {
@@ -40,7 +40,8 @@ namespace ZFramework.GAS.Unity
         }
     }
 
-    [Serializable] public sealed class TargetSequenceAction : SkillAction
+    [Serializable] [System.ComponentModel.DisplayName("有限目标序列")]
+    public sealed class TargetSequenceAction : SkillAction
     {
         public static SkillParameterValues StepParameters(SkillParameterValues values, string indexId, string scaleId, int hop, float retention)
         {
@@ -48,33 +49,36 @@ namespace ZFramework.GAS.Unity
             if (!string.IsNullOrEmpty(scaleId)) values = values.With(scaleId, new SkillParameterValue(Mathf.Pow(retention, hop)));
             return values;
         }
-        [Tooltip("包含首目标；所有分支共用这个上限。")] public SkillNumber maxTargets=new(3);
+        [Tooltip("包含首目标；所有分支共用这个上限。")] [FlowField("总目标数（含首击）")] public SkillNumber maxTargets=new(3);
         public bool allowRepeat;
         [Tooltip("留空：每条链独立。指定相同记录键：本次施放的多条链共享已选单位。")] public string sharedRecord;
         [SkillParameterReference] public string indexParameterId;
         [SkillParameterReference] public string scaleParameterId;
-        public SkillNumber retention=new(1);
+        [FlowField("每跳保留")] public SkillNumber retention=new(1);
         [SerializeReference,FlowBranch("首目标")] public SkillAction[] first=Array.Empty<SkillAction>();
         [SerializeReference,FlowBranch("后续目标")] public SkillAction[] next=Array.Empty<SkillAction>();
+        public override bool IsDetachedBranch(string field) => field == nameof(next);
         public override SkillActionDefinition Build(SkillActionBuildContext builder){
             builder.RequireKind(indexParameterId, SkillParameterKind.Int); builder.RequireKind(scaleParameterId, SkillParameterKind.Float);
             builder.Number(maxTargets,1,64,true);builder.Number(retention,0,1);
-            var initial=builder.Build(first);var following=builder.BuildDetached(next);
+            var initial=builder.Build(first);var following=BuildBranch(builder, nameof(next), next);
             var limit=maxTargets;var ratio=retention;var record=sharedRecord;bool repeat=allowRepeat;
             string index=indexParameterId,scale=scaleParameterId;
             return Define("有限目标序列",c=>new TargetSequenceFrame((int)limit.Resolve(c.Values),repeat,c.HitRecord(record),following,index,scale,ratio.Resolve(c.Values),c.Values.Parameters).RunStep(c,initial));
         }
     }
 
-    [Serializable] public sealed class NextTargetStepAction : SkillAction
+    [Serializable] [System.ComponentModel.DisplayName("继续到所选目标")]
+    public sealed class NextTargetStepAction : SkillAction
     {
         public override SkillActionDefinition Build(SkillActionBuildContext builder)=>Define("继续到所选目标",c=>c.Sequence.Next(c));
     }
 
-    [Serializable] public sealed class SelectTargetsAction : SkillAction
+    [Serializable] [System.ComponentModel.DisplayName("选择目标")]
+    public sealed class SelectTargetsAction : SkillAction
     {
-        public TargetQuery targets=new(){kind=TargetQueryKind.Circle};
-        public SkillNumber count=new(1);
+        [FlowField("搜索原点", nameof(TargetQuery.origin))] public TargetQuery targets=new(){kind=TargetQueryKind.Circle};
+        [FlowField("最多选择")] public SkillNumber count=new(1);
         public bool excludeCurrent=true,excludeVisited=true;
         [Tooltip("可选：排除本次施放里这个记录已经选过的单位。")]public string sharedRecord;
         public bool recordSelection;
@@ -101,9 +105,10 @@ namespace ZFramework.GAS.Unity
         }
     }
 
-    [Serializable] public sealed class ShowTargetLinkAction : SkillAction
+    [Serializable] [System.ComponentModel.DisplayName("显示目标连线")]
+    public sealed class ShowTargetLinkAction : SkillAction
     {
-        [Tooltip("包含 LineRenderer 的预制体。")] public GameObject prefab;
+        [Tooltip("包含 LineRenderer 的预制体。")] [FlowField("连线特效")] public GameObject prefab;
         public SkillSpawnPosition from=SkillSpawnPosition.HitPoint;
         public SkillNumber duration=new(.25f);
         public override SkillActionDefinition Build(SkillActionBuildContext builder){
@@ -119,7 +124,7 @@ namespace ZFramework.GAS.Unity
                     var side=Vector3.Cross(end-start,Vector3.up).normalized*Mathf.Min(.12f,(end-start).magnitude*.09f);
                     line.positionCount=5;line.SetPosition(0,start);line.SetPosition(1,Vector3.Lerp(start,end,.27f)+side);
                     line.SetPosition(2,Vector3.Lerp(start,end,.55f)-side);line.SetPosition(3,Vector3.Lerp(start,end,.78f)+side*.5f);line.SetPosition(4,end);
-                    c.Start(new SpawnLifetimeTask(c,id,go,life.Resolve(c.Values),null,default,Quaternion.identity,false),true);
+                    c.Start(new SpawnLifetimeTask(c,id,go,life.Resolve(c.Values),null,default,Quaternion.identity,false),SkillTaskOwnership.Scene);
                 }
             });
         }

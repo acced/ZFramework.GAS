@@ -1,7 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 using ZFramework.GAS.Unity;
@@ -11,19 +8,6 @@ namespace ZFramework.GAS.Editor
     {
         private static Type _type;
         private static string _json;
-        private static readonly Dictionary<Type,FieldInfo[]> Fields=new();
-        public static FieldInfo[] Branches(Type type)
-        {
-            if (!Fields.TryGetValue(type,out var fields))
-            {
-                var result=new List<FieldInfo>();
-                for(var current=type;current!=null && current!=typeof(object);current=current.BaseType)
-                    result.AddRange(current.GetFields(BindingFlags.DeclaredOnly|BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)
-                        .Where(f=>f.FieldType==typeof(SkillAction[]) && f.IsDefined(typeof(SerializeReference),true)));
-                Fields[type]=fields=result.ToArray();
-            }
-            return fields;
-        }
         public static bool Available => _json!=null;
         public static void Copy(SkillAction action)
         { _type=action?.GetType(); _json=action==null?null:JsonUtility.ToJson(action); }
@@ -43,7 +27,7 @@ namespace ZFramework.GAS.Editor
         {
             if(p.propertyType!=SerializedPropertyType.ManagedReference || p.managedReferenceValue is not SkillAction action) return;
             p.FindPropertyRelative("id").stringValue=Guid.NewGuid().ToString("N");
-            foreach(var field in Branches(action.GetType()))
+            foreach(var field in SkillActionFields.For(action.GetType()).Branches)
             { var array=p.FindPropertyRelative(field.Name); for(int i=0;i<array.arraySize;i++) RenewIds(array.GetArrayElementAtIndex(i)); }
         }
     }

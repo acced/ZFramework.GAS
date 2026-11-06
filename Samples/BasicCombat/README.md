@@ -55,14 +55,14 @@
 | 键 | 技能 | 演示的机制 |
 |---|---|---|
 | 1 | 斩击 | 体力消耗、冷却、命中伤害、剑光、霸体与连招窗口 |
-| 2 | 能量弹 | 蓄能 Cue、投射物动作，动画结束后仍能命中 |
+| 2 | 能量弹 | Q 切换分叉闪电／逐个弹射；从命中点选敌，动画结束后仍能命中 |
 | 3 | 战吼 | 自身增益（攻击 +10，持续 6 秒）、强化标签、光环；随后斩击进入强化分支 |
-| 4 | 圣域引导 | 周期治疗；引导期间的 `State.Channeling` 阻断其他技能 |
+| 4 | 圣域引导 | 周期治疗范围内的友方（含自身）；打断会结束治疗，引导期间的 `State.Channeling` 阻断其他技能 |
 | 5 | 召唤 | 生成守护灵动作＋独立持续领域；存活时间、数量、周期、范围均由参数配置 |
 
-`CombatUnit` 持有 ASC 和每个角色独立的 `SkillRunner`。`TrainingArena` 通过技能套组授予，通过 `hero.SkillRunner.TryCast(skill.asset, dummy.AbilitySystem, context)` 请求施放，并按资产查询冷却和激活状态。召唤由资产里的 `SpawnPrefabAction` 执行，标记名称只用于显示，没有字符串业务分支。
+`CombatUnit` 持有 ASC 和每个角色独立的 `SkillRunner`。训练场在初始化时绑定出手点、场景服务和敌友关系，通过技能套组授予资产。所有技能都走 `hero.SkillRunner.TryCast(asset, new SkillCastTarget(dummy.AbilitySystem, aimPoint))`。要看攻击和治疗选了谁，在技能编辑器中打开相应动作，查看目标查询的「目标关系」。召唤由资产里的 `SpawnPrefabAction` 执行。
 
-`Runtime/TrainingArena.cs` 负责创建 `GameplayCueRouter`、`FixedUpdate` 推进，以及为投射物提供出手点、目标查询与对象池回调。`CombatUnit.Initialize` 将 ASC 绑定给 `CueVfxPlayer`，通用播放器负责时间轴特效的创建、LateUpdate 更新和清理；训练场仅保留命中反馈等游戏逻辑。HUD 用 IMGUI 绘制，按键也经 IMGUI 事件读取，新旧输入系统下都能运行。
+`Runtime/TrainingArena.cs` 负责创建 `GameplayCueRouter` 和在 `FixedUpdate` 中推进各单位。`CombatUnit.Initialize` 将 ASC 绑定给 `CueVfxPlayer`，通用播放器负责时间轴特效的创建、LateUpdate 更新和清理；训练场显示命中反馈和 HUD。HUD 用 IMGUI 绘制，按键也经 IMGUI 事件读取，新旧输入系统下都能运行。
 
 ## 代码结构
 

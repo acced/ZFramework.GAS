@@ -10,6 +10,46 @@
 
 无动画技能配置「激活动作」即可；动画技能把动作放到需要触发的标记点。程序先 `SkillRunner.Grant` 或通过技能套组授予，再调用 `TryCast`、推进 ASC，并接入项目服务。
 
+## 从现有项目接入
+
+**单位接一次，技能按资产接。** 已有角色组件实现 `IAbilitySystemProvider`，让碰撞体能找到单位的 ASC。初始化时把施法挂点和项目服务交给 `SkillRunner`，用技能套组授予资产。项目自己的战斗循环继续推进 ASC，每单位每步一次。
+
+```csharp
+// 单位初始化。MatchesTeam 使用项目自己的阵营表；没有敌友规则可省略。
+var runner = new SkillRunner(asc, () => skillAnimator.Driver, new SkillUnitServices {
+    Origin = transform, LaunchPoint = muzzle, TargetRelations = MatchesTeam
+});
+abilitySet.GrantTo(runner);
+
+// 施放时只交输入；以下是三种不同瞄准方式。
+runner.TryCast(skill, new SkillCastTarget(targetAsc, aimTransform));
+runner.TryCast(skill, SkillCastTarget.Ground(worldPoint));
+runner.TryCast(selfBuff);
+```
+
+在动作的目标查询中选 **敌方、友方或不限**。例如把圣域的查询设为「圆形、友方、允许自身」，它就能治疗范围内的友方；改成另一种治疗技能不需要给施放入口加分支。BasicCombat 的 Q 只切换待施放的能量弹资产。使用旧重载传入非空 `TimelineTaskContext` 时，该次施放使用传入的整份服务。
+
+**少量技能直接在编辑器配置；已有表格或流程资产才写导入器。** 导入器留在消费项目的 Editor 程序集，引用 `ZFramework.GAS.Editor`。程序将源数据中的时间、属性 ID、标签和资源引用翻译成 GAS 资产。效果、动画片段、Prefab 都可以引用项目中已有的对象，不需要复制进包。
+
+例如把一条「第 12 帧命中，接下来 6 帧播放特效」的数据写到已保存技能的时间轴上。这里的 `skill`、`damage` 是已有资产，Cue 标签由项目注册：
+
+```csharp
+var timeline = skill.Animation ?? SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(skill, "主时间轴");
+SkillTimelineAuthoring.Edit(timeline, t => {
+    const float fps = 30;
+    t.Clip("Base Layer.Attack", 1f, fps);
+    t.Marker("impact-1", 12 / fps, "命中", new ApplyEffectAction { effect = damage });
+    t.Cue("impact-fx", 12 / fps, 18 / fps, "Cue.Attack");
+});
+SkillAssetFactory.SetMainAnimation(skill, timeline);
+AssetDatabase.SaveAssetIfDirty(timeline);
+AssetDatabase.SaveAssetIfDirty(skill);
+```
+
+时间单位是秒。元素 ID 在同一条时间轴内唯一，使用源数据的稳定键，不要用显示名或数组序号。重复写入同一 ID 会更新该元素，未提及的元素保留；标记内的动作列表则由本次传入的动作替换。编辑器布局和断点依赖动作 ID，若要保留它们，应复用原动作。以导入器为准的字段不要同时交给策划手改；源文件删除的元素由导入器显式处理。`Edit` 在回调成功后一次提交，不自动保存文件。
+
+**玩法按边界分工**：扇形攻击、条件状态、冷却和延时效果直接组合现有资产；实际位移、伤害拦截等需要项目服务的规则留在项目侧。多个技能都用同一动作组合，先提取为共享模块。只有新机制无法组合时才写项目动作，并按需提供几何预演；基础库不依赖项目程序集。
+
 ## 参数与等级
 
 参数包括稳定 ID、显示名、说明、类型（Float / Int / Bool）、默认值和可选等级表。等级从 1 开始，超过表长使用末项。绑定时选择参数；改显示名不改变 ID。
@@ -48,18 +88,31 @@ Clamp(常量 + 来源属性 × 系数 × 参数 - 目标属性 × 目标系数, 
 
 `SceneSkillTaskHost` 随场景卸载清理。项目可在 `TimelineTaskContext.SceneTasks` 注入手动调度宿主（适合测试或已有世界时钟），此时由项目负责 Tick 和 Clear。
 
+新建技能时，**持续伤害（打断后继续）** 会在标记触发时把周期效果挂到目标，此后由目标的 ASC 结算；**引导（随施放取消）** 会在标记触发时启动技能所属的周期任务，每半秒对固定目标施加一次瞬时伤害。打断前都能造成伤害，打断后只有前者继续。要修改每跳间隔，前者改效果的周期，后者改区域动作的周期。
 
 `ISkillObjectService` 接管生成与归还，默认实现为 Instantiate / Destroy。池实现必须在 Spawn 时重置对象，Release 时归还同一个对象。Prefab 可实现 `ISkillSpawnInitializer` 接收初始化上下文；AI、导航和阵营属于项目代码。
 
+### 新动作应放在哪里
+
+能用已有动作拼出的技能，保存成技能资产或共享模块。需要新玩法时，把动作和任务写在项目程序集中；只有多个项目都要遵守的规则才放回 GAS。下面是项目动作接入现有工具的三个入口：
+
+- **编辑与构建**：派生 `SkillAction` 并实现 `Build`。用 `[SerializeReference, FlowBranch("抵达")]` 声明子动作数组，构建时调用 `BuildBranch(builder, nameof(afterTravel), afterTravel)`。分支默认继承调用方的约束；若它可能晚于施放结束，重写 `IsDetachedBranch`。构建器、编辑校验、流程图使用同一条规则。动作类上的 `[System.ComponentModel.DisplayName("延迟落点")]` 同时用于菜单和节点；`[FlowField("飞行时长")]` 可将常用字段放在节点上，其余字段在 Details 编辑。动作内对 GAS 效果和时间轴的引用会出现在结构图上，字段可以自行命名。
+- **运行时**：用 `context.Start(task, SkillTaskOwnership.Scene)` 发出可独立完成的任务，用 `Ability` 启动需要随施放取消的任务。目标、命中位置、事件和局部参数属于当前分支；命中记录和表现通道属于整次施放。项目任务派生 `SkillActionTask` 时使用它的 `Execution`，不用把这些状态复制到资产里。一次取消中创建的场景任务仍属于原来的施放。
+- **几何预演**：项目需要展示独有的几何行为时，在项目 **Editor** 程序集里用 `[InitializeOnLoadMethod]` 调用 `SkillActionPreview.Register<T>`。处理器是同步的：`frame.Mark(query)` 按当前查询标出假人，`frame.Visit(children, delay)` 将分支放在延迟后的时间点，传入地面点则仅在该分支清除单位目标并改用该点。只描述能确定的部分；没有处理器的自定义动作不会在编辑器里执行游戏代码。
+
+以「抵达后等待一次格挡」为例：项目的位移任务在抵达时执行配置的子动作。策划在其中放一个「等待 Gameplay 事件」：成功分支接反击效果，超时分支接普通伤害。项目的格挡判定只需向施法者的 `asc.Events` 发送约定标签，无需读取技能资产或挑选伤害效果。因为「等待」随技能取消，承载这个分支的任务也要选择技能归属；独立投射物不能在命中后启动这种等待。
+
 ## 选敌
 
-查询支持自身、固定目标、目标点周围、圆形、扇形和线形。使用 LayerMask、必需／阻断标签、排除自身和最多目标数；按单位去重并按距离排序截取。
+查询支持自身、固定目标、目标点周围、圆形、扇形和线形。可配置 LayerMask、任一／必需／阻断标签、排除自身和最多目标数；按单位去重并按距离排序截取。预演和运行时使用同一份原点、形状尺寸、扇形角度判定和标签规则；假人用球形代理，场景用 Unity 碰撞体。没有注册的标签不会成为有效的查询条件。
 
 物理查询读取 Unity 当前物理世界，不会自行调用 `Physics.SyncTransforms`。嵌套查询分别租用结果缓冲，外层结果不会被覆盖。默认缓冲为 256 个碰撞体。即时多目标动作在开发构建中断言缓冲未饱和；项目应限制碰撞层和范围。持续区域不会根据不完整的结果移除占用者。
 
-项目通过 `ITargetFilter` 接入阵营过滤，不在 GAS 中规定玩家、怪物等分类。目标选择交互通过 `ISkillTargetSelection` 提供，并返回可取消的请求句柄。目标点来自显式设置的 `TargetPosition`，或者施放开始时捕获的目标 Transform 位置；两者都缺失时拒绝依赖目标点的动作，显式指定世界原点是有效配置。参数作用域和事件分支保留目标点；只有 `WithTarget` 明确重绑目标时才更新它。模块在调用它的参数作用域内复用绑定，每次调用使用当时的目标和位置。区域的周期动作可以复用绑定；一次弹射结束后，该跳的参数不会留在角色上。等待任务保留创建时的参数和位置。
+项目在 `SkillUnitServices.TargetRelations` 提供 `bool MatchesTeam(AbilitySourceIdentity source, AbilitySystemComponent target, TargetRelation relation)`。「不限」不查阵营；未接入服务时「友方／敌方」均不接纳目标。关系判断同样用于固定目标、范围查询和投射物命中；标签与已有的 `ITargetFilter` 仍然生效。关系服务拿到的是原施法者的代际标识；若投射物在单位被回收后仍需判敌，可按该标识保存队伍。用活动单位查队伍的项目遇到未知来源应返回 false。
 
-会回收施法者的项目应额外实现 `ITargetFilterSnapshot.Capture`，冻结本次施放的阵营数据；独立任务不会将回收后的 ASC 当作旧来源。普通 `ITargetFilter` 在来源失效后不再被调用，该查询不接纳目标；需要继续选敌时必须提供快照过滤器，避免向依赖来源对象的项目代码传 null。
+目标选择交互通过 `ISkillTargetSelection` 提供。目标点优先用本次施放传入的点（包括世界原点），否则取施放时的瞄准 Transform 位置；两者都缺失时，依赖目标点的动作会报错。参数作用域和事件分支保留目标点；`WithTarget` 提供新的 Transform 时更新它。模块在调用它的参数作用域内复用绑定，每次调用使用当时的目标和位置。等待任务保留创建时的参数和位置。
+
+如果还接入了依赖施法者的旧 `ITargetFilter`，可通过 `ITargetFilterSnapshot.Capture` 冻结过滤所需数据。普通 `ITargetFilter` 在来源失效后不再被调用，该查询不接纳目标。
 
 ## 共享与变体
 
