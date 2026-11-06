@@ -57,7 +57,7 @@ namespace ZFramework.GAS.Unity
     /// 编辑器按元素稳定 ID 绑定端口，数组可以安全排序；运行期在定义构造时排序一次。
     /// </summary>
     [CreateAssetMenu(menuName = "ZFramework GAS/Skill Animation", fileName = "NewSkillAnimation")]
-    public sealed class SkillAnimationAsset : ScriptableObject
+    public sealed class SkillAnimationAsset : ScriptableObject, IDefinitionAsset
     {
         public AnimationSection[] sections = Array.Empty<AnimationSection>();
         [SerializeReference] public SkillRuntimeTrack[] runtimeTracks = Array.Empty<SkillRuntimeTrack>();

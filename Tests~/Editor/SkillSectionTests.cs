@@ -127,7 +127,8 @@ namespace ZFramework.GAS.Editor.Tests
             using (var so = new SerializedObject(animation)) { so.FindProperty("clipName").stringValue = "Test"; so.FindProperty("duration").floatValue = 2; so.ApplyModifiedPropertiesWithoutUndo(); }
             var asset = New<GameplayAbilityAsset>(); using (var so = new SerializedObject(asset)) { so.FindProperty("animation").objectReferenceValue = animation; so.ApplyModifiedPropertiesWithoutUndo(); }
             var a = new AbilitySystemComponent(); var b = new AbilitySystemComponent(); a.Attributes.Add(new AttributeId(1), 10);
-            var one = new SkillRunner(a, () => new Driver()); var two = new SkillRunner(b, () => new Driver());
+            var one = new SkillRunner(a); var two = new SkillRunner(b);
+            new SkillTimelinePlayer(one, () => new Driver()); new SkillTimelinePlayer(two, () => new Driver());
             one.Grant(asset);
             one.TryCast(asset);two.Grant(asset);  two.TryCast(asset); a.Tick(1); b.Tick(.5f);
             Assert.AreEqual(2, one.GetExecution(asset).Channels["speed-id"], .001f);

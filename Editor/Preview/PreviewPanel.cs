@@ -161,7 +161,7 @@ namespace ZFramework.GAS.Editor
         private void Changed(ChangeSet change)
         {
             RefreshParameters();
-            _previewSections.Clear();if(_doc.Root?.Animation?.sections!=null)foreach(var s in _doc.Root.Animation.sections)if(s!=null)_previewSections.Add(s);
+            _previewSections.Clear();if(_doc.Root?.Animation()?.sections!=null)foreach(var s in _doc.Root.Animation().sections)if(s!=null)_previewSections.Add(s);
             var choices=new List<string>{"无"};foreach(var s in _previewSections)choices.Add(s.displayName+" · "+s.start.ToString("0.##")+"s");
             _sectionFrom.choices=choices;if(!choices.Contains(_sectionFrom.value))_sectionFrom.SetValueWithoutNotify("无");
             _tools?.Invalidate();
@@ -214,7 +214,7 @@ namespace ZFramework.GAS.Editor
             _cueWarning = null;
             if(_instance!=null)_error=null;
             if(_routes && _parameterOwner!=_doc.Root)RefreshParameters();
-            var animation = _doc.Root?.Animation;
+            var animation = _doc.Root?.Animation();
             if (_sampler != null && animation != null)
             {
                 try
@@ -223,7 +223,7 @@ namespace ZFramework.GAS.Editor
                     string clipName=animation.ClipName; AnimationClip direct=null;
                     bool acceptsClip=_source.GetComponentInChildren<SkillAnimator>(true)?.Backend is PlayableAnimationBackend;
                     if((_override!=null && _override.TryGet(clipName,out var replacement,acceptsClip)) ||
-                        (_doc.Root.clipOverrides!=null && _doc.Root.clipOverrides.TryGet(clipName,out replacement,acceptsClip))){ if(!string.IsNullOrEmpty(replacement.replacement))clipName=replacement.replacement; direct=replacement.clip;}
+                        (_doc.Root.ClipOverrides()!=null && _doc.Root.ClipOverrides().TryGet(clipName,out replacement,acceptsClip))){ if(!string.IsNullOrEmpty(replacement.replacement))clipName=replacement.replacement; direct=replacement.clip;}
                     float natural = animation.Duration;
                     foreach (var clip in clips) if (clip.Name == clipName) { natural = clip.Length; break; }
                     void Pose(float time)
@@ -341,9 +341,9 @@ namespace ZFramework.GAS.Editor
                 Pin(Vector3.zero,"施法者");
                 for(int i=0;i<_simulation.Targets.Count;i++)Pin(_simulation.Targets[i]+Vector3.up*(2*SkillPreviewSimulation.DummyRadius),"#"+(i+1));
             }
-            string caption = _error ?? _cueWarning ?? (_doc.Root?.Animation?.ClipName ?? "角色预览") + $"  @ {_doc.Playback.Time:0.00}s";
+            string caption = _error ?? _cueWarning ?? (_doc.Root?.Animation()?.ClipName ?? "角色预览") + $"  @ {_doc.Playback.Time:0.00}s";
             GUI.Label(new Rect(rect.x + 8, rect.y + 6, rect.width - 16, 22), caption, EditorStyles.whiteMiniLabel);
-            var animationAsset = _doc.Root?.Animation;
+            var animationAsset = _doc.Root?.Animation();
             if (animationAsset == null) return;
             var regions = _doc.Serialized(animationAsset).FindProperty("cueRegions"); int line = 0;
             for (int i = 0; i < regions.arraySize; i++)

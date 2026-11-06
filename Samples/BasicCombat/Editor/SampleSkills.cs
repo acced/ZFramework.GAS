@@ -37,7 +37,7 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
             AssetDatabase.CreateAsset(parameters, sharedFolder + "/斩击参数.asset");
             slash.parameters = Array.FindAll(slash.parameters, p => p.displayName == CooldownParameter); slash.parameterSet = parameters;
             var module = ScriptableObject.CreateInstance<SkillActionModuleAsset>(); module.parameters = parameters;
-            using (var so = new SerializedObject(slash.Animation))
+            using (var so = new SerializedObject(slash.Animation()))
             {
                 var actions = so.FindProperty("markers.Array.data[0].actions");
                 module.actions = new SkillAction[actions.arraySize];
@@ -54,9 +54,9 @@ namespace ZFramework.GAS.Samples.BasicCombat.Editor
                 if (parameter.displayName is NormalDamage or EmpoweredDamage) overrides.Add(new SkillParameterOverride { parameterId = parameter.Id, value = parameter.defaultValue * 1.5f });
             variant.parameterOverrides = overrides.ToArray();
             var axe = ScriptableObject.CreateInstance<SkillClipOverrideSet>();
-            axe.clips = new[] { new SkillClipOverrideSet.Entry { original = slash.Animation.ClipName, replacement = "Base Layer.AxeSlash" } };
+            axe.clips = new[] { new SkillClipOverrideSet.Entry { original = slash.Animation().ClipName, replacement = "Base Layer.AxeSlash" } };
             AssetDatabase.CreateAsset(axe, sharedFolder + "/斧劈替换表.asset");
-            variant.clipOverrides = axe;
+            variant.PresentationVariant = axe;
             AssetDatabase.CreateAsset(variant, sharedFolder + "/重斩变体.asset"); EditorUtility.SetDirty(slash);
         }
 

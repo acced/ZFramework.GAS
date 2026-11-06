@@ -66,7 +66,7 @@ namespace ZFramework.GAS.Editor.Tests
                 RuntimeDebugSession.Observe(hero);
                 Selection.activeGameObject = null; RuntimeDebugSession.Refresh();
                 Assert.AreSame(hero, RuntimeDebugSession.Observed, "Pinned unit is independent of selection");
-                var marker=editor.Document.Serialized(slash.Animation).FindProperty("markers.Array.data[0]");
+                var marker=editor.Document.Serialized(slash.Animation()).FindProperty("markers.Array.data[0]");
                 var call=(CallModuleAction)marker.FindPropertyRelative("actions.Array.data[0]").managedReferenceValue;
                 var condition=(ConditionalAction)call.module.actions[0];string normalId=condition.whenFalse[0].Id,strongId=condition.whenTrue[0].Id;
                 editor.Document.Selection.Select(call.module);editor.Document.OpenFlow();

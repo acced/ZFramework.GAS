@@ -1,7 +1,7 @@
 {
   "name": "ZFramework.GAS.Editor.Spine",
   "rootNamespace": "ZFramework.GAS.Editor.Spine",
-  "references": ["ZFramework.GAS.Editor", "ZFramework.GAS.Unity", "ZFramework.GAS.Unity.Spine", "spine-unity", "spine-csharp"],
+  "references": ["ZFramework.GAS.Editor", "ZFramework.GAS.Unity", "ZFramework.GAS.Unity.Realtime", "ZFramework.GAS.Unity.Spine", "spine-unity", "spine-csharp"],
   "includePlatforms": ["Editor"],
   "defineConstraints": ["GAS_SPINE"],
   "versionDefines": [

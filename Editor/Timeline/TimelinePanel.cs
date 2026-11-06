@@ -117,7 +117,7 @@ namespace ZFramework.GAS.Editor
             {
                 if (!_selecting) return; _selecting = false; _tracks.ReleasePointer(e.pointerId); _marquee.style.display = DisplayStyle.None;
                 var last = _elements.LastOrDefault(x => _selected.Contains(x.Key));
-                _doc.Selection.Select(_doc.Root?.Animation, last?.Track.PropertyPath, last?.Id);
+                _doc.Selection.Select(_doc.Root?.Animation(), last?.Track.PropertyPath, last?.Id);
             });
             _tracks.RegisterCallback<PointerCaptureOutEvent>(_ => { _selecting = false; _marquee.style.display = DisplayStyle.None; });
             RegisterCallback<KeyDownEvent>(OnKey);
@@ -125,8 +125,8 @@ namespace ZFramework.GAS.Editor
             doc.Changed += Rebuild; doc.Selection.Changed += SelectionChanged; doc.Playback.Changed += PlaybackChanged;
             doc.PreviewRangeChanged+=PreviewRangeChanged;
         }
-        private float Duration => ValidPositive(_doc.Root?.Animation?.Duration ?? 1, 1);
-        private float Fps => ValidPositive(_doc.Root?.Animation?.FrameRate ?? 30, 30);
+        private float Duration => ValidPositive(_doc.Root?.Animation()?.Duration ?? 1, 1);
+        private float Fps => ValidPositive(_doc.Root?.Animation()?.FrameRate ?? 30, 30);
         private static float ValidPositive(float value, float fallback) => value > 0 && !float.IsInfinity(value) ? value : fallback;
         private float TimeAt(float x) => TimelineMath.Time(x, _zoom, _offset);
         private void Seek(float time) { if (!_doc.Playback.Live) _doc.Playback.Seek(time, _doc.PlaybackDuration); }
@@ -135,7 +135,7 @@ namespace ZFramework.GAS.Editor
         public void Rebuild(ChangeSet change)
         {
             if (_dragging) { _rebuildPending = true; return; }
-            if (!change.Structure && change.Paths.Length > 0 && _animation == _doc.Root?.Animation)
+            if (!change.Structure && change.Paths.Length > 0 && _animation == _doc.Root?.Animation())
             {
                 if (change.Asset != _animation) return;
                 bool regroup = change.Paths.Any(path => path.Contains("cueTag") || path.EndsWith(".id", StringComparison.Ordinal));
@@ -160,7 +160,7 @@ namespace ZFramework.GAS.Editor
             }
             _rebuildPending = false;
             _elements.Clear(); _rows.Clear(); _tracks.Clear(); _clipRow.Clear(); _ramps = null; _clipCaption = null;
-            var animation = _doc.Root?.Animation;
+            var animation = _doc.Root?.Animation();
             if (_animation != animation) { _foldedCues.Clear(); _selected.Clear(); _animation = animation; }
             if (animation == null)
             {
@@ -481,11 +481,11 @@ namespace ZFramework.GAS.Editor
                 {
                     _selected.Remove(element.Key);
                     var last = _elements.LastOrDefault(x => _selected.Contains(x.Key));
-                    _doc.Selection.Select(_doc.Root.Animation, last?.Track.PropertyPath, last?.Id);
+                    _doc.Selection.Select(_doc.Root.Animation(), last?.Track.PropertyPath, last?.Id);
                     SelectionChanged(); e.StopPropagation(); return;
                 }
                 _selected.Add(element.Key);
-                _doc.Selection.Select(_doc.Root.Animation, element.Track.PropertyPath, element.Id);
+                _doc.Selection.Select(_doc.Root.Animation(), element.Track.PropertyPath, element.Id);
                 if (e.clickCount == 2 && element.Track.PropertyPath == "markers") { _doc.OpenFlow(); e.StopPropagation(); return; }
                 moved = _elements.Where(x => _selected.Contains(x.Key)).ToArray();
                 origin = e.position.x; delta = 0; dragging = true; _dragging = true;
@@ -517,12 +517,12 @@ namespace ZFramework.GAS.Editor
             {
                 if (!dragging) return; dragging = false; _dragging = false; _dragSpans.Clear(); element.View.ReleasePointer(e.pointerId);
                 if (!float.IsFinite(delta) || Mathf.Abs(delta) < .00001f) { FinishDrag(); return; }
-                var data=_doc.Serialized(_doc.Root.Animation);
+                var data=_doc.Serialized(_doc.Root.Animation());
                 var paths=moved.Select(item=>{
                     var p=TimelineCommands.Find(data,item.Track.PropertyPath,item.Id);
                     return p?.propertyPath+(item.Track.Shape==TrackElementShape.Point?".time":resize>0?".end":".start");
                 }).ToArray();
-                EditCommand.Run(_doc, "移动时间轴元素", _doc.Root.Animation, so =>
+                EditCommand.Run(_doc, "移动时间轴元素", _doc.Root.Animation(), so =>
                 {
                     foreach (var item in moved)
                     {
@@ -613,7 +613,7 @@ namespace ZFramework.GAS.Editor
         {
             var groups = _elements.Where(e => _selected.Contains(e.Key)).GroupBy(e => e.Track.PropertyPath).ToArray();
             if (groups.Length == 0) return;
-            EditCommand.Run(_doc, "删除时间轴元素", _doc.Root.Animation, so =>
+            EditCommand.Run(_doc, "删除时间轴元素", _doc.Root.Animation(), so =>
             {
                 foreach (var group in groups)
                 {
@@ -622,24 +622,24 @@ namespace ZFramework.GAS.Editor
                         if (ids.Contains(array.GetArrayElementAtIndex(i).FindPropertyRelative("id").stringValue)) array.DeleteArrayElementAtIndex(i);
                 }
             }, true);
-            _doc.Selection.Select(_doc.Root.Animation);
+            _doc.Selection.Select(_doc.Root.Animation());
             _selected.Clear();
         }
         private void Copy()
         {
-            if (_doc.Root?.Animation == null) return;
+            if (_doc.Root?.Animation() == null) return;
             var items = _elements.Where(e => _selected.Contains(e.Key)).ToArray(); if (items.Length == 0) return;
-            _clipboard = EditorJsonUtility.ToJson(_doc.Root.Animation); _copyIds = items.Select(e => (e.Track.PropertyPath, e.Id)).ToArray(); _copyOrigin = items.Min(e => e.Start);
+            _clipboard = EditorJsonUtility.ToJson(_doc.Root.Animation()); _copyIds = items.Select(e => (e.Track.PropertyPath, e.Id)).ToArray(); _copyOrigin = items.Min(e => e.Start);
         }
         private void Paste()
         {
-            if (_clipboard == null || _doc.Root?.Animation == null) return;
+            if (_clipboard == null || _doc.Root?.Animation() == null) return;
             var temp = ScriptableObject.CreateInstance<SkillAnimationAsset>();
             try
             {
                 EditorJsonUtility.FromJsonOverwrite(_clipboard, temp);
                 using var source = new SerializedObject(temp);
-                EditCommand.Run(_doc, "粘贴时间轴元素", _doc.Root.Animation, so =>
+                EditCommand.Run(_doc, "粘贴时间轴元素", _doc.Root.Animation(), so =>
                 {
                     foreach (var item in _copyIds)
                     {
@@ -657,7 +657,7 @@ namespace ZFramework.GAS.Editor
         }
         private void OnKey(KeyDownEvent e)
         {
-            if (e.target is TextElement || e.target is TextField || _doc.Root?.Animation == null) return;
+            if (e.target is TextElement || e.target is TextField || _doc.Root?.Animation() == null) return;
             switch (e.keyCode)
             {
                 case KeyCode.Space: TogglePlay(); break;
@@ -669,7 +669,7 @@ namespace ZFramework.GAS.Editor
                 case KeyCode.M: Add(TrackTypeRegistry.Get("markers")); break;
                 case KeyCode.R:
                     if (_rangeStartId == null) _rangeStartId = TimelineCommands.Add(_doc, TrackTypeRegistry.Get("cueRegions"), _doc.Playback.Time);
-                    else { EditCommand.Run(_doc, "设置区间终点", _doc.Root.Animation, so => { var p = TimelineCommands.Find(so, "cueRegions", _rangeStartId); if (p != null) p.FindPropertyRelative("end").floatValue = Mathf.Max(p.FindPropertyRelative("start").floatValue, _doc.Playback.Time); }); _rangeStartId = null; }
+                    else { EditCommand.Run(_doc, "设置区间终点", _doc.Root.Animation(), so => { var p = TimelineCommands.Find(so, "cueRegions", _rangeStartId); if (p != null) p.FindPropertyRelative("end").floatValue = Mathf.Max(p.FindPropertyRelative("start").floatValue, _doc.Playback.Time); }); _rangeStartId = null; }
                     break;
                 case KeyCode.Delete: case KeyCode.Backspace: DeleteSelection(); break;
                 case KeyCode.C: if (e.ctrlKey) Copy(); else return; break;

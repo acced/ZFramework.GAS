@@ -310,7 +310,7 @@ namespace ZFramework.GAS.Editor
             _graph.SetLive(_liveAssets);
             RuntimeSnapshot.Animation match = null;
             foreach (var task in snapshot.Tasks)
-                if (_doc.Root != null && task.Asset != null && task.Asset == _doc.Root.Animation &&
+                if (_doc.Root != null && task.Asset != null && task.Asset == _doc.Root.Animation() &&
                     (match == null || task.AbilityAsset == _doc.Root)) match = task;
             _doc.Playback.Live = match != null;
             if (match != null) _doc.Playback.Seek(match.AuthoredTime, match.Definition.Duration);

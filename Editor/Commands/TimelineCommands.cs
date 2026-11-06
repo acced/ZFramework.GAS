@@ -40,7 +40,7 @@ namespace ZFramework.GAS.Editor
         }
         public static string Add(SkillDocument doc, ITrackType track, float time, UnityEngine.Object dropped = null, string cueTag = null)
         {
-            var animation = doc.Root?.Animation;
+            var animation = doc.Root?.Animation();
             if (animation == null) { doc.Report("先添加动画，再编辑时间轴"); return null; }
             string id = null;
             EditCommand.Run(doc, "添加" + track.DisplayName, animation, so =>
@@ -57,13 +57,13 @@ namespace ZFramework.GAS.Editor
         public static void Delete(SkillDocument doc, string track, IEnumerable<string> ids)
         {
             var set = new HashSet<string>(ids);
-            EditCommand.Run(doc, "删除时间轴元素", doc.Root.Animation, so =>
+            EditCommand.Run(doc, "删除时间轴元素", doc.Root.Animation(), so =>
             {
                 var array = so.FindProperty(track);
                 for (int i = array.arraySize - 1; i >= 0; i--)
                     if (set.Contains(array.GetArrayElementAtIndex(i).FindPropertyRelative("id").stringValue)) array.DeleteArrayElementAtIndex(i);
             }, true, track);
-            doc.Selection.Select(doc.Root.Animation);
+            doc.Selection.Select(doc.Root.Animation());
         }
     }
 }

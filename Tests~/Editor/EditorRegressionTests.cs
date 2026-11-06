@@ -140,14 +140,14 @@ namespace ZFramework.GAS.Editor.Tests
         [Test]
         public void VariantCopiesOwnedGraphAndKeepsSharedReferences()
         {
-            new MeleeTemplate().Build(_ability); var sourceAnimation = _ability.Animation;
+            new MeleeTemplate().Build(_ability); var sourceAnimation = _ability.Animation();
             var external = ScriptableObject.CreateInstance<GameplayEffectAsset>(); AssetDatabase.CreateAsset(external, Folder + "/Shared.asset");
             Edit(_ability, so => so.FindProperty("cost").objectReferenceValue = external); AssetDatabase.SaveAssets();
             var copy = SkillAssetFactory.Duplicate(_ability, Folder + "/Variant.asset");
-            Assert.AreNotSame(sourceAnimation, copy.Animation);
-            Assert.AreEqual(Folder + "/Variant.asset", AssetDatabase.GetAssetPath(copy.Animation));
+            Assert.AreNotSame(sourceAnimation, copy.Animation());
+            Assert.AreEqual(Folder + "/Variant.asset", AssetDatabase.GetAssetPath(copy.Animation()));
             using var copied = new SerializedObject(copy); Assert.AreEqual(external, copied.FindProperty("cost").objectReferenceValue);
-            Assert.AreEqual(Folder + "/Variant.asset", AssetDatabase.GetAssetPath(PortRules.Links(copy.Animation).Single().Child));
+            Assert.AreEqual(Folder + "/Variant.asset", AssetDatabase.GetAssetPath(PortRules.Links(copy.Animation()).Single().Child));
         }
         [Test]
         public void EmbedPreservesReferencesAndUndo()
@@ -565,13 +565,13 @@ namespace ZFramework.GAS.Editor.Tests
         public IEnumerator AutoArrangeWaitsForTallNodesAndExplicitlyReplacesSavedLayout()
         {
             new MeleeTemplate().Build(_ability); _doc.Notify(new ChangeSet(_ability, true));
-            SetRanges(_ability.Animation, "cueRegions", Enumerable.Range(0, 10).Select(i => ("c" + i, "Cue.Tall" + i, .1f, .9f)).ToArray());
+            SetRanges(_ability.Animation(), "cueRegions", Enumerable.Range(0, 10).Select(i => ("c" + i, "Cue.Tall" + i, .1f, .9f)).ToArray());
             foreach (var asset in _doc.Assets) _doc.Layout.SetPosition(asset, new Vector2(40, 50)); _doc.Layout.Save();
             var window = SkillEditorWindow.Open(); window.Show(_ability);
             var graph = window.rootVisualElement.Q<SkillGraphView>(); graph.AutoArrange(); // 故意在首轮布局前调用。
             yield return WaitForGraph(window, () => graph.nodes.All(n => n.layout.height > 0) && !GraphHasOverlaps(graph));
             Assert.IsFalse(GraphHasOverlaps(graph));
-            Assert.Greater(graph.nodes.First(n => n.title == _ability.Animation.name).layout.height, 300);
+            Assert.Greater(graph.nodes.First(n => n.title == _ability.Animation().name).layout.height, 300);
             Assert.Greater(graph.nodes.Select(n => n.GetPosition().x).Distinct().Count(), 1);
         }
         [Test]
@@ -601,7 +601,7 @@ namespace ZFramework.GAS.Editor.Tests
             var path = AssetDatabase.GetAssetPath(_ability);
             AssetDatabase.SaveAssetIfDirty(_ability);
             AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
-            var saved = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(path).Animation;
+            var saved = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(path).Animation();
             Assert.AreEqual(24, saved.FrameRate);
             var def = saved.Definition;
             Assert.AreEqual("Swing", def.ClipName);
@@ -620,7 +620,7 @@ namespace ZFramework.GAS.Editor.Tests
             foreach (var template in SkillTemplateRegistry.Templates)
             {
                 var ability = SkillTemplateRegistry.Create(Folder + "/Template" + index++ + ".asset", template);
-                Assert.IsNotNull(ability.Animation); Assert.IsTrue(AssetDatabase.IsSubAsset(ability.Animation));
+                Assert.IsNotNull(ability.Animation()); Assert.IsTrue(AssetDatabase.IsSubAsset(ability.Animation()));
             }
             Assert.That(SkillTemplateRegistry.Templates.Select(t => t.GetType()),
                 Is.SupersetOf(new[] { typeof(MeleeTemplate), typeof(ProjectileTemplate), typeof(BuffTemplate),
@@ -640,10 +640,10 @@ namespace ZFramework.GAS.Editor.Tests
             template.Build(_ability);
             var caster = new AbilitySystemComponent(); var target = new AbilitySystemComponent();
             var hp = target.Attributes.Add(new AttributeId(1), 100);
-            var runner = new SkillRunner(caster, () => new TemplateClock());
+            var runner = new SkillRunner(caster); new SkillTimelinePlayer(runner, () => new TemplateClock());
             runner.Grant(_ability);
             Assert.AreEqual(AbilityActivationResult.Activated, runner.TryCast(_ability, new SkillCastTarget(target)));
-            caster.Tick(_ability.Animation.Definition.Markers.Single().Time + .01f);
+            caster.Tick(_ability.Animation().Definition.Markers.Single().Time + .01f);
             caster.Tick(.5f); target.Tick(.5f);
             Assert.AreEqual(95, hp.CurrentValue, "两种模板在打断前都应已结算一次。");
             Assert.IsTrue(runner.Cancel(_ability));
@@ -656,7 +656,7 @@ namespace ZFramework.GAS.Editor.Tests
             new MeleeTemplate().Build(_ability); var window = SkillEditorWindow.Open(); window.Show(_ability);
             yield return null; yield return null; Assert.AreEqual(5, window.NodeCount);
             var graph = window.rootVisualElement.Q<SkillGraphView>(); var before = graph.nodes.ToList();
-            EditCommand.Run(window.Document, "修改时长", _ability.Animation, so => so.FindProperty("duration").floatValue = 1.5f);
+            EditCommand.Run(window.Document, "修改时长", _ability.Animation(), so => so.FindProperty("duration").floatValue = 1.5f);
             yield return null; CollectionAssert.AreEquivalent(before, graph.nodes.ToList()); window.Close();
         }
         [UnityTest]

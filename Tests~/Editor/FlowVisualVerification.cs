@@ -18,9 +18,9 @@ namespace ZFramework.GAS.Editor.Tests
             var skill=AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>("Assets/GAS Samples/BasicCombat/Skills/斩击.asset");
             if(skill==null)throw new InvalidOperationException("生成示例后再验证流程图。");
             _w=ScriptableObject.CreateInstance<SkillEditorWindow>();_w.ShowUtility();_w.position=new Rect(10,30,1420,820);_w.Show(skill);
-            var marker=_w.Document.Serialized(skill.Animation).FindProperty("markers").GetArrayElementAtIndex(0);
-            _w.Document.Selection.Select(skill.Animation,"markers",marker.FindPropertyRelative("id").stringValue);_w.Document.OpenFlow();
-            _w.Document.Playback.Seek(.32f,skill.Animation.Duration);_stage=0;_due=EditorApplication.timeSinceStartup+1;EditorApplication.update+=Step;
+            var marker=_w.Document.Serialized(skill.Animation()).FindProperty("markers").GetArrayElementAtIndex(0);
+            _w.Document.Selection.Select(skill.Animation(),"markers",marker.FindPropertyRelative("id").stringValue);_w.Document.OpenFlow();
+            _w.Document.Playback.Seek(.32f,skill.Animation().Duration);_stage=0;_due=EditorApplication.timeSinceStartup+1;EditorApplication.update+=Step;
         }
         private static void Step()
         {
@@ -55,11 +55,11 @@ namespace ZFramework.GAS.Editor.Tests
                 if(_stage==1)
                 {
                     var doc=_w.Document;
-                    var action=(CallModuleAction)doc.Serialized(doc.Root.Animation).FindProperty("markers.Array.data[0].actions.Array.data[0]").managedReferenceValue;
+                    var action=(CallModuleAction)doc.Serialized(doc.Root.Animation()).FindProperty("markers.Array.data[0].actions.Array.data[0]").managedReferenceValue;
                     doc.Selection.Select(action.module);doc.OpenFlow();
                     var toggles=_w.rootVisualElement.Q<PreviewPanel>().Query<Toggle>().ToList();
                     toggles.First(t=>t.label=="假人").value=true;toggles.First(t=>t.label=="范围").value=true;
-                    doc.Playback.Seek(.37f,doc.Root.Animation.Duration);
+                    doc.Playback.Seek(.37f,doc.Root.Animation().Duration);
                     _stage=2;_due=EditorApplication.timeSinceStartup+.5;return;
                 }
                 EditorApplication.update-=Step;_w.Close();EditorApplication.Exit(0);

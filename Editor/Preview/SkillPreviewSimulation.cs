@@ -136,7 +136,7 @@ namespace ZFramework.GAS.Editor
             SkillParameterOverride[] castOverrides=null,bool routes=false)
         {
             SetupDummies(prefab, count);
-            _hit.Clear();_legs.Clear();_points.Clear();End=doc.Root?.Animation?.Duration??0;
+            _hit.Clear();_legs.Clear();_points.Clear();End=doc.Root?.Animation()?.Duration??0;
             for(int i=0;i<_units.Count;i++){_units[i].SetActive(i<count); if(i<count){var p=Position(layout,i,count,distance);_points.Add(p);_units[i].transform.position=caster.TransformPoint(p)+(prefab==null?Vector3.up*DummyRadius:Vector3.zero);}}
             if(doc.Root==null || (count==0 && !showEffects && !showRanges))return;
             SetTags(_sourceTags, SourceTags, ref _lastSourceTags);
@@ -150,7 +150,7 @@ namespace ZFramework.GAS.Editor
             _ctx.HitPoint=null; _ctx.Chain=default; _ctx.Records.Clear();
 
             foreach(var a in root.activationActions) Visit(a,0,values,1);
-            var markers=root.Animation!=null?doc.Serialized(root.Animation).FindProperty("markers"):null;
+            var markers=root.Animation()!=null?doc.Serialized(root.Animation()).FindProperty("markers"):null;
             for(int i=0;i<(markers?.arraySize??0);i++)
             {
                 var m=markers.GetArrayElementAtIndex(i);float at=m.FindPropertyRelative("time").floatValue;
@@ -315,7 +315,7 @@ namespace ZFramework.GAS.Editor
         private void VisitArea(CreateAreaAction a,float at,EffectEvaluationContext v,int depth,float age)
         {
             var ctx=_ctx; float now=ctx.Now;
-            float life=a.duration.Resolve(v); if(life<=0)life=Mathf.Max(0,(ctx.Root.Animation?.Duration??now)-at); End=Mathf.Max(End,at+life);
+            float life=a.duration.Resolve(v); if(life<=0)life=Mathf.Max(0,(ctx.Root.Animation()?.Duration??now)-at); End=Mathf.Max(End,at+life);
             if(age<0 || age>life)return;
             var q=a.targets.Build();
             if (ctx.Origin(q.EffectiveOrigin) is not Vector3 center) return;

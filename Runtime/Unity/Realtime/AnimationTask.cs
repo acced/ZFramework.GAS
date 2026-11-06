@@ -97,10 +97,10 @@ namespace ZFramework.GAS.Unity
             Array.Clear(_trackDone,0,_trackDone.Length);
             if(taskContext==null)_taskContext=null;
             else if(_taskContext==null)_taskContext=taskContext.Snapshot();
-            else {_taskContext.CopyFrom(taskContext);_taskContext.Execution=taskContext.Execution;}
+            else {_taskContext.CopyFrom(taskContext, includeExecution: true);}
             if(driver is IBoneWeightDriver bones) bones.SetNextBoneWeights(definition.BoneWeights);
             if (driver is ISkillLayerDriver layered) layered.ConfigureNextLayer(definition.Mask, definition.Additive, definition.LayerWeight);
-            string playClip = SkillAnimator.ResolveClip(driver, definition.ClipName, taskContext?.Execution?.Asset?.clipOverrides);
+            string playClip = SkillAnimator.ResolveClip(driver, definition.ClipName, taskContext?.Execution?.Asset?.ClipOverrides());
             float played = driver is AnimatorAnimationDriver animator && definition.Sections.Count > 0
                 ? animator.PlayAt(playClip, durationOverride, definition.Loop, definition.BlendIn, definition.Sections[0].Start / definition.Duration)
                 : driver is IAdvancedBlendingDriver advanced
@@ -150,7 +150,8 @@ namespace ZFramework.GAS.Unity
                 _taskContext = execution.Services;
             }
             _taskContext?.Execution?.Retain();
-            if (_taskContext?.Execution!=null && _driver is ISkillRigService rig) _taskContext.Execution.Services.Rig??=rig;
+            if (_taskContext?.Execution!=null && _driver is ISkillRigService rig && _taskContext.Execution.Services.Get<ISkillRigService>()==null)
+                _taskContext.Execution.Services.Set<ISkillRigService>(rig);
             for (int i = 0; i < _trackHandlers.Length; i++) _trackHandlers[i] = _definition.RuntimeTracks[i].Create(_taskContext.Execution);
             if (_definition.Sections.Count > 0) JumpToSection(_definition.Sections[0].Id);
         }
@@ -211,8 +212,8 @@ namespace ZFramework.GAS.Unity
             if (!(jumping && transition.duration > 0 && _driver is IAdvancedBlendingDriver advanced &&
                 (advanced.Capabilities & AnimationBlendCapabilities.SeekBlend) != 0 && advanced.SeekBlend(NormalizedTime, transition)))
             {
-                if (_driver is ISeekableAnimationDriver seekable) seekable.Seek(NormalizedTime);
-                else _driver.Advance(NormalizedTime);
+                if (!jumping && _driver is PlayableAnimationDriver playable) playable.SetEntryTime(NormalizedTime);
+                else if ((jumping || _driver is not AnimatorAnimationDriver) && _driver is ISeekableAnimationDriver seekable) seekable.Seek(NormalizedTime);
                 else _driver.Advance(NormalizedTime);
             }
             if (!IsActive || version != _jumpVersion) return false;
@@ -227,7 +228,7 @@ namespace ZFramework.GAS.Unity
 
         protected override void OnTick(float deltaTime)
         {
-                float scale = HitStopLease.Scale(Ability.Owner,_taskContext?.Time);
+                float scale = HitStopLease.Scale(Ability.Owner,_taskContext?.Get<ISkillTimeService>());
                 if (!(scale >= 0) || !float.IsFinite(scale)) throw new InvalidOperationException("局部动画速度必须是有限非负数。");
                 if (_driver is ISkillAnimationSpeed speed) speed.SetLocalScale(scale);
                 Tick(deltaTime * scale);
@@ -378,7 +379,8 @@ namespace ZFramework.GAS.Unity
                         break;
                     case 2:
                         var marker = _definition.Markers[b.Index];
-                        SkillActionDebug.Marker(_taskContext?.Execution,marker);
+                        var markerContext = _taskContext?.Execution;
+                        if (markerContext != null) SkillActionDebug.Point(markerContext, marker.Id, marker.Key ?? "标记");
                         if (!IsActive || version != _jumpVersion) return false;
                         if (marker.Actions != null && marker.Actions.Count > 0)
                         {

@@ -78,7 +78,7 @@ namespace ZFramework.GAS.Unity
     /// 每次返回新实例会让同一资产施加的效果互不堆叠。
     /// </summary>
     [CreateAssetMenu(menuName = "ZFramework GAS/Gameplay Effect", fileName = "NewGameplayEffect")]
-    public sealed class GameplayEffectAsset : ScriptableObject
+    public sealed class GameplayEffectAsset : ScriptableObject, IDefinitionAsset
     {
         [Header("时长")]
         [SerializeField] private EffectDurationPolicy durationPolicy = EffectDurationPolicy.Instant;

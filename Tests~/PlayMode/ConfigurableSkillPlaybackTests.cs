@@ -87,7 +87,7 @@ namespace ZFramework.GAS.Tests
                 Assert.IsTrue(hero.AbilitySystem.OwnedTags.HasTag(GameplayTags.GameplayTagManager.RequestTag(SampleTags.Empowered)));
                 float before = target.Get(CombatUnit.Health); arena.Cast(0); yield return new WaitForSeconds(.6f);
                 Assert.Greater(before - target.Get(CombatUnit.Health), health - before, "Empowered branch should do greater damage");
-                arena.Cast(1); yield return new WaitForSeconds(Skill("分叉闪电").Animation.Duration + .1f);
+                arena.Cast(1); yield return new WaitForSeconds(Skill("分叉闪电").Animation().Duration + .1f);
                 var host = SceneSkillTaskHost.For(scene);
                 Assert.IsFalse(hero.SkillRunner.IsActive(Skill("分叉闪电")));
                 Assert.Greater(host.Tasks.Count, 0, "Slow projectile must still be in flight after animation ends");
@@ -102,7 +102,7 @@ namespace ZFramework.GAS.Tests
                 Assert.AreEqual(enemyBefore, target.Get(CombatUnit.Health), "同一范围内受伤的敌人不应被圣域治疗。");
                 Assert.IsTrue(hero.SkillRunner.Cancel(Skill("圣域引导")));
                 Assert.IsFalse(hero.AbilitySystem.OwnedTags.HasTag(GameplayTags.GameplayTagManager.RequestTag(SampleTags.Channeling)));
-                arena.Cast(4); yield return new WaitForSeconds(Skill("召唤").Animation.Duration + .2f);
+                arena.Cast(4); yield return new WaitForSeconds(Skill("召唤").Animation().Duration + .2f);
                 Assert.IsFalse(hero.SkillRunner.IsActive(Skill("召唤"))); Assert.GreaterOrEqual(host.Tasks.Count, 2, "Summon and its area are scene owned");
                 Assert.IsTrue(scene.GetRootGameObjects().Any(go => go.name.StartsWith("Guardian")));
             }

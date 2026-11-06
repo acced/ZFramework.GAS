@@ -59,8 +59,8 @@ namespace ZFramework.GAS.Editor.Tests
         [Test]
         public void CastReportsAssetMarkerAndEndsOnCompletion()
         {
-            var owner = new AbilitySystemComponent(); var driver = new Driver(); var runner = new SkillRunner(owner, () => driver); var skill = Skill();
-            int hits = 0; runner.MarkerReached += (asset, marker) => { Assert.AreSame(skill, asset); Assert.AreEqual("召唤", marker.Key); hits++; };
+            var owner = new AbilitySystemComponent(); var driver = new Driver(); var runner = new SkillRunner(owner); var timeline = new SkillTimelinePlayer(runner, () => driver); var skill = Skill();
+            int hits = 0; timeline.MarkerReached += (asset, marker) => { Assert.AreSame(skill, asset); Assert.AreEqual("召唤", marker.Key); hits++; };
             runner.Grant(skill);
             Assert.AreEqual(AbilityActivationResult.Activated, runner.TryCast(skill));
             Assert.AreEqual(AbilityActivationResult.AlreadyActive, runner.TryCast(skill)); Assert.AreEqual(1, driver.Plays);
@@ -71,7 +71,8 @@ namespace ZFramework.GAS.Editor.Tests
         public void SharedAssetHasSeparateSpecsAndCooldownPerOwner()
         {
             var skill = Skill(cooldown: true); var a = new AbilitySystemComponent(); var b = new AbilitySystemComponent();
-            var da = new Driver(); var db = new Driver(); var ra = new SkillRunner(a, () => da); var rb = new SkillRunner(b, () => db);
+            var da = new Driver(); var db = new Driver(); var ra = new SkillRunner(a); var rb = new SkillRunner(b);
+            new SkillTimelinePlayer(ra, () => da); new SkillTimelinePlayer(rb, () => db);
             ra.Grant(skill);
             ra.TryCast(skill); Assert.IsFalse(rb.IsActive(skill));rb.Grant(skill);  Assert.AreEqual(AbilityActivationResult.Activated, rb.TryCast(skill));
             a.Tick(1); Assert.IsFalse(ra.IsActive(skill)); Assert.IsTrue(rb.IsActive(skill));
@@ -81,17 +82,17 @@ namespace ZFramework.GAS.Editor.Tests
         [Test]
         public void MarkerCanCancelAndLoopDoesNotAutoEnd()
         {
-            var owner = new AbilitySystemComponent(); var driver = new Driver(); var runner = new SkillRunner(owner, () => driver); var skill = Skill(loop: true);
+            var owner = new AbilitySystemComponent(); var driver = new Driver(); var runner = new SkillRunner(owner); var timeline = new SkillTimelinePlayer(runner, () => driver); var skill = Skill(loop: true);
             runner.Grant(skill);
             runner.TryCast(skill); owner.Tick(1.2f); Assert.IsTrue(runner.IsActive(skill));
-            runner.MarkerReached += (asset, _) => runner.Cancel(asset);
+            timeline.MarkerReached += (asset, _) => runner.Cancel(asset);
             owner.Tick(.4f); Assert.IsFalse(runner.IsActive(skill)); Assert.AreEqual(1, driver.Stops);
         }
         [Test] public void WarmTimelineReusesBuffersAndRescalesBoundariesFromAuthoredTime()
         {
-            var owner=new AbilitySystemComponent();var driver=new Driver();var runner=new SkillRunner(owner,()=>driver);var skill=Skill();runner.Grant(skill);
-            int hits=0;runner.MarkerReached+=(_,__)=>hits++;
-            void Cast(float duration){runner.TryCast(skill,durationOverride:duration);owner.Tick(duration*.51f);owner.Tick(duration*.5f);}
+            var owner=new AbilitySystemComponent();var driver=new Driver();var runner=new SkillRunner(owner);var timeline=new SkillTimelinePlayer(runner,()=>driver);var skill=Skill();runner.Grant(skill);
+            int hits=0;timeline.MarkerReached+=(_,__)=>hits++;
+            void Cast(float duration){timeline.TryCast(skill,null,null,duration);owner.Tick(duration*.51f);owner.Tick(duration*.5f);}
             Cast(1);Cast(2);Assert.AreEqual(2,hits);
             Assert.IsTrue(AllocationMeter.Works());using var meter=new AllocationMeter();
             for(int i=0;i<1000;i++)Cast((i&1)+1);

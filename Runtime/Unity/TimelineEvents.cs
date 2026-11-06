@@ -40,11 +40,31 @@ namespace ZFramework.GAS.Unity
         public GameplayTaskHost SceneTasks;
         public UnityEngine.SceneManagement.Scene Scene;
 
+        // 扩展服务（镜头、音效、回合队列……）按接口类型存取，基础层不需要认识它们。
+        // 写时复制：施放分支覆盖某个服务时，不会改到单位共享的那一份，也不必在每次分支时分配。
+        private System.Collections.Generic.Dictionary<Type, object> _extensions;
+        private bool _extensionsShared;
+        public T Get<T>() where T : class
+            => _extensions != null && _extensions.TryGetValue(typeof(T), out var service) ? (T)service : null;
+        public void Set<T>(T service) where T : class
+        {
+            if (_extensions == null) _extensions = new System.Collections.Generic.Dictionary<Type, object>();
+            else if (_extensionsShared) _extensions = new System.Collections.Generic.Dictionary<Type, object>(_extensions);
+            _extensionsShared = false;
+            if (service == null) _extensions.Remove(typeof(T)); else _extensions[typeof(T)] = service;
+        }
+        internal void ShareExtensionsWith(SkillUnitServices copy)
+        {
+            copy._extensions = _extensions;
+            copy._extensionsShared = _extensionsShared = _extensions != null;
+        }
+
         internal void CopyServicesFrom(SkillUnitServices source)
         {
             Origin = source.Origin; LaunchPoint = source.LaunchPoint; Searcher = source.Searcher;
             TargetFilter = source.TargetFilter; TargetRelations = source.TargetRelations; Objects = source.Objects;
             TargetSelection = source.TargetSelection; SceneTasks = source.SceneTasks; Scene = source.Scene;
+            source.ShareExtensionsWith(this);
         }
     }
 
@@ -77,14 +97,20 @@ namespace ZFramework.GAS.Unity
         }
         internal bool FilterHasSnapshot;
         public SkillExecutionContext Execution { get; internal set; }
-        public TimelineTaskContext Snapshot() => (TimelineTaskContext)MemberwiseClone();
+        public TimelineTaskContext Snapshot()
+        {
+            var copy = (TimelineTaskContext)MemberwiseClone();
+            ShareExtensionsWith(copy);
+            return copy;
+        }
         internal void RebindTarget(Transform target)
         { Target = target; if (target != null) TargetPosition = target.position; }
-        internal void CopyFrom(TimelineTaskContext source)
+        public void CopyFrom(TimelineTaskContext source, bool includeExecution = false)
         {
             CopyServicesFrom(source);
             Target = source.Target; _targetPosition = source._targetPosition;
             HasTargetPosition = source.HasTargetPosition; FilterHasSnapshot = source.FilterHasSnapshot;
+            if (includeExecution) Execution = source.Execution;
         }
     }
 

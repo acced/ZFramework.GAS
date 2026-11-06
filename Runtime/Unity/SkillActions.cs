@@ -74,7 +74,8 @@ namespace ZFramework.GAS.Unity
             throw new InvalidOperationException("缺少参数: " + id);
         }
         public SkillActionBuildContext(ScriptableObject owner = null) { _owner = owner; }
-        internal SkillActionBuildContext(ScriptableObject owner,HashSet<string> entryIds) { _owner=owner;_entryIds=entryIds; }
+        /// <param name="entryIds">多个入口（例如时间轴上的多个事件）共用的动作 ID 集合，用于跨入口查重。</param>
+        public SkillActionBuildContext(ScriptableObject owner,HashSet<string> entryIds) { _owner=owner;_entryIds=entryIds; }
         public void Number(SkillNumber number, float min = float.MinValue, float max = float.MaxValue, bool integer = false)
         {
             if (!string.IsNullOrEmpty(number.parameterId)) {

@@ -55,7 +55,7 @@ namespace ZFramework.GAS.Unity
             private readonly float _volume; private readonly bool _spatial, _loop; private IDisposable _sound;
             public Handler(SkillExecutionContext context, AudioClip clip, float volume, bool spatial, bool loop)
             { _context = context; _clip = clip; _volume = volume; _spatial = spatial; _loop = loop; }
-            public void Enter() => _sound = (_context.Services.Audio ?? DefaultSkillAudioService.Instance).Play(_clip, _context.Position, _volume, _spatial, _loop, _context.Services.Scene);
+            public void Enter() => _sound = (_context.Services.Get<ISkillAudioService>() ?? DefaultSkillAudioService.Instance).Play(_clip, _context.Position, _volume, _spatial, _loop, _context.Services.Scene);
             public void Sample(float localTime, float normalizedTime) { }
             public void Exit() { var sound = _sound; _sound = null; sound?.Dispose(); }
             public void Cancel() => Exit();

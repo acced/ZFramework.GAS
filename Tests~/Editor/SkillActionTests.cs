@@ -95,7 +95,7 @@ namespace ZFramework.GAS.Editor.Tests
             return effect;
         }
         private static SkillRunner Granted(AbilitySystemComponent owner, Func<IAnimationDriver> driver, GameplayAbilityAsset skill)
-        { var runner = new SkillRunner(owner, driver); runner.Grant(skill); return runner; }
+        { var runner = new SkillRunner(owner); if (driver != null) new SkillTimelinePlayer(runner, driver); runner.Grant(skill); return runner; }
         private GameplayAbilityAsset Skill(params SkillAction[] actions)
         { var skill = New<GameplayAbilityAsset>(); skill.activationActions = actions; return skill; }
         private TimelineTaskContext Services(Transform origin, Transform target = null, Pool pool = null)
@@ -110,7 +110,7 @@ namespace ZFramework.GAS.Editor.Tests
             var enemy = Unit("enemy", Vector3.forward); Physics.SyncTransforms();
             var services = new SkillUnitServices { Origin = source.transform, TargetRelations = (from, to, relation) =>
                 from == source.AbilitySystem.SourceIdentity && (relation == TargetRelation.Enemy) == (to == enemy.AbilitySystem) };
-            var runner = new SkillRunner(source.AbilitySystem, null, services);
+            var runner = new SkillRunner(source.AbilitySystem, services);
             GameplayAbilityAsset Area(TargetRelation side, float amount) => Skill(new ApplyEffectAction {
                 effect = Effect(amount), targets = new TargetQuery { kind = TargetQueryKind.Circle, relation = side, excludeSelf = false } });
             var attack = Area(TargetRelation.Enemy, -20); var heal = Area(TargetRelation.Ally, 5);
@@ -138,7 +138,7 @@ namespace ZFramework.GAS.Editor.Tests
             var enemy = Unit("enemy", Vector3.forward);
             var skill = Skill(new TravelBranchAction { afterTravel = new SkillAction[] {
                 new ApplyEffectAction { effect = Effect(), targets = new TargetQuery { relation = TargetRelation.Enemy } } } });
-            var runner = new SkillRunner(owner, null, new SkillUnitServices { SceneTasks = _scene,
+            var runner = new SkillRunner(owner, new SkillUnitServices { SceneTasks = _scene,
                 TargetRelations = (from, to, side) => from == oldIdentity && to == enemy.AbilitySystem && side == TargetRelation.Enemy });
             runner.Grant(skill); runner.TryCast(skill, new SkillCastTarget(enemy.AbilitySystem, enemy.transform));
             owner.Clear(); Assert.AreNotSame(oldIdentity, owner.SourceIdentity);
@@ -475,7 +475,7 @@ namespace ZFramework.GAS.Editor.Tests
                     Assert.AreEqual(3,sim.Legs.Count);
                     var a=sim.Legs[0];var b=sim.Legs[1];var c=sim.Legs[2];
                     Assert.AreEqual(-1,a.FromUnit);Assert.AreEqual(0,a.ToUnit);Assert.IsFalse(a.Lightning);
-                    Assert.Greater(a.Arrival,root.Animation.Duration);Assert.AreEqual(a.Arrival,b.Launch);
+                    Assert.Greater(a.Arrival,root.Animation().Duration);Assert.AreEqual(a.Arrival,b.Launch);
                     var body=SkillPreviewSimulation.Position(DummyLayout.直线,0,3,2)+Vector3.up*SkillPreviewSimulation.DummyRadius;
                     Assert.AreEqual(SkillPreviewSimulation.DummyRadius,(body-a.To).magnitude,.0001f);
                     Assert.AreEqual(a.To,b.From);Assert.AreEqual(a.ToUnit,b.FromUnit);Assert.AreNotEqual(b.ToUnit,c.ToUnit);
@@ -512,7 +512,7 @@ namespace ZFramework.GAS.Editor.Tests
                 window.Show(bounce);doc.PreviewPrefab=null;panel.Load();panel.Query<Toggle>().ToList().Find(t=>t.label=="连锁路线").value=true;
                 stops=Stops();Assert.AreEqual(3,stops.Count);Assert.IsTrue(stops[2].text.Contains("飞弹"));
                 float last=(float)stops[2].userData;Assert.Greater(last,(float)stops[1].userData);
-                Assert.Greater(last,root.Animation.Duration);
+                Assert.Greater(last,root.Animation().Duration);
                 using(var submit=NavigationSubmitEvent.GetPooled()){submit.target=stops[2];stops[2].SendEvent(submit);}
                 Assert.AreEqual(last,doc.Playback.Time,.00001f);
             }finally{window?.Close();}
@@ -620,7 +620,7 @@ namespace ZFramework.GAS.Editor.Tests
             skill.parameters = new[] { parameter };
             var animation = New<SkillAnimationAsset>(); Edit(animation, so => { so.FindProperty("clipName").stringValue = "Test"; });
             Edit(skill, so => so.FindProperty("animation").objectReferenceValue = animation);
-            var runner = new SkillRunner(owner.AbilitySystem, () => new Driver());
+            var runner = new SkillRunner(owner.AbilitySystem); new SkillTimelinePlayer(runner, () => new Driver());
             Physics.SyncTransforms();runner.Grant(skill);  runner.TryCast(skill, target.AbilitySystem, Services(owner.transform, target.transform, pool));
             owner.AbilitySystem.Tick(.3f); Assert.IsFalse(runner.IsActive(skill)); Assert.AreEqual(0, owner.AbilitySystem.ActiveTaskCount);
             Assert.AreEqual(1, _scene.Count);

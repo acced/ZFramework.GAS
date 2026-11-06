@@ -35,8 +35,8 @@ namespace ZFramework.GAS.Editor.Tests
             var ability = BasicCombatSample.Create();
             _window = SkillEditorWindow.Open(); _window.position = new Rect(0, 28, 1000, 660); _window.Show(ability);
             _window.Document.Playback.Seek(.37f, .9f);
-            _window.Document.Selection.Select(ability.Animation, "markers",
-                _window.Document.Serialized(ability.Animation).FindProperty("markers").GetArrayElementAtIndex(0).FindPropertyRelative("id").stringValue);
+            _window.Document.Selection.Select(ability.Animation(), "markers",
+                _window.Document.Serialized(ability.Animation()).FindProperty("markers").GetArrayElementAtIndex(0).FindPropertyRelative("id").stringValue);
             _captureAt = EditorApplication.timeSinceStartup + 5;
             EditorApplication.update += Capture;
         }
@@ -47,8 +47,8 @@ namespace ZFramework.GAS.Editor.Tests
             {
                 var ability = _window.Document.Root;
                 _window.Document.Playback.Seek(.37f, .9f);
-                _window.Document.Selection.Select(ability.Animation, "markers",
-                    _window.Document.Serialized(ability.Animation).FindProperty("markers").GetArrayElementAtIndex(0).FindPropertyRelative("id").stringValue);
+                _window.Document.Selection.Select(ability.Animation(), "markers",
+                    _window.Document.Serialized(ability.Animation()).FindProperty("markers").GetArrayElementAtIndex(0).FindPropertyRelative("id").stringValue);
                 _window.rootVisualElement.Q<SkillGraphView>().AutoArrange();
                 _stage++; _captureAt = EditorApplication.timeSinceStartup + 3; return;
             }

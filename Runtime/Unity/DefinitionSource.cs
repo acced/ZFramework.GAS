@@ -34,9 +34,7 @@ namespace ZFramework.GAS.Unity
                 for (int i = entries.Count - 1; i >= 0; i--)
                     if (entries[i].TryGetTarget(out var parent) && parent != null)
                     {
-                        if (parent is GameplayAbilityAsset ability) ability.InvalidateDefinition();
-                        else if (parent is GameplayEffectAsset effect) effect.InvalidateDefinition();
-                        else if (parent is IDefinitionAsset asset) asset.InvalidateDefinition();
+                        if (parent is IDefinitionAsset asset) asset.InvalidateDefinition();
                         else InvalidateDependents(parent);
                     }
             }

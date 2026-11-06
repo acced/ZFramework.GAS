@@ -46,10 +46,10 @@ namespace ZFramework.GAS.Editor
         private static void Subscribe()
         {
             bool need=EditorApplication.isPlaying && (_next||SkillBreakpoints.instance.Any);if(need==_subscribed)return; _subscribed=need;
-            if(need){SkillActionDebug.Boundary+=Boundary;SkillActionDebug.MarkerReached+=Marker;SkillActionDebug.TargetsSelected+=Query;}
-            else {SkillActionDebug.Boundary-=Boundary;SkillActionDebug.MarkerReached-=Marker;SkillActionDebug.TargetsSelected-=Query;}
+            if(need){SkillActionDebug.Boundary+=Boundary;SkillActionDebug.PointReached+=Point;SkillActionDebug.TargetsSelected+=Query;}
+            else {SkillActionDebug.Boundary-=Boundary;SkillActionDebug.PointReached-=Point;SkillActionDebug.TargetsSelected-=Query;}
         }
-        private static void Marker(SkillExecutionContext c,AnimationMarker m){if(c!=null && Has(m.Id)) Pause(c,m.Id,m.Key??"标记");}
+        private static void Point(SkillExecutionContext c,string id,string label){if(c!=null && Has(id)) Pause(c,id,label);}
         static SkillActionDebugger()
         {
             EditorApplication.delayCall+=Subscribe;

@@ -228,7 +228,7 @@ namespace ZFramework.GAS.Editor.Tests
             // A matching task takes over local playback; ending it returns control to local preview.
             var observer = new AbilitySystemComponent();
             var spec = observer.GrantAbility(new GameplayAbilityDefinition()); observer.TryActivateAbility(spec);
-            observer.StartTask(spec, new AnimationTask(localAbility.Animation.Definition, new Driver()));
+            observer.StartTask(spec, new AnimationTask(localAbility.Animation().Definition, new Driver()));
             observer.Tick(.75f); RuntimeDebugSession.Publish(RuntimeSnapshot.Capture(observer, null));
             Assert.IsTrue(_window.Document.Playback.Live);
             Assert.IsFalse(_window.Document.Playback.Playing);

@@ -33,7 +33,7 @@ namespace ZFramework.GAS.Editor.Tests
                     var skill = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(skills + name + ".asset");
                     Assert.IsNotNull(skill, name);
                     window.Show(skill);
-                    var animation = skill.Animation;
+                    var animation = skill.Animation();
                     if (animation == null) continue;
                     var items = window.Document.Serialized(animation).FindProperty("markers");
                     for (int i = 0; i < items.arraySize; i++)
@@ -79,11 +79,11 @@ namespace ZFramework.GAS.Editor.Tests
             CollectionAssert.AreEquivalent(new[] { "普通伤害系数", "强化伤害系数", "范围", "基础范围" }, module.parameters.parameters.Select(p => p.displayName));
             Assert.AreSame(module.parameters, slashSkill.parameterSet);
             CollectionAssert.AreEqual(new[] { "冷却" }, slashSkill.parameters.Select(p => p.displayName));
-            var call = (CallModuleAction)new SerializedObject(slashSkill.Animation).FindProperty("markers.Array.data[0].actions.Array.data[0]").managedReferenceValue;
+            var call = (CallModuleAction)new SerializedObject(slashSkill.Animation()).FindProperty("markers.Array.data[0].actions.Array.data[0]").managedReferenceValue;
             CollectionAssert.AreEquivalent(module.parameters.parameters.Select(p => p.Id), call.bindings.Select(b => b.moduleParameterId));
             var variant = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(folder + "/Skills/Shared/重斩变体.asset");
-            Assert.AreSame(slashSkill.Animation,variant.Animation);
-            Assert.IsTrue(variant.clipOverrides.TryGet(slashSkill.Animation.ClipName,out var axe));
+            Assert.AreSame(slashSkill.Animation(),variant.Animation());
+            Assert.IsTrue(variant.ClipOverrides().TryGet(slashSkill.Animation().ClipName,out var axe));
             CollectionAssert.Contains(knight.GetComponent<Animator>().runtimeAnimatorController.animationClips.Select(c=>c.name),"AxeSlash");
             Assert.AreEqual("Base Layer.AxeSlash",axe.replacement);
             Assert.AreEqual(2, variant.parameterOverrides.Length, "重斩只覆盖普通与强化两个伤害系数");
@@ -118,14 +118,14 @@ namespace ZFramework.GAS.Editor.Tests
                 using var sampler = AnimationAdapterRegistry.Resolve(knight).BeginPreview(owner);
                 using var preview = new CueVfxPreview(owner);
                 var warcry = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(folder + "/Skills/战吼.asset");
-                preview.Sample(warcry.Animation, .55f, t => sampler.Sample(warcry.Animation.ClipName, t));
+                preview.Sample(warcry.Animation(), .55f, t => sampler.Sample(warcry.Animation().ClipName, t));
                 var particles = Resources.FindObjectsOfTypeAll<ParticleSystem>().Where(p => p.gameObject.scene == owner.scene).ToArray();
                 Assert.IsTrue(particles.Any(p => p.particleCount > 0));
                 Capture(render, "cue-ground-preview.png");
-                preview.Sample(warcry.Animation, .1f, t => sampler.Sample(warcry.Animation.ClipName, t));
+                preview.Sample(warcry.Animation(), .1f, t => sampler.Sample(warcry.Animation().ClipName, t));
                 Assert.IsFalse(Resources.FindObjectsOfTypeAll<ParticleSystem>().Any(p => p.gameObject.scene == owner.scene));
                 const float swordTime = .37f;
-                preview.Sample(slashSkill.Animation, swordTime, t => sampler.Sample(slashSkill.Animation.ClipName, t));
+                preview.Sample(slashSkill.Animation(), swordTime, t => sampler.Sample(slashSkill.Animation().ClipName, t));
                 var trail = owner.GetComponentInChildren<SwordTrailVisual>();
                 Assert.IsNotNull(trail); Assert.Greater(trail.GetComponent<MeshFilter>().sharedMesh.vertexCount, 4);
                 var vertices = trail.GetComponent<MeshFilter>().sharedMesh.vertices;

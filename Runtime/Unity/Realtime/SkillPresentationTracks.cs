@@ -43,11 +43,11 @@ namespace ZFramework.GAS.Unity
     {
         public Vector3 direction=Vector3.up; [Min(0)] public float frequency=16;
         protected override Func<SkillExecutionContext,ISkillPresentationLease> Factory()
-        {var dir=direction;float hz=frequency;return c=>c.Services.Camera?.Shake(c,dir,hz);}
+        {var dir=direction;float hz=frequency;return c=>c.Services.Get<ISkillCameraService>()?.Shake(c,dir,hz);}
     }
     [Serializable] public sealed class TimeScaleTrack : PresentationTrack
     {
-        protected override Func<SkillExecutionContext,ISkillPresentationLease> Factory()=>c=>c.Services.Time?.GlobalScale(c);
+        protected override Func<SkillExecutionContext,ISkillPresentationLease> Factory()=>c=>c.Services.Get<ISkillTimeService>()?.GlobalScale(c);
     }
     // A hit can affect an already-running target task, whose own cast used another services object.
     internal sealed class HitStopLease : ISkillPresentationLease
@@ -59,9 +59,9 @@ namespace ZFramework.GAS.Unity
         private readonly ISkillTimeService _service;
         private HitStopLease(SkillExecutionContext c,ISkillPresentationLease inner)
         { _inner=inner;_source=c.Source;_target=c.Target;_sourceGeneration=_source?.Generation??-1;
-          _targetGeneration=_target?.Generation??-1;_service=c.Services.Time;Active.Add(this); }
+          _targetGeneration=_target?.Generation??-1;_service=c.Services.Get<ISkillTimeService>();Active.Add(this); }
         public static ISkillPresentationLease Open(SkillExecutionContext c,float seconds)
-        {var inner=c.Services.Time?.HitStop(c,seconds);return inner==null?null:new HitStopLease(c,inner);}
+        {var inner=c.Services.Get<ISkillTimeService>()?.HitStop(c,seconds);return inner==null?null:new HitStopLease(c,inner);}
         internal static float Scale(AbilitySystemComponent unit,ISkillTimeService fallback)
         {
             float scale=fallback?.LocalScale(unit)??1;
@@ -84,6 +84,6 @@ namespace ZFramework.GAS.Unity
     [Serializable] public sealed class LookAtTrack : PresentationTrack
     {
         public string boneChain="Spine/Head";
-        protected override Func<SkillExecutionContext,ISkillPresentationLease> Factory(){var chain=boneChain;return c=>c.Services.Rig?.Aim(c,chain);}
+        protected override Func<SkillExecutionContext,ISkillPresentationLease> Factory(){var chain=boneChain;return c=>c.Services.Get<ISkillRigService>()?.Aim(c,chain);}
     }
 }

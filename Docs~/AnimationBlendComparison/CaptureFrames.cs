@@ -82,10 +82,10 @@ public static class GASBlendFrameCapture
     static void Capture(Report report, string id, string label, string skillName, float end, float cancelAt = -1, bool preview = false)
     {
         var source = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(Folder + "/Skills/" + skillName + ".asset");
-        if (source == null || source.Animation == null) throw new Exception("Missing generated skill " + skillName);
+        if (source == null || source.Animation() == null) throw new Exception("Missing generated skill " + skillName);
         var sequence = new Sequence { id = id, label = label, skillPath = AssetDatabase.GetAssetPath(source),
-            clip = source.Animation.ClipName, blendIn = source.Animation.BlendIn, blendOut = source.Animation.BlendOut,
-            duration = source.Animation.Duration, cancelAt = cancelAt, preview = preview };
+            clip = source.Animation().ClipName, blendIn = source.Animation().BlendIn, blendOut = source.Animation().BlendOut,
+            duration = source.Animation().Duration, cancelAt = cancelAt, preview = preview };
         CaptureVariant(sequence, source, false, end);
         CaptureVariant(sequence, source, true, end);
         report.sequences.Add(sequence);
@@ -104,7 +104,7 @@ public static class GASBlendFrameCapture
     static void CaptureVariant(Sequence sequence, GameplayAbilityAsset source, bool blend, float end)
     {
         var asset = Object.Instantiate(source);
-        var animation = Object.Instantiate(source.Animation);
+        var animation = Object.Instantiate(source.Animation());
         using (var so = new SerializedObject(asset))
         {
             so.FindProperty("animation").objectReferenceValue = animation;
@@ -151,7 +151,7 @@ public static class GASBlendFrameCapture
             if (sequence.preview) sampler = AnimationAdapterRegistry.Resolve(prefab).BeginPreview(knight);
             else
             {
-                runner = new SkillRunner(owner, () => knight.GetComponent<SkillAnimator>().Driver);
+                runner = new SkillRunner(owner); new SkillTimelinePlayer(runner, () => knight.GetComponent<SkillAnimator>().Driver);
                 var result = runner.TryCast(asset, NewAsc());
                 if (result != AbilityActivationResult.Activated) throw new Exception("Capture cast failed: " + result);
             }

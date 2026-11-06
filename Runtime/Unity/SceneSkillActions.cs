@@ -33,7 +33,8 @@ namespace ZFramework.GAS.Unity
         protected virtual void EndAction(bool cancelled) { }
     }
 
-    internal static class SkillSpawn
+    /// <summary>经 <see cref="ISkillObjectService"/> 生成对象：施放已结束时立即归还，并调用 <see cref="ISkillSpawnInitializer"/>。</summary>
+    public static class SkillSpawn
     {
         public static GameObject Create(SkillExecutionContext context, GameObject prefab, Vector3 position, Quaternion rotation, Transform parent = null)
         {

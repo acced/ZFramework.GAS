@@ -124,7 +124,7 @@ namespace ZFramework.GAS.Editor
                 Rebuild(); return;
             }
             if(change.Structure){Rebuild();return;}
-            if(change.Asset==_doc.Root.Animation && change.Paths.Any(p=>p.EndsWith(".key") || p.EndsWith(".time")))
+            if(change.Asset==_doc.Root.Animation() && change.Paths.Any(p=>p.EndsWith(".key") || p.EndsWith(".time")))
             {
                 RefreshEntries(out string entry);
                 if(_entryNode?.parent!=null){_entryNode.title=entry;_crumb.text=Breadcrumb(entry);}
@@ -143,7 +143,7 @@ namespace ZFramework.GAS.Editor
         {
             _entries.menu.MenuItems().Clear();
             _entries.menu.AppendAction("激活动作",_=>Choose(_doc.Root,null));
-            var anim=_doc.Root.Animation;
+            var anim=_doc.Root.Animation();
             var markers=anim!=null ? _doc.Serialized(anim).FindProperty("markers"):null;
             entry="激活动作";
             if (markers!=null) for(int i=0;i<markers.arraySize;i++)
@@ -171,7 +171,7 @@ namespace ZFramework.GAS.Editor
             _nodes.Clear(); _branchModes.Clear(); _entries.menu.MenuItems().Clear(); _rootPath=null; _crumb.text="";
             if (_doc.Root==null) return;
             RefreshEntries(out string entry);
-            var anim=_doc.Root.Animation;
+            var anim=_doc.Root.Animation();
             _layoutKey=AssetReferences.Key(_owner)+"#"+(_marker ?? _rootPath);
             _crumb.text=Breadcrumb(entry);
             var root=_entryNode=new Node{title=entry,userData="$entry"}; AddNode(root,"$entry",0,0);

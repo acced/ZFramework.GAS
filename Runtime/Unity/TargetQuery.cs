@@ -49,7 +49,7 @@ namespace ZFramework.GAS.Unity
         public readonly SkillSpawnPosition Origin;
         public readonly TargetRelation Relation;
         public SkillSpawnPosition EffectiveOrigin => Kind == TargetQueryKind.TargetPoint ? SkillSpawnPosition.TargetPoint : Origin;
-        internal Vector3 Center(SkillExecutionContext c) => c.OriginAt(EffectiveOrigin);
+        public Vector3 Center(SkillExecutionContext c) => c.OriginAt(EffectiveOrigin);
         private readonly GameplayTagRequirements _requirements;
         private readonly GameplayTagSet _any;
         public TargetQueryDefinition(TargetQueryKind kind, SkillNumber radius, SkillNumber angle, SkillNumber width,

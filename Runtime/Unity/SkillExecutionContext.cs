@@ -38,11 +38,12 @@ namespace ZFramework.GAS.Unity
         private Branch _branch;
         private bool _detached;
         internal bool Reusable => _state.Users == 0;
-        internal void Retain() => _state.Users++;
-        internal void Release() => _state.Users--;
+        /// <summary>任务或扩展持有本次施放的上下文期间调用，阻止下一次施放复用它；结束时调用 <see cref="Release"/>。</summary>
+        public void Retain() => _state.Users++;
+        public void Release() => _state.Users--;
         internal TargetSequenceFrame Sequence { get => _branch.Sequence; set => _branch.Sequence = value; }
-        public Vector3? HitPoint { get => _branch.HitPoint; internal set => _branch.HitPoint = value; }
-        internal Vector3? AimOffset => _branch.AimOffset;
+        public Vector3? HitPoint { get => _branch.HitPoint; set => _branch.HitPoint = value; }
+        public Vector3? AimOffset => _branch.AimOffset;
         internal HashSet<object> HitRecord(string key){
             if(string.IsNullOrEmpty(key))return new HashSet<object>();
             _state.Records??=new();if(!_state.Records.TryGetValue(key,out var record))_state.Records.Add(key,record=new());
@@ -109,7 +110,7 @@ namespace ZFramework.GAS.Unity
             Values = values; Services = new TimelineTaskContext();
             Reset(target, services);
         }
-        internal bool Allows(TargetQueryDefinition query, AbilitySystemComponent target)
+        public bool Allows(TargetQueryDefinition query, AbilitySystemComponent target)
         {
             var source = Source;
             if (source == null && Services.TargetFilter != null && !Services.FilterHasSnapshot) return false;

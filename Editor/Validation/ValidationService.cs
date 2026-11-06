@@ -85,7 +85,7 @@ namespace ZFramework.GAS.Editor
                 string callerPath=AssetDatabase.GUIDToAssetPath(guid);
                 if(!AssetDatabase.GetDependencies(callerPath).Contains(path))continue;
                 var caller=AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(callerPath);
-                try { caller.BuildActions(); if(caller.Animation!=null)_=caller.Animation.Definition; }
+                try { caller.BuildActions(); if(caller.Animation()!=null)_=caller.Animation().Definition; }
                 catch(Exception error) { context.Add(issues,Id,caller,"activationActions",callerPath+": "+error.Message); }
             }
         }

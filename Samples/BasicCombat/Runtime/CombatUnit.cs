@@ -24,6 +24,8 @@ namespace ZFramework.GAS.Samples.BasicCombat
         public string DisplayName => displayName;
         public AbilitySystemComponent AbilitySystem { get; private set; }
         public SkillRunner SkillRunner { get; private set; }
+        /// <summary>把技能动画接到 SkillRunner 上（Realtime 扩展）。</summary>
+        public SkillTimelinePlayer Timeline { get; private set; }
         public float MaxStamina => maxStamina;
         public Vector3 HudPosition => hudAnchor != null ? hudAnchor.position : transform.position + Vector3.up * 2.1f;
 
@@ -35,11 +37,13 @@ namespace ZFramework.GAS.Samples.BasicCombat
             AbilitySystem?.Clear();
             AbilitySystem = new AbilitySystemComponent(5, router);
             GetComponent<CueVfxPlayer>()?.Bind(AbilitySystem);
-            SkillRunner = new SkillRunner(AbilitySystem, () =>
+            Timeline?.Dispose();
+            SkillRunner = new SkillRunner(AbilitySystem, services ?? new SkillUnitServices { Origin = transform });
+            Timeline = new SkillTimelinePlayer(SkillRunner, () =>
             {
                 var animator = GetComponent<SkillAnimator>();
                 return animator != null ? animator.Driver : null;
-            }, services ?? new SkillUnitServices { Origin = transform });
+            });
             var health = AbilitySystem.Attributes.Add(Health, maxHealth);
             AbilitySystem.Attributes.Add(MaxHealth, maxHealth);
             AbilitySystem.Attributes.Add(Attack, attack);

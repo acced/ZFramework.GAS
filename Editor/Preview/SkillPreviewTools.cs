@@ -28,16 +28,16 @@ namespace ZFramework.GAS.Editor
         public void Rebuild(GameObject instance, SkillDocument doc, Action<float> pose, bool ghosts, bool trajectory, Action simulation)
         {
             ClearGhosts(); _vertices.Clear(); _colors.Clear();
-            float duration = doc.Root?.Animation?.Duration ?? 1;
+            float duration = doc.Root?.Animation()?.Duration ?? 1;
             if (trajectory && _trajectory.Count == 0)
             {
                 for (int i = 0; i <= 60; i++) { pose(duration * i / 60); _trajectory.Add(instance.transform.position); }
             }
             if (trajectory) for (int i = 1; i < _trajectory.Count; i++) Line(_trajectory[i - 1] + Vector3.up * .04f, _trajectory[i] + Vector3.up * .04f, Color.yellow);
-            if (ghosts && doc.Root?.Animation != null)
+            if (ghosts && doc.Root?.Animation() != null)
             {
-                Capture(instance, pose, Mathf.Max(0, doc.Playback.Time - 3 / Mathf.Max(1, doc.Root.Animation.FrameRate)), new Color(.25f, .65f, 1, .15f));
-                Capture(instance, pose, Mathf.Min(duration, doc.Playback.Time + 3 / Mathf.Max(1, doc.Root.Animation.FrameRate)), new Color(1, .65f, .25f, .15f));
+                Capture(instance, pose, Mathf.Max(0, doc.Playback.Time - 3 / Mathf.Max(1, doc.Root.Animation().FrameRate)), new Color(.25f, .65f, 1, .15f));
+                Capture(instance, pose, Mathf.Min(duration, doc.Playback.Time + 3 / Mathf.Max(1, doc.Root.Animation().FrameRate)), new Color(1, .65f, .25f, .15f));
             }
             pose(doc.Playback.Time);
             simulation();

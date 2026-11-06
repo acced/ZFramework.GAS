@@ -117,11 +117,11 @@ namespace ZFramework.GAS.Editor
             _trace.selectionChanged+=items=>{foreach(SkillTrace e in items) if(e.Skill!=null)
             {
                 var w=SkillEditorWindow.Open();w.Show(e.Skill);
-                if(e.Kind==TraceKind.标记 && e.Skill.Animation!=null)
+                if(e.Kind==TraceKind.标记 && e.Skill.Animation()!=null)
                 {
-                    w.Document.Selection.Select(e.Skill.Animation,"markers",e.RawId);
-                    var p=TimelineCommands.Find(w.Document.Serialized(e.Skill.Animation),"markers",e.RawId);
-                    if(p!=null && !w.Document.Playback.Live)w.Document.Playback.Seek(p.FindPropertyRelative("time").floatValue,e.Skill.Animation.Duration);
+                    w.Document.Selection.Select(e.Skill.Animation(),"markers",e.RawId);
+                    var p=TimelineCommands.Find(w.Document.Serialized(e.Skill.Animation()),"markers",e.RawId);
+                    if(p!=null && !w.Document.Playback.Live)w.Document.Playback.Seek(p.FindPropertyRelative("time").floatValue,e.Skill.Animation().Duration);
                 }
                 else if(SkillActionNavigation.Select(w.Document,e.NavigationId ?? e.RawId) || (e.NavigationId != e.RawId && SkillActionNavigation.Select(w.Document,e.RawId)))w.Document.OpenFlow();
             }};

@@ -84,7 +84,7 @@ namespace ZFramework.GAS.Editor
             get=>_previewEnd;
             internal set{if(_previewEnd==value)return;_previewEnd=value;PreviewRangeChanged?.Invoke();}
         }
-        public float PlaybackDuration => Mathf.Max(Root?.Animation?.Duration??0,PreviewEnd);
+        public float PlaybackDuration => Mathf.Max(Root?.Animation()?.Duration??0,PreviewEnd);
         public event Action<ChangeSet> Changed;
         private void Publish(ChangeSet change) => Changed?.Invoke(change);
         public event Action<string> Feedback;
@@ -115,7 +115,7 @@ namespace ZFramework.GAS.Editor
                 }
             }
             PreviewPrefab = Layout.PreviewPrefab;
-            Playback.Playing = false; Playback.Seek(0, root?.Animation?.Duration ?? 0);
+            Playback.Playing = false; Playback.Seek(0, root?.Animation()?.Duration ?? 0);
             Reload();
             // Missing IDs are editor metadata only. Preserve all existing fields and array order.
             if (assignMissingIds)

@@ -10,6 +10,8 @@ namespace ZFramework.GAS.Editor.Tests
 {
     public sealed class ImprovementPlanTests
     {
+        private static TimelineTaskContext WithServices(Action<TimelineTaskContext> setup)
+        { var services = new TimelineTaskContext(); setup(services); return services; }
         [Test] public void BlendPresetsHaveBoundedWeightsAndDefinitionsKeepAuthoredCurve()
         {
             foreach(SkillBlendCurve curve in Enum.GetValues(typeof(SkillBlendCurve)))
@@ -131,7 +133,7 @@ namespace ZFramework.GAS.Editor.Tests
             SkillClipOverrideSet Set(string dest){
                 var result=ScriptableObject.CreateInstance<SkillClipOverrideSet>();
                 result.clips=new[]{new SkillClipOverrideSet.Entry{original="base",replacement=dest}};return result;}
-            var basis=skill.clipOverrides=Set("variant");var equipment=Set("equipment");var invalid=Set(null);var clip=new AnimationClip();
+            var basis=Set("variant");skill.PresentationVariant=basis;var equipment=Set("equipment");var invalid=Set(null);var clip=new AnimationClip();
             invalid.clips[0].clip=clip; // This backend accepts names only.
             try{
                 var asc=new AbilitySystemComponent();var spec=asc.GrantAbility(new GameplayAbilityDefinition());
@@ -139,7 +141,7 @@ namespace ZFramework.GAS.Editor.Tests
                 string Play(){_=new AnimationTask(new SkillAnimationDefinition("base",1),driver,taskContext:c.Services);return driver.Last;}
                 Assert.AreEqual("variant",Play());host.PushOverride(equipment);host.PushOverride(invalid);
                 Assert.AreEqual("equipment",Play());host.PopOverride(equipment);Assert.AreEqual("variant",Play());
-                skill.clipOverrides=null;Assert.AreEqual("base",Play());
+                skill.PresentationVariant=null;Assert.AreEqual("base",Play());
             }finally{foreach(var o in new UnityEngine.Object[]{go,skill,basis,equipment,invalid,clip})UnityEngine.Object.DestroyImmediate(o);}
         }
         [Test] public void ArenaHitStopAndTimeScaleRespectParticipantsOverlapsAndExternalScale()
@@ -152,7 +154,7 @@ namespace ZFramework.GAS.Editor.Tests
                 for(int i=0;i<owners.Length;i++){
                     var spec=owners[i].GrantAbility(new GameplayAbilityDefinition());owners[i].TryActivateAbility(spec);
                     tasks[i]=new AnimationTask(new SkillAnimationDefinition("clip",1),new CaptureDriver());owners[i].StartTask(spec,tasks[i]);
-                    if(i==0)context=new SkillExecutionContext(null,spec,owners[1],new EffectEvaluationContext(1),new TimelineTaskContext{Time=service});}
+                    if(i==0)context=new SkillExecutionContext(null,spec,owners[1],new EffectEvaluationContext(1),WithServices(s=>s.Set<ISkillTimeService>(service)));}
                 var h=new HitStopTrack{realSeconds=10}.Build().Create(context);h.Enter();h.Sample(0,0);
                 try{
                     foreach(var asc in owners)asc.Tick(.2f);
@@ -169,7 +171,7 @@ namespace ZFramework.GAS.Editor.Tests
             var source=new AbilitySystemComponent();
             var spec=source.GrantAbility(new GameplayAbilityDefinition());
             var probe=new PresentationProbe();var values=new EffectEvaluationContext(1);
-            var context=new SkillExecutionContext(null,spec,null,values,new TimelineTaskContext{Camera=probe,Time=probe,Rig=probe});
+            var context=new SkillExecutionContext(null,spec,null,values,WithServices(s=>{s.Set<ISkillCameraService>(probe);s.Set<ISkillTimeService>(probe);s.Set<ISkillRigService>(probe);}));
             var noServices=new SkillExecutionContext(null,spec,null,values,null);
             foreach(var track in new PresentationTrack[]{new CameraShakeTrack(),new HitStopTrack(),new TimeScaleTrack(),new LookAtTrack()})
             {

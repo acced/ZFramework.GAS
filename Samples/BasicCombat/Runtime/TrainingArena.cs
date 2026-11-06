@@ -72,10 +72,13 @@ namespace ZFramework.GAS.Samples.BasicCombat
             var searcher = new TargetSearcher(16);
             void Bind(CombatUnit unit, int team, Transform launch = null)
             {
-                unit.Initialize(_router, new SkillUnitServices {
-                    Origin = unit.transform, LaunchPoint = launch, TargetRelations = MatchesTeam, Searcher = searcher,
-                    Camera = _presentation, Time = _presentation, Rig = _presentation, Scene = gameObject.scene
-                });
+                var services = new SkillUnitServices {
+                    Origin = unit.transform, LaunchPoint = launch, TargetRelations = MatchesTeam, Searcher = searcher, Scene = gameObject.scene
+                };
+                services.Set<ISkillCameraService>(_presentation);
+                services.Set<ISkillTimeService>(_presentation);
+                services.Set<ISkillRigService>(_presentation);
+                unit.Initialize(_router, services);
                 _teams.Add(unit.AbilitySystem.SourceIdentity, team);
             }
             Bind(hero, 0, castPoint);

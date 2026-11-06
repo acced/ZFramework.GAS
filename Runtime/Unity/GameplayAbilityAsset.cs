@@ -12,7 +12,7 @@ namespace ZFramework.GAS.Unity
     /// <see cref="Definition"/> 同样缓存复用同一实例。
     /// </summary>
     [CreateAssetMenu(menuName = "ZFramework GAS/Gameplay Ability", fileName = "NewGameplayAbility")]
-    public sealed class GameplayAbilityAsset : ScriptableObject
+    public sealed class GameplayAbilityAsset : ScriptableObject, IDefinitionAsset
     {
         [Header("展示")]
         public string displayName;
@@ -56,6 +56,15 @@ namespace ZFramework.GAS.Unity
 
         [Header("调用方参数（声明，不自动注入运行期）")]
         [SerializeField] private CallerParameter[] callerParameters = Array.Empty<CallerParameter>();
+
+        // 表现槽：基础层只保存引用，由表现扩展解释（Realtime 扩展放技能动画与片段替换表，
+        // 回合制或其他品类可以放自己的表现资产）。字段名沿用拆分前的 animation / clipOverrides，
+        // 已有资产里的引用因此不会丢失。
+        [Header("表现（由扩展解释）")]
+        [SerializeField] private ScriptableObject animation;
+        [SerializeField] private ScriptableObject clipOverrides;
+        public ScriptableObject Presentation { get => animation; set => animation = value; }
+        public ScriptableObject PresentationVariant { get => clipOverrides; set => clipOverrides = value; }
 
         [NonSerialized] private GameplayAbilityDefinition _definition;
 
