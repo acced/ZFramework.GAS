@@ -5,6 +5,9 @@ using UnityEngine;
 
 namespace ZFramework.GAS.Unity
 {
+    /// <summary>Implement on ScriptableObject assets that cache definitions and need invalidation.</summary>
+    public interface IDefinitionAsset { void InvalidateDefinition(); }
+
     /// <summary>把运行期定义映射回来源资产，包含缓存失效前的旧定义。弱键不会保活定义。</summary>
     public static class DefinitionSource
     {
@@ -32,8 +35,8 @@ namespace ZFramework.GAS.Unity
                     if (entries[i].TryGetTarget(out var parent) && parent != null)
                     {
                         if (parent is GameplayAbilityAsset ability) ability.InvalidateDefinition();
-                        else if (parent is SkillAnimationAsset animation) animation.InvalidateDefinition();
                         else if (parent is GameplayEffectAsset effect) effect.InvalidateDefinition();
+                        else if (parent is IDefinitionAsset asset) asset.InvalidateDefinition();
                         else InvalidateDependents(parent);
                     }
             }

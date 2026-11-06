@@ -24,7 +24,6 @@ namespace ZFramework.GAS.Unity
         public SkillParameter[] parameters = Array.Empty<SkillParameter>();
         public SkillParameterOverride[] parameterOverrides = Array.Empty<SkillParameterOverride>();
         [Header("激活动作（按顺序执行）")]
-        public SkillClipOverrideSet clipOverrides;
         [SerializeReference] public SkillAction[] activationActions = Array.Empty<SkillAction>();
         public SkillParameterValues ResolveParameters(int level, SkillParameterOverride[] castOverrides = null)
             => ResolveParameters(level, null, castOverrides);
@@ -55,20 +54,10 @@ namespace ZFramework.GAS.Unity
         [Tooltip("必须至少授予一个标签——那个标签就是「在冷却中」的标志")]
         [SerializeField] private GameplayEffectAsset cooldown;
 
-        [Header("动画")]
-        [Tooltip("技能动画与其时间轴；通过 SkillRunner 统一施放，也可由宿主直接创建 AnimationTask")]
-        [SerializeField] private SkillAnimationAsset animation;
-
         [Header("调用方参数（声明，不自动注入运行期）")]
         [SerializeField] private CallerParameter[] callerParameters = Array.Empty<CallerParameter>();
 
         [NonSerialized] private GameplayAbilityDefinition _definition;
-
-        /// <summary>
-        /// 技能动画；可为 null。<b>不进 <see cref="Definition"/></b>——
-        /// 能力定义在纯 C# 核心程序集里，不认识任何引擎类型，动画绑定只挂在 Unity 层的资产上。
-        /// </summary>
-        public SkillAnimationAsset Animation => animation;
 
         /// <summary>构建（并缓存）运行期定义。同一资产始终返回同一实例。</summary>
         public GameplayAbilityDefinition Definition => _definition ??= Build();

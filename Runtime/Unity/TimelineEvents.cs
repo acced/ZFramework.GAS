@@ -37,10 +37,6 @@ namespace ZFramework.GAS.Unity
         public SkillTargetRelationFilter TargetRelations;
         public ISkillObjectService Objects;
         public ISkillTargetSelection TargetSelection;
-        public ISkillAudioService Audio;
-        public ISkillCameraService Camera;
-        public ISkillTimeService Time;
-        public ISkillRigService Rig;
         public GameplayTaskHost SceneTasks;
         public UnityEngine.SceneManagement.Scene Scene;
 
@@ -48,8 +44,7 @@ namespace ZFramework.GAS.Unity
         {
             Origin = source.Origin; LaunchPoint = source.LaunchPoint; Searcher = source.Searcher;
             TargetFilter = source.TargetFilter; TargetRelations = source.TargetRelations; Objects = source.Objects;
-            TargetSelection = source.TargetSelection; Audio = source.Audio; Camera = source.Camera;
-            Time = source.Time; Rig = source.Rig; SceneTasks = source.SceneTasks; Scene = source.Scene;
+            TargetSelection = source.TargetSelection; SceneTasks = source.SceneTasks; Scene = source.Scene;
         }
     }
 
