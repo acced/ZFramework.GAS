@@ -16,10 +16,9 @@ namespace ZFramework.GAS.Editor
         private SkillDocument _doc;
         private SkillGraphView _graph;
         private SkillFlowView _flow;
-        private TimelinePanel _timeline;
+        private ISkillTimelineWorkspace _presentation;
         private DetailsPanel _details;
         private LibraryPanel _library;
-        private PreviewPanel _preview;
         private MessagePanel _messages;
         private ValidationService _validation;
         private AbilitySettingsPanel _settings;
@@ -28,12 +27,11 @@ namespace ZFramework.GAS.Editor
         private VisualElement _structureTools;
         private VisualElement _graphHost, _messagesHost, _center, _rightTabs;
         private Label _breadcrumb, _status;
-        private ToolbarMenu _backend;
         private ToolbarButton _counts;
         private ToolbarToggle _followRuntime;
         private bool _followingRuntime;
         private readonly HashSet<ScriptableObject> _liveAssets = new();
-        private ObjectField _rootField, _previewField;
+        private ObjectField _rootField;
         private double _lastTime;
         [SerializeField] private List<GameplayAbilityAsset> _history = new();
         [SerializeField] private int _historyIndex = -1;
@@ -73,8 +71,8 @@ namespace ZFramework.GAS.Editor
             if (sheet != null) rootVisualElement.styleSheets.Add(sheet);
             _doc = new SkillDocument(); _validation = new ValidationService(_doc);
             _flow = new SkillFlowView(_doc, _validation); _doc.FlowRequested += OpenFlow;
-            _graph = new SkillGraphView(_doc); _timeline = new TimelinePanel(_doc); _details = new DetailsPanel(_doc);
-            _library = new LibraryPanel(_doc, Show); _preview = new PreviewPanel(_doc); _settings = new AbilitySettingsPanel(_doc);
+            _graph = new SkillGraphView(_doc); _presentation = SkillEditorExtensions.Timeline?.OpenWorkspace(_doc); _details = new DetailsPanel(_doc);
+            _library = new LibraryPanel(_doc, Show); _settings = new AbilitySettingsPanel(_doc);
             _messages = new MessagePanel(_doc, _validation);
             BuildToolbar(rootVisualElement.Q("toolbar-host") ?? rootVisualElement);
             var workspace = rootVisualElement.Q("workspace");
@@ -115,15 +113,25 @@ namespace ZFramework.GAS.Editor
             var graphSearch = new ToolbarSearchField { tooltip = "图内搜索节点名称", style = { width = 120, minWidth = 40 } };
             graphSearch.RegisterValueChangedCallback(e => _graph.SearchNodes(e.newValue)); _structureTools.Add(graphSearch);
             centerTabs.Add(new ToolbarButton(() => ToggleMessages()) { text = "消息" }); _center.Add(centerTabs);
-            var timelineSplit = Split("TimelineHeight", 1, 278, TwoPaneSplitViewOrientation.Vertical); _center.Add(timelineSplit);
             _graphHost = new VisualElement { style = { flexGrow = 1, minHeight = 120 } }; _graphHost.Add(_graph); _graphHost.Add(_flow); _flow.style.display = DisplayStyle.None; _graphHost.Add(_settings); _settings.style.display = DisplayStyle.None;
             _messagesHost = new VisualElement { style = { flexGrow = 1, display = DisplayStyle.None } }; _messagesHost.Add(_messages); _graphHost.Add(_messagesHost);
-            timelineSplit.Add(_graphHost); timelineSplit.Add(_timeline);
+            if (_presentation == null) _center.Add(_graphHost);
+            else
+            {
+                var split = Split("TimelineHeight", 1, 278, TwoPaneSplitViewOrientation.Vertical);
+                _center.Add(split); split.Add(_graphHost); split.Add(_presentation.Timeline);
+            }
             var right = new VisualElement { style = { flexGrow = 1, minWidth = 220 } }; contentSplit.Add(right);
-            _rightTabs = new Toolbar(); _rightTabs.Add(new ToolbarButton(() => { _compactPreview = true; Responsive(); }) { text = "预览" });
-            _rightTabs.Add(new ToolbarButton(() => { _compactPreview = false; Responsive(); }) { text = "Details" }); right.Add(_rightTabs);
-            var rightSplit = Split("PreviewHeight", 0, 300, TwoPaneSplitViewOrientation.Vertical); rightSplit.name = "preview-split";
-            rightSplit.Add(_preview); rightSplit.Add(_details); right.Add(rightSplit); workspace.Add(leftSplit);
+            _rightTabs = null;
+            if (_presentation == null) right.Add(_details);
+            else
+            {
+                _rightTabs = new Toolbar(); _rightTabs.Add(new ToolbarButton(() => { _compactPreview = true; Responsive(); }) { text = "预览" });
+                _rightTabs.Add(new ToolbarButton(() => { _compactPreview = false; Responsive(); }) { text = "Details" }); right.Add(_rightTabs);
+                var rightSplit = Split("PreviewHeight", 0, 300, TwoPaneSplitViewOrientation.Vertical); rightSplit.name = "preview-split";
+                rightSplit.Add(_presentation.Preview); rightSplit.Add(_details); right.Add(rightSplit);
+            }
+            workspace.Add(leftSplit);
             _status = new Label(); _status.AddToClassList("status-label");
             var statusHost = rootVisualElement.Q("status-host") ?? rootVisualElement; statusHost.Add(_status);
             _doc.Changed += Changed; _doc.Feedback += Feedback; _validation.Changed += ValidationChanged;
@@ -150,7 +158,7 @@ namespace ZFramework.GAS.Editor
             var create = new ToolbarMenu { text = "+ 新建技能" }; create.AddToClassList("primary-button");
             foreach (var item in SkillTemplateRegistry.Templates) { var template = item; create.menu.AppendAction(template.DisplayName, _ => SkillTemplateRegistry.Choose(template, Show)); }
             toolbar.Add(create); toolbar.Add(new ToolbarButton(Save) { text = "保存", tooltip = "Ctrl+S" });
-            _followRuntime = new ToolbarToggle { text = "跟随运行时", name = "follow-runtime", tooltip = "跟随运行时调试窗口观察的单位；当前技能的时间轴与生效效果同步显示" };
+            _followRuntime = new ToolbarToggle { text = "跟随运行时", name = "follow-runtime", tooltip = "跟随运行时调试窗口观察的单位，标出生效的技能与效果" };
             _followRuntime.SetEnabled(EditorApplication.isPlaying);
             _followRuntime.SetValueWithoutNotify(_followingRuntime);
             _followRuntime.RegisterValueChangedCallback(e => SetFollowRuntime(e.newValue)); toolbar.Add(_followRuntime);
@@ -160,13 +168,8 @@ namespace ZFramework.GAS.Editor
             var context = new Toolbar(); context.AddToClassList("context-toolbar");
             _rootField = new ObjectField("当前技能") { objectType = typeof(GameplayAbilityAsset), allowSceneObjects = false, style = { flexGrow = 1, flexBasis = 0, minWidth = 0 } };
             _rootField.RegisterValueChangedCallback(e => Show(e.newValue as GameplayAbilityAsset)); context.Add(_rootField);
-            _previewField = new ObjectField("预览角色") { objectType = typeof(GameObject), allowSceneObjects = false, style = { flexGrow = 1, flexBasis = 0, minWidth = 0 } };
-            _previewField.RegisterValueChangedCallback(e =>
-            {
-                _doc.PreviewPrefab = e.newValue as GameObject; _doc.Layout.PreviewPrefab = _doc.PreviewPrefab; _doc.Layout.Save();
-                _preview.Load(); SyncToolbar(); _doc.Notify(new ChangeSet(_doc.Root, true));
-            }); context.Add(_previewField);
-            _backend = new ToolbarMenu { tooltip = "切换预览角色的 SkillAnimator 后端" }; _backend.AddToClassList("backend-label"); context.Add(_backend); host.Add(context);
+            if (_presentation != null) context.Add(_presentation.Toolbar);
+            host.Add(context);
         }
         public void Show(GameplayAbilityAsset ability)
         {
@@ -178,7 +181,7 @@ namespace ZFramework.GAS.Editor
                 if (next < _history.Count) _history.RemoveRange(next, _history.Count - next);
                 _history.Add(ability); _historyIndex = next;
                 activeAbility = ability;
-                _doc.Open(ability); _timeline.schedule.Execute(_timeline.Fit).StartingIn(150);
+                _doc.Open(ability); _presentation?.Fit();
             }
             SyncToolbar(); Focus();
         }
@@ -211,22 +214,9 @@ namespace ZFramework.GAS.Editor
                     _documents.Add(new ToolbarButton(()=>{var window=CreateInstance<SkillEditorWindow>();window.Show();window.Show(_doc.Root);}){text="并排查看",tooltip="打开独立窗口，可拖至另一侧停靠"});
                 }
             }
-            _rootField.SetValueWithoutNotify(_doc.Root); _previewField.SetValueWithoutNotify(_doc.PreviewPrefab);
+            _rootField.SetValueWithoutNotify(_doc.Root);
             _breadcrumb.text = _doc.Root != null ? AssetDatabase.GetAssetPath(_doc.Root).Replace("Assets/", "技能 / ").Replace("/", " / ") : "GAS  /  技能工作台";
-            _backend.text = AnimationAdapterRegistry.Resolve(_doc.PreviewPrefab).DisplayName;
-            _backend.menu.MenuItems().Clear();
-            var animator = _doc.PreviewPrefab != null ? _doc.PreviewPrefab.GetComponentInChildren<SkillAnimator>(true) : null;
-            if (animator == null) _backend.menu.AppendAction("请在角色上添加 SkillAnimator", _ => { }, DropdownMenuAction.Status.Disabled);
-            else foreach (var item in AnimationAdapterRegistry.Adapters.Where(a => a.CanHandle(_doc.PreviewPrefab)))
-            {
-                var adapter = item;
-                _backend.menu.AppendAction(adapter.DisplayName, _ =>
-                {
-                    if (animator.Backend?.BackendId == adapter.BackendId) return;
-                    EditCommand.Run(_doc, "切换动画后端", animator, so => so.FindProperty("backend").managedReferenceValue = adapter.CreateDefaultBackend(_doc.PreviewPrefab), true);
-                    _preview.Load();
-                }, animator.Backend?.BackendId == adapter.BackendId ? DropdownMenuAction.Status.Checked : DropdownMenuAction.Status.Normal);
-            }
+            _presentation?.SyncToolbar();
             titleContent = new GUIContent("GAS · " + (_doc.Root != null ? _doc.Root.name : "技能编辑器"));
         }
         private void ValidationChanged()
@@ -241,7 +231,7 @@ namespace ZFramework.GAS.Editor
             var issue = _validation.Issues.FirstOrDefault(i => i.Severity != IssueSeverity.Info);
             bool dirty = _doc.Assets.Any(EditorUtility.IsDirty);
             _status.text = (issue != null ? issue.Id + "  " + issue.Message : "✓ 配置校验通过") + $"     ·     {_graph.NodeCount} 个节点     ·     " + (dirty ? "有未保存修改" : "已保存");
-            _status.tooltip = issue?.Message ?? "Ctrl+S 保存 · 结构图 Space 添加节点 · 时间轴 M 添加事件";
+            _status.tooltip = issue?.Message ?? ("Ctrl+S 保存 · 结构图 Space 添加节点" + (_presentation != null ? " · 时间轴 M 添加事件" : ""));
         }
         private void Feedback(string text) => ShowNotification(new GUIContent(text), 2);
         private void OpenFlow()
@@ -275,7 +265,7 @@ namespace ZFramework.GAS.Editor
             if (compact) split.CollapseChild(_compactPreview ? 1 : 0); else split.UnCollapse();
         }
         public void Save() { _doc?.Save(); _validation?.ValidateNow(true); }
-        public void NewSkill() => SkillTemplateRegistry.Choose(new MeleeTemplate(), Show);
+        public void NewSkill() => SkillTemplateRegistry.Choose(SkillEditorExtensions.Timeline?.DefaultTemplate ?? new EmptySkillTemplate(), Show);
         public void FocusSearch() => _library?.FocusSearch();
         private void Tick()
             => AdvancePlayback(EditorApplication.timeSinceStartup);
@@ -308,12 +298,12 @@ namespace ZFramework.GAS.Editor
             foreach (var ability in snapshot.Abilities) if (ability.Active && ability.Asset != null) _liveAssets.Add(ability.Asset);
             foreach (var effect in snapshot.Effects) if (effect.Asset != null) _liveAssets.Add(effect.Asset);
             _graph.SetLive(_liveAssets);
-            RuntimeSnapshot.Animation match = null;
+            RuntimeSnapshot.PresentationTask match = null;
             foreach (var task in snapshot.Tasks)
-                if (_doc.Root != null && task.Asset != null && task.Asset == _doc.Root.Animation() &&
+                if (_doc.Root != null && task.Asset != null && task.Asset == _doc.Root.Presentation &&
                     (match == null || task.AbilityAsset == _doc.Root)) match = task;
             _doc.Playback.Live = match != null;
-            if (match != null) _doc.Playback.Seek(match.AuthoredTime, match.Definition.Duration);
+            if (match != null) _doc.Playback.Seek(match.AuthoredTime, match.AuthoredDuration);
         }
         private void OnDisable()
         {
@@ -326,7 +316,7 @@ namespace ZFramework.GAS.Editor
         {
             if (_validation != null) _validation.Changed -= ValidationChanged;
             _flow?.Dispose();
-            _preview?.Dispose(); _timeline?.Dispose(); _graph?.Dispose(); _details?.Dispose(); _library?.Dispose(); _messages?.Dispose(); _validation?.Dispose();
+            _presentation?.Dispose(); _presentation = null; _graph?.Dispose(); _details?.Dispose(); _library?.Dispose(); _messages?.Dispose(); _validation?.Dispose();
             _doc?.Dispose(); _doc = null;
         }
         [Shortcut("GAS/保存技能", typeof(SkillEditorWindow), KeyCode.S, ShortcutModifiers.Action)]
@@ -344,7 +334,7 @@ namespace ZFramework.GAS.Editor
         [Shortcut("GAS/切换动作断点",typeof(SkillEditorWindow),KeyCode.F9)]
         private static void Breakpoint(ShortcutArguments args)
         {var w=(SkillEditorWindow)args.context;if(w.FlowVisible)w._flow.ToggleBreakpoint();
-            else if(w._doc.Selection.Track=="markers")SkillActionDebugger.Toggle(w._doc.Selection.ElementId);}
+            else if(w._doc.Selection.Track != null && w._doc.Selection.Track == SkillEditorExtensions.Timeline?.EntryTrack)SkillActionDebugger.Toggle(w._doc.Selection.ElementId);}
         [Shortcut("GAS/复制选中节点",typeof(SkillEditorWindow),KeyCode.D,ShortcutModifiers.Action)]
         private static void Duplicate(ShortcutArguments args)
         {var w=(SkillEditorWindow)args.context;if(w.EditingText)return;if(w.FlowVisible)w._flow.DuplicateSelection();else if(w.GraphVisible)w._graph.DuplicateSelection();}

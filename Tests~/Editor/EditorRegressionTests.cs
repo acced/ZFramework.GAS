@@ -614,16 +614,17 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.IsFalse(TimelineCommands.EnsureIds(saved));
         }
         [Test]
-        public void AllTemplatesCreateOwnedAnimations()
+        public void RegisteredTemplatesCreateStandaloneOrAnimatedAbilities()
         {
             int index = 0;
             foreach (var template in SkillTemplateRegistry.Templates)
             {
                 var ability = SkillTemplateRegistry.Create(Folder + "/Template" + index++ + ".asset", template);
-                Assert.IsNotNull(ability.Animation()); Assert.IsTrue(AssetDatabase.IsSubAsset(ability.Animation()));
+                if (template is EmptySkillTemplate) Assert.IsNull(ability.Presentation);
+                else { Assert.IsNotNull(ability.Animation()); Assert.IsTrue(AssetDatabase.IsSubAsset(ability.Animation())); }
             }
             Assert.That(SkillTemplateRegistry.Templates.Select(t => t.GetType()),
-                Is.SupersetOf(new[] { typeof(MeleeTemplate), typeof(ProjectileTemplate), typeof(BuffTemplate),
+                Is.SupersetOf(new[] { typeof(EmptySkillTemplate), typeof(MeleeTemplate), typeof(ProjectileTemplate), typeof(BuffTemplate),
                     typeof(ChannelTemplate), typeof(DamageOverTimeTemplate), typeof(SummonTemplate) }));
         }
         private sealed class TemplateClock : IAnimationDriver

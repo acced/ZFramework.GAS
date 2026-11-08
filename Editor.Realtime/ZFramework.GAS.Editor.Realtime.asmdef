@@ -1,0 +1,12 @@
+{
+    "name": "ZFramework.GAS.Editor.Realtime",
+    "rootNamespace": "ZFramework.GAS.Editor",
+    "references": [
+        "ZFramework.GAS",
+        "ZFramework.GAS.Unity",
+        "ZFramework.GAS.Unity.Realtime",
+        "ZFramework.GAS.Editor",
+        "ZFramework.GameplayTags"
+    ],
+    "includePlatforms": ["Editor"]
+}

@@ -39,8 +39,8 @@ namespace ZFramework.GAS.Editor
             void Owner(SerializedObject source)
             {
                 var ids=new HashSet<string>();
-                if(source.targetObject is SkillAnimationAsset)
-                {var markers=source.FindProperty("markers"); for(int i=0;i<markers.arraySize;i++) ValidateStructure(markers.GetArrayElementAtIndex(i).FindPropertyRelative("actions"),ids);}
+                if (SkillEditorExtensions.Supports(source.targetObject))
+                    foreach (var entry in SkillEditorExtensions.Entries(source)) ValidateStructure(entry.Actions, ids);
                 else ValidateStructure(source.FindProperty(source.targetObject is GameplayAbilityAsset?"activationActions":"actions"),ids);
             }
             Owner(so);
@@ -124,12 +124,18 @@ namespace ZFramework.GAS.Editor
                 var p=list.GetArrayElementAtIndex(index+i);actions[i]=p.managedReferenceValue as SkillAction;
                 foreach(var link in ParameterLinks(p))ids.Add(link.stringValue);ids.UnionWith(EffectParameters(p));
             }
-            var scope=SkillNumberDrawer.LocalScope(list.GetArrayElementAtIndex(index)) ?? SkillNumberDrawer.Parameters(owner is SkillAnimationAsset?doc.Root:owner);
+            var scope=SkillNumberDrawer.LocalScope(list.GetArrayElementAtIndex(index)) ?? SkillNumberDrawer.Parameters(SkillEditorExtensions.Supports(owner)?doc.Root:owner);
             var declarations=scope.Where(p=>p!=null && ids.Contains(p.Id)).ToArray();
             if(declarations.Length!=ids.Count)throw new InvalidOperationException("所选动作有缺失的参数绑定。");
             // Account for the containing branch as well as the new CallModule layer.
-            int depth=2;for(int at=0;(at=path.IndexOf(Element,at,StringComparison.Ordinal))>=0;at+=Element.Length)depth++;
-            if(owner is SkillAnimationAsset)depth--; // markers.Array.data[i] is not an action scope.
+            int depth = 2, offset = 0;
+            foreach (var entry in SkillEditorExtensions.Entries(so))
+            {
+                string entryPath = entry.Actions.propertyPath;
+                if (path == entryPath || path.StartsWith(entryPath + Element, StringComparison.Ordinal))
+                { offset = entryPath.Length; break; }
+            }
+            for (int at = offset; (at = path.IndexOf(Element, at, StringComparison.Ordinal)) >= 0; at += Element.Length) depth++;
             var actionIds=new HashSet<string>();foreach(var a in actions)Visit(a,false,depth,actionIds);
             var moving=ActionEffectOwnership.CheckExclusive(list,index,count,assetPath);
             string warning="提取模块并保存不可撤销，也会清除源资产的撤销记录。只移动独占的私有效果，其 GUID:fileID 将改变；外部项目引用由项目负责。";

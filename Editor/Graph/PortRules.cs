@@ -16,8 +16,8 @@ namespace ZFramework.GAS.Editor
         public bool Equals(PortId other) => Kind == other.Kind && ElementId == other.ElementId;
         public override bool Equals(object obj) => obj is PortId other && Equals(other);
         public override int GetHashCode() => ((int)Kind * 397) ^ (ElementId?.GetHashCode() ?? 0);
-        public string Label => Kind switch { PortKind.Cost => "消耗", PortKind.Cooldown => "冷却", PortKind.Animation => "动画", PortKind.Marker => "事件", PortKind.Applied => "生效时", PortKind.Periodic => "每周期", _ => "移除时" };
-        public Type AcceptedType => Kind == PortKind.ActionReference ? typeof(ScriptableObject) : Kind == PortKind.Animation ? typeof(SkillAnimationAsset) : typeof(GameplayEffectAsset);
+        public string Label => Kind switch { PortKind.Cost => "消耗", PortKind.Cooldown => "冷却", PortKind.Animation => SkillEditorExtensions.Timeline?.DisplayName ?? "表现", PortKind.Marker => "事件", PortKind.Applied => "生效时", PortKind.Periodic => "每周期", _ => "移除时" };
+        public Type AcceptedType => Kind == PortKind.ActionReference ? typeof(ScriptableObject) : Kind == PortKind.Animation ? SkillEditorExtensions.Timeline?.AssetType : typeof(GameplayEffectAsset);
         public bool Single => Kind <= PortKind.Marker;
         public EffectTrigger Trigger => Kind == PortKind.Periodic ? EffectTrigger.Periodic : Kind == PortKind.Removed ? EffectTrigger.Removed : EffectTrigger.Applied;
     }
@@ -36,7 +36,8 @@ namespace ZFramework.GAS.Editor
             if (asset is GameplayAbilityAsset)
             {
                 foreach (var pair in new[] { ("cost", PortKind.Cost), ("cooldown", PortKind.Cooldown), ("animation", PortKind.Animation) })
-                    if (so.FindProperty(pair.Item1).objectReferenceValue is ScriptableObject child)
+                    if (so.FindProperty(pair.Item1).objectReferenceValue is ScriptableObject child &&
+                        (pair.Item2 != PortKind.Animation || SkillEditorExtensions.Supports(child)))
                         yield return new AssetLink(asset, new PortId(pair.Item2), child);
             }
             else if (asset is GameplayEffectAsset)
@@ -61,7 +62,7 @@ namespace ZFramework.GAS.Editor
                         ? cursor.depth : int.MaxValue;
                 if (cursor.propertyType == SerializedPropertyType.ObjectReference && cursor.objectReferenceValue is ScriptableObject child &&
                     (child is SkillActionModuleAsset || child is SkillParameterSetAsset ||
-                        cursor.depth > actionDepth && (child is GameplayEffectAsset || child is SkillAnimationAsset)))
+                        cursor.depth > actionDepth && (child is GameplayEffectAsset || SkillEditorExtensions.Supports(child))))
                     yield return new AssetLink(asset, new PortId(PortKind.ActionReference, cursor.propertyPath), child);
             }
         }
@@ -69,9 +70,9 @@ namespace ZFramework.GAS.Editor
         {
             error = null;
             if (port.Kind == PortKind.ActionReference) error = "动作引用请在 Details 中配置";
-            else if (parent == null || child == null || !port.AcceptedType.IsInstanceOfType(child)) error = "端口类型不匹配";
+            else if (parent == null || child == null || port.AcceptedType?.IsInstanceOfType(child) != true) error = "端口类型不匹配";
             else if (parent == child) error = "不能引用自身";
-            else if (parent is GameplayAbilityAsset && port.Kind > PortKind.Animation || parent is SkillAnimationAsset && port.Kind != PortKind.Marker || parent is GameplayEffectAsset && port.Kind < PortKind.Applied)
+            else if (parent is GameplayAbilityAsset && port.Kind > PortKind.Animation || SkillEditorExtensions.Supports(parent) && port.Kind != PortKind.Marker || parent is GameplayEffectAsset && port.Kind < PortKind.Applied)
                 error = "该资产没有此端口";
             else
             {
@@ -79,10 +80,9 @@ namespace ZFramework.GAS.Editor
                 if (port.Kind == PortKind.Cost && so.FindProperty("durationPolicy").enumValueIndex != (int)EffectDurationPolicy.Instant)
                     error = "消耗必须是瞬时（Instant）效果";
                 else if (port.Kind == PortKind.Cooldown && !HasGrantedTag(so)) error = "冷却效果必须至少授予一个标签";
-                else if (port.Kind == PortKind.Animation && (string.IsNullOrWhiteSpace(so.FindProperty("clipName").stringValue) || !(so.FindProperty("duration").floatValue > 0) || float.IsInfinity(so.FindProperty("duration").floatValue)))
-                    error = "动画需要片段名和有效的正时长";
+                else if (port.Kind == PortKind.Animation) error = SkillEditorExtensions.Timeline.AttachmentError(child);
                 else if (port.Kind == PortKind.Marker)
-                { using var owner = new SerializedObject(parent); if (TimelineCommands.Find(owner, "markers", port.ElementId) == null) error = "事件点已不存在"; }
+                { using var owner = new SerializedObject(parent); if (!SkillEditorExtensions.Entries(owner).Any(e => e.Id == port.ElementId)) error = "事件点已不存在"; }
                 else if (parent is GameplayEffectAsset)
                 {
                     if (Links(parent).Any(l => l.Port.Equals(port) && l.Child == child)) error = "同一时机已经引用该效果";
@@ -125,9 +125,8 @@ namespace ZFramework.GAS.Editor
                 so.FindProperty(port.Kind == PortKind.Cost ? "cost" : port.Kind == PortKind.Cooldown ? "cooldown" : "animation").objectReferenceValue = remove ? null : child;
             else if (port.Kind == PortKind.Marker)
             {
-                var marker = TimelineCommands.Find(so, "markers", port.ElementId);
-                if (marker != null) {
-                    var actions=marker.FindPropertyRelative("actions");
+                var actions = SkillEditorExtensions.Entries(so).FirstOrDefault(e => e.Id == port.ElementId).Actions;
+                if (actions != null) {
                     if(remove) { for(int i=actions.arraySize-1;i>=0;i--)if(actions.GetArrayElementAtIndex(i).managedReferenceValue is ApplyEffectAction a && a.effect==child)actions.DeleteArrayElementAtIndex(i); }
                     else { int i=actions.arraySize++;actions.GetArrayElementAtIndex(i).managedReferenceValue=new ApplyEffectAction{effect=child as GameplayEffectAsset}; }
                 }

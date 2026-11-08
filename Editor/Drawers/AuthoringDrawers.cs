@@ -140,8 +140,8 @@ namespace ZFramework.GAS.Editor
             { var child = p.FindPropertyRelative(field); rect.height = EditorGUI.GetPropertyHeight(child); EditorGUI.PropertyField(rect, child, true); rect.y += rect.height + 2; }
         }
     }
-    [CustomPropertyDrawer(typeof(AnimationBackend), true), CustomPropertyDrawer(typeof(SkillAction), true), CustomPropertyDrawer(typeof(SkillRuntimeTrack), true)]
-    public sealed class StrategyDrawer : PropertyDrawer
+    [CustomPropertyDrawer(typeof(SkillAction), true)]
+    public class StrategyDrawer : PropertyDrawer
     {
         public override VisualElement CreatePropertyGUI(SerializedProperty property)
         {

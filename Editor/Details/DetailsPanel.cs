@@ -29,15 +29,15 @@ namespace ZFramework.GAS.Editor
             if (asset == null) { _body.Add(new HelpBox("选择节点或时间轴元素以编辑属性。", HelpBoxMessageType.Info)); return; }
             var so = _doc.Serialized(asset);
             string track = _doc.Selection.Track;
-            var element = track == "@field" ? so.FindProperty(_doc.Selection.ElementId) : track != null ? TimelineCommands.Find(so, track, _doc.Selection.ElementId) : null;
-            if (asset is GameplayAbilityAsset || asset is SkillActionModuleAsset || (asset is SkillAnimationAsset && (track == "markers" || track == "@field")))
+            var element = track == "@field" ? so.FindProperty(_doc.Selection.ElementId) : track != null ? SkillElementLookup.Find(so, track, _doc.Selection.ElementId) : null;
+            if (asset is GameplayAbilityAsset || asset is SkillActionModuleAsset || (SkillEditorExtensions.Supports(asset) && (track == SkillEditorExtensions.Timeline.EntryTrack || track == "@field")))
                 _body.Add(new Button(_doc.OpenFlow) { text = "在流程中打开" });
             if (element != null)
             {
                 string debugId=element.propertyType==SerializedPropertyType.ManagedReference && element.managedReferenceValue is SkillAction action ? action.Id :
-                    track=="markers"?_doc.Selection.ElementId:null;
+                    track != null && track == SkillEditorExtensions.Timeline?.EntryTrack ?_doc.Selection.ElementId:null;
                 if(!string.IsNullOrEmpty(debugId))_body.Add(new Button(()=>SkillActionDebugger.Toggle(debugId)){text="切换断点"});
-                var field = new PropertyField(element, TrackTypeRegistry.Get(track)?.DisplayName ?? "事件"); _body.Add(field); field.BindProperty(element);
+                var field = new PropertyField(element, SkillEditorExtensions.Timeline?.TrackLabel(track) ?? "事件"); _body.Add(field); field.BindProperty(element);
                 var effect = element.FindPropertyRelative("effect")?.objectReferenceValue;
                 if (effect != null)
                 {

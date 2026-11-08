@@ -9,16 +9,7 @@ namespace ZFramework.GAS.Editor
     public static class TimelineCommands
     {
         public static SerializedProperty Find(SerializedObject so, string track, string id)
-        {
-            var array = so.FindProperty(track);
-            if (array == null || string.IsNullOrEmpty(id)) return null;
-            for (int i = 0; i < array.arraySize; i++)
-            {
-                var item = array.GetArrayElementAtIndex(i);
-                if (item.FindPropertyRelative("id")?.stringValue == id) return item;
-            }
-            return null;
-        }
+            => SkillElementLookup.Find(so, track, id);
         public static bool EnsureIds(SkillAnimationAsset animation, bool recordUndo = false)
         {
             using var so = new SerializedObject(animation);

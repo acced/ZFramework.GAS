@@ -8,7 +8,8 @@ namespace ZFramework.GAS.Editor
     // Authoring scope is GAS assets only. Projects own all other references.
     internal static class SkillReferenceGuard
     {
-        internal static IEnumerable<string> Files()=>AssetDatabase.FindAssets("t:GameplayAbilityAsset t:GameplayEffectAsset t:SkillAnimationAsset t:SkillActionModuleAsset")
+        internal static IEnumerable<string> Files()=>AssetDatabase.FindAssets("t:GameplayAbilityAsset t:GameplayEffectAsset t:SkillActionModuleAsset" +
+            (SkillEditorExtensions.Timeline is { } editor ? " t:" + editor.AssetType.Name : ""))
             .Select(AssetDatabase.GUIDToAssetPath).Distinct();
         internal static string Find(string targetFile,IEnumerable<Object> objects,ICollection<Object> skip=null)
         {

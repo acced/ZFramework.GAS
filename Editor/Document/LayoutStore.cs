@@ -115,9 +115,10 @@ namespace ZFramework.GAS.Editor
                 string key=AssetReferences.Key(asset)+"#";
                 if(asset is GameplayAbilityAsset)valid.Add(key+"activationActions");
                 if(asset is SkillActionModuleAsset)valid.Add(key+"actions");
-                if(asset is SkillAnimationAsset){
-                    using var so=new SerializedObject(asset);var markers=so.FindProperty("markers");
-                    for(int i=0;i<markers.arraySize;i++)valid.Add(key+markers.GetArrayElementAtIndex(i).FindPropertyRelative("id").stringValue);
+                if (SkillEditorExtensions.Supports(asset))
+                {
+                    using var so = new SerializedObject(asset);
+                    foreach (var entry in SkillEditorExtensions.Entries(so)) valid.Add(key + entry.Id);
                 }
             }
             if(_data.flow.RemoveAll(e=>!valid.Contains(e.owner))>0)_dirty=true;

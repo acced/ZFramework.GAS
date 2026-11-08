@@ -82,9 +82,9 @@ namespace ZFramework.GAS.Editor
         public float PreviewEnd
         {
             get=>_previewEnd;
-            internal set{if(_previewEnd==value)return;_previewEnd=value;PreviewRangeChanged?.Invoke();}
+            set{if(_previewEnd==value)return;_previewEnd=value;PreviewRangeChanged?.Invoke();}
         }
-        public float PlaybackDuration => Mathf.Max(Root?.Animation()?.Duration??0,PreviewEnd);
+        public float PlaybackDuration => Mathf.Max(SkillEditorExtensions.Asset(Root) is { } asset ? SkillEditorExtensions.Timeline.Duration(asset) : 0, PreviewEnd);
         public event Action<ChangeSet> Changed;
         private void Publish(ChangeSet change) => Changed?.Invoke(change);
         public event Action<string> Feedback;
@@ -115,11 +115,11 @@ namespace ZFramework.GAS.Editor
                 }
             }
             PreviewPrefab = Layout.PreviewPrefab;
-            Playback.Playing = false; Playback.Seek(0, root?.Animation()?.Duration ?? 0);
+            Playback.Playing = false; Playback.Seek(0, PlaybackDuration);
             Reload();
             // Missing IDs are editor metadata only. Preserve all existing fields and array order.
             if (assignMissingIds)
-                foreach (var animation in _assets.OfType<SkillAnimationAsset>()) TimelineCommands.EnsureIds(animation);
+                foreach (var asset in _assets) SkillEditorExtensions.EnsureIds(asset);
             CaptureContentHashes();
             Selection.Select(root);
             Publish(new ChangeSet(root, true));
@@ -146,15 +146,13 @@ namespace ZFramework.GAS.Editor
                     { structure = true; break; }
                 }
             if (structure) Reload(restoreSubassets);
-            if (change.Asset is SkillAnimationAsset edited) TimelineCommands.EnsureIds(edited, true);
-            else if (structure) foreach (var animation in _assets.OfType<SkillAnimationAsset>()) TimelineCommands.EnsureIds(animation, true);
+            if (SkillEditorExtensions.Supports(change.Asset)) SkillEditorExtensions.EnsureIds(change.Asset, true);
+            else if (structure) foreach (var asset in _assets) SkillEditorExtensions.EnsureIds(asset, true);
             var invalid = new HashSet<ScriptableObject>();
             void Invalidate(ScriptableObject asset)
             {
                 if (asset == null || !invalid.Add(asset)) return;
-                if (asset is GameplayAbilityAsset ability) ability.InvalidateDefinition();
-                else if (asset is GameplayEffectAsset effect) effect.InvalidateDefinition();
-                else if (asset is SkillAnimationAsset animation) animation.InvalidateDefinition();
+                if (asset is IDefinitionAsset definition) definition.InvalidateDefinition();
                 if (_parents.TryGetValue(asset, out var parents)) foreach (var parent in parents) Invalidate(parent);
             }
             if (change.Asset is ScriptableObject changed) Invalidate(changed);
@@ -232,7 +230,7 @@ namespace ZFramework.GAS.Editor
         private void Visit(ScriptableObject asset, HashSet<ScriptableObject> visited, bool restoreSubassets = false)
         {
             if (asset == null || !visited.Add(asset)) return;
-            if (!(asset is GameplayAbilityAsset || asset is GameplayEffectAsset || asset is SkillAnimationAsset || asset is SkillActionModuleAsset || asset is SkillParameterSetAsset)) return;
+            if (!(asset is GameplayAbilityAsset || asset is GameplayEffectAsset || SkillEditorExtensions.Supports(asset) || asset is SkillActionModuleAsset || asset is SkillParameterSetAsset)) return;
             _assets.Add(asset);
             foreach (var child in AssetReferences.Children(asset))
             {
@@ -267,7 +265,7 @@ namespace ZFramework.GAS.Editor
             var p = so.GetIterator();
             while (p.Next(true))
                 if (p.propertyType == SerializedPropertyType.ObjectReference && p.objectReferenceValue is ScriptableObject child &&
-                    (child is GameplayEffectAsset || child is SkillAnimationAsset || child is SkillActionModuleAsset || child is SkillParameterSetAsset)) yield return child;
+                    (child is GameplayEffectAsset || SkillEditorExtensions.Supports(child) || child is SkillActionModuleAsset || child is SkillParameterSetAsset)) yield return child;
         }
         public static void Replace(SerializedObject so, Object from, Object to)
         {

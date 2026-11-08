@@ -18,8 +18,12 @@ Unity 的 Gameplay Ability System 实现。属性、标签、效果、能力、C
 | 程序集 | 内容 | 依赖 |
 |---|---|---|
 | `ZFramework.GAS` | 规则本体：Attribute / Effect / Ability / Cue 路由、标签配置清单 | **mscorlib + System + ZFramework.GameplayTags（纯 C# Core）** |
-| `ZFramework.GAS.Unity` | 需要引擎能力的部分：目标查询、投射物、区域效果、授权资产 | ZFramework.GAS + ZFramework.GameplayTags Core + UnityEngine |
-| `ZFramework.GAS.Editor` | 技能结构图、动画时间轴编辑器 | ZFramework.GAS + ZFramework.GAS.Unity + Tags Core + UnityEditor |
+| `ZFramework.GAS.Unity` | 授权资产、动作执行、参数、查询与宿主服务 | ZFramework.GAS + Tags Core + UnityEngine |
+| `ZFramework.GAS.Unity.Realtime` | 动画播放、时间轴、投射物、区域效果和 Cue 表现 | GAS Core + GAS Unity + Tags Core |
+| `ZFramework.GAS.Editor` | 技能文档、结构图、动作流程、详情、基础校验与调试 | GAS Core + GAS Unity + Tags Core + UnityEditor |
+| `ZFramework.GAS.Editor.Realtime` | 时间轴编辑、预览、动画模板、实时校验与调试条 | GAS Editor + GAS Unity.Realtime + 两者的基础依赖 |
+
+只使用基础编辑器时，可以从「新建技能 → 空白技能」开始。实时功能在加载编辑器扩展后出现；[编辑器依赖边界](Docs~/EditorAssemblyBoundaries.md)列出了各接入点和基础配置的验证方法。
 
 两个 Core asmdef 都设为 `noEngineReferences: true`。Core 只能引用 Core，Unity 层引用 Core 和引擎；禁止反向引用。项目生成的标签词表属于项目，GAS 不引用 Generated 程序集。
 
@@ -35,7 +39,7 @@ dotnet run --project Tests~/Core/Core.csproj -c Release
 ## 包与命名
 
 UPM 包名为 `com.acced.zframework.gas`，依赖 `com.acced.zframework.gameplaytags` 1.0.0。
-程序集与命名空间统一为 `ZFramework.GAS`、`ZFramework.GAS.Unity`、`ZFramework.GAS.Editor`。
+实时扩展沿用 `ZFramework.GAS.Unity` 和 `ZFramework.GAS.Editor` 命名空间。自定义 asmdef 使用扩展类型时，须显式引用相应的 Realtime 程序集。
 在使用 GAS 的 Unity 工程中，将下面这项加入 `Packages/manifest.json` 的 `dependencies`，固定 Tags 的 Git 来源和版本：
 
 ```json

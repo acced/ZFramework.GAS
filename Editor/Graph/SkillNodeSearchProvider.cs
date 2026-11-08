@@ -35,8 +35,8 @@ namespace ZFramework.GAS.Editor
                     tree.Add(new SearchTreeEntry(new GUIContent(effect.name + "  ↗")) { level = 2, userData = new Entry { Asset = effect } });
                 }
             }
-            if (!_port.HasValue || _port.Value.Kind == PortKind.Animation)
-                tree.Add(new SearchTreeEntry(new GUIContent("新建动画")) { level = 1, userData = new Entry { Type = typeof(SkillAnimationAsset), Name = "技能动画" } });
+            if (SkillEditorExtensions.Timeline is { } editor && (!_port.HasValue || _port.Value.Kind == PortKind.Animation))
+                tree.Add(new SearchTreeEntry(new GUIContent("新建" + editor.DisplayName)) { level = 1, userData = new Entry { Type = editor.AssetType, Name = "技能" + editor.DisplayName } });
             return tree;
         }
         public bool OnSelectEntry(SearchTreeEntry entry, SearchWindowContext context)

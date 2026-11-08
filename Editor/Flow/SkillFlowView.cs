@@ -89,17 +89,15 @@ namespace ZFramework.GAS.Editor
             _parents.Clear(); _root=_doc.Root;
             _owner=_doc.Selection.Asset as ScriptableObject; _marker=null;
             if (_owner==null) _owner=_root;
-            if (_owner is SkillAnimationAsset animation)
+            if (SkillEditorExtensions.Supports(_owner))
             {
-                if (_doc.Selection.Track=="markers") _marker=_doc.Selection.ElementId;
-                else if (_doc.Selection.Track=="@field")
-                {
-                    var p=_doc.Serialized(animation).FindProperty("markers");
-                    for(int i=0;i<p.arraySize;i++) { var m=p.GetArrayElementAtIndex(i); if ((_doc.Selection.ElementId+".").StartsWith(m.propertyPath+".")) _marker=m.FindPropertyRelative("id").stringValue; }
-                }
-                if (_marker==null) _owner=_root;
+                if (_doc.Selection.Track == SkillEditorExtensions.Timeline.EntryTrack) _marker = _doc.Selection.ElementId;
+                else if (_doc.Selection.Track == "@field")
+                    foreach (var entry in SkillEditorExtensions.Entries(_doc.Serialized(_owner)))
+                        if ((_doc.Selection.ElementId + ".").StartsWith(entry.PropertyPath + ".", StringComparison.Ordinal)) _marker = entry.Id;
+                if (_marker == null) _owner = _root;
             }
-            if (_owner is not SkillAnimationAsset && _owner is not SkillActionModuleAsset) _owner=_root;
+            else if (_owner is not SkillActionModuleAsset) _owner = _root;
             Rebuild();
             if (_doc.Selection.Track=="@field") foreach(var n in _nodes.Values)
                 if (n is FlowNode f && _doc.Selection.ElementId==f.Path) { _graph.AddToSelection(n); _selected=(string)n.userData; }
@@ -124,7 +122,7 @@ namespace ZFramework.GAS.Editor
                 Rebuild(); return;
             }
             if(change.Structure){Rebuild();return;}
-            if(change.Asset==_doc.Root.Animation() && change.Paths.Any(p=>p.EndsWith(".key") || p.EndsWith(".time")))
+            if(change.Asset == SkillEditorExtensions.Asset(_doc.Root))
             {
                 RefreshEntries(out string entry);
                 if(_entryNode?.parent!=null){_entryNode.title=entry;_crumb.text=Breadcrumb(entry);}
@@ -143,15 +141,12 @@ namespace ZFramework.GAS.Editor
         {
             _entries.menu.MenuItems().Clear();
             _entries.menu.AppendAction("激活动作",_=>Choose(_doc.Root,null));
-            var anim=_doc.Root.Animation();
-            var markers=anim!=null ? _doc.Serialized(anim).FindProperty("markers"):null;
-            entry="激活动作";
-            if (markers!=null) for(int i=0;i<markers.arraySize;i++)
+            var presentation = SkillEditorExtensions.Asset(_doc.Root);
+            entry = "激活动作";
+            foreach (var item in SkillEditorExtensions.Entries(_doc.Serialized(presentation)))
             {
-                var m=markers.GetArrayElementAtIndex(i); string id=m.FindPropertyRelative("id").stringValue;
-                string title=$"标记 {m.FindPropertyRelative("key").stringValue} · {m.FindPropertyRelative("time").floatValue:0.###}s";
-                _entries.menu.AppendAction(title,_=>Choose(anim,id));
-                if (_owner==anim && id==_marker) { _rootPath=m.propertyPath+".actions"; entry=title; }
+                _entries.menu.AppendAction(item.Label, _ => Choose(presentation, item.Id));
+                if (_owner == presentation && item.Id == _marker) { _rootPath = item.Actions.propertyPath; entry = item.Label; }
             }
             if (_owner is SkillActionModuleAsset) { _rootPath="actions"; entry=_owner.name; }
             else if (_rootPath==null) { _owner=_doc.Root; _rootPath="activationActions"; }
@@ -171,7 +166,6 @@ namespace ZFramework.GAS.Editor
             _nodes.Clear(); _branchModes.Clear(); _entries.menu.MenuItems().Clear(); _rootPath=null; _crumb.text="";
             if (_doc.Root==null) return;
             RefreshEntries(out string entry);
-            var anim=_doc.Root.Animation();
             _layoutKey=AssetReferences.Key(_owner)+"#"+(_marker ?? _rootPath);
             _crumb.text=Breadcrumb(entry);
             var root=_entryNode=new Node{title=entry,userData="$entry"}; AddNode(root,"$entry",0,0);

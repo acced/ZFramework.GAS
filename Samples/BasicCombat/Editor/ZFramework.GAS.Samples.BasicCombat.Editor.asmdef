@@ -6,6 +6,7 @@
     "ZFramework.GAS.Unity",
     "ZFramework.GAS.Unity.Realtime",
     "ZFramework.GAS.Editor",
+    "ZFramework.GAS.Editor.Realtime",
     "ZFramework.GAS.Samples.BasicCombat",
     "ZFramework.GameplayTags",
     "ZFramework.GameplayTags.Editor"

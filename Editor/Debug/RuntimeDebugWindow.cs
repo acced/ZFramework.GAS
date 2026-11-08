@@ -32,7 +32,7 @@ namespace ZFramework.GAS.Editor
             public readonly Label Title = new(), Detail = new();
             public readonly VisualElement Dot = new();
             public readonly ProgressBar Bar = new() { lowValue = 0, highValue = 1 };
-            public readonly TaskStrip Strip;
+            public readonly VisualElement Strip;
             public GameplayAbilityAsset Asset;
             public string ActionId;
             public Row(bool ability, bool task)
@@ -50,7 +50,7 @@ namespace ZFramework.GAS.Editor
                 else line.Add(Title);
                 Add(line); Detail.AddToClassList("debug-detail"); Add(Detail);
                 Bar.AddToClassList("debug-progress"); Add(Bar);
-                if (task) { Strip = new TaskStrip(); Add(Strip); }
+                if (task) { Strip = new VisualElement(); Add(Strip); }
             }
             public void Fill(string name, string detail, Color color, float fraction = -1, string progress = "")
             {
@@ -100,7 +100,7 @@ namespace ZFramework.GAS.Editor
             var names=new[]{"单位","事件","监视"};
             for(int i=0;i<names.Length;i++){int page=i;tabs.Add(new ToolbarButton(()=>{_page=page;ShowPage();}){text=names[i]});}
             _scroll = new ScrollView(); rootVisualElement.Add(_scroll);
-            _abilityHost = Section("技能", "debug-abilities"); _taskHost = Section("正在播放", "debug-tasks");
+            _abilityHost = Section("技能", "debug-abilities"); _taskHost = SkillEditorExtensions.Timeline != null ? Section("正在播放", "debug-tasks") : null;
             _tagHost = Section("标签", "debug-tags"); _attributeHost = Section("属性", "debug-attributes"); _effectHost = Section("效果", "debug-effects");
             _actionHost = Section("动作与独立任务", "debug-actions");
             var traceHost=Section("事件历史 · 最近 4096 条", "debug-events");
@@ -117,11 +117,12 @@ namespace ZFramework.GAS.Editor
             _trace.selectionChanged+=items=>{foreach(SkillTrace e in items) if(e.Skill!=null)
             {
                 var w=SkillEditorWindow.Open();w.Show(e.Skill);
-                if(e.Kind==TraceKind.标记 && e.Skill.Animation()!=null)
+                if (e.Kind == TraceKind.标记 && SkillEditorExtensions.Asset(e.Skill) is { } presentation)
                 {
-                    w.Document.Selection.Select(e.Skill.Animation(),"markers",e.RawId);
-                    var p=TimelineCommands.Find(w.Document.Serialized(e.Skill.Animation()),"markers",e.RawId);
-                    if(p!=null && !w.Document.Playback.Live)w.Document.Playback.Seek(p.FindPropertyRelative("time").floatValue,e.Skill.Animation().Duration);
+                    var editor = SkillEditorExtensions.Timeline;
+                    w.Document.Selection.Select(presentation, editor.EntryTrack, e.RawId);
+                    foreach (var entry in editor.Entries(w.Document.Serialized(presentation)))
+                        if (entry.Id == e.RawId && !w.Document.Playback.Live) { w.Document.Playback.Seek(entry.Time, editor.Duration(presentation)); break; }
                 }
                 else if(SkillActionNavigation.Select(w.Document,e.NavigationId ?? e.RawId) || (e.NavigationId != e.RawId && SkillActionNavigation.Select(w.Document,e.RawId)))w.Document.OpenFlow();
             }};
@@ -221,13 +222,13 @@ namespace ZFramework.GAS.Editor
                 var state = snapshot.Actions[i]; var row = _actions[i]; row.Asset = state.Asset; row.ActionId = state.Id;
                 row.Fill((state.Asset != null ? state.Asset.DisplayName : "技能") + (state.Independent ? " · 场景任务" : " · 技能任务"), state.State, SkillColors.Task);
             }
-            Resize(_tasks, _taskHost, snapshot.Tasks.Count, task: true);
+            if (_taskHost != null) Resize(_tasks, _taskHost, snapshot.Tasks.Count, task: true);
             for (int i = 0; i < _tasks.Count; i++)
             {
                 var task = snapshot.Tasks[i];
-                _tasks[i].Fill(task.AbilityName + " · " + task.Definition.ClipName,
-                    $"实际 {task.NormalizedTime * task.Duration:0.00} / {task.Duration:0.00}s  ·  授权 {task.AuthoredTime:0.00} / {task.Definition.Duration:0.00}s" + (task.Loop ? "  · 循环" : ""), SkillColors.Animation);
-                _tasks[i].Strip.SetTask(task);
+                _tasks[i].Fill(task.AbilityName + " · " + task.ClipName,
+                    $"实际 {task.NormalizedTime * task.Duration:0.00} / {task.Duration:0.00}s  ·  授权 {task.AuthoredTime:0.00} / {task.AuthoredDuration:0.00}s" + (task.Loop ? "  · 循环" : ""), SkillColors.Animation);
+                task.BindStrip(_tasks[i].Strip);
             }
             Resize(_tags, _tagHost, snapshot.Tags.Count);
             for (int i = 0; i < _tags.Count; i++)

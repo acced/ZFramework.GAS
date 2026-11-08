@@ -11,8 +11,9 @@ namespace ZFramework.GAS.Editor
 {
     public static class SkillAssetFactory
     {
-        public static void SetMainAnimation(GameplayAbilityAsset ability, SkillAnimationAsset animation)
+        public static void SetMainAnimation(GameplayAbilityAsset ability, ScriptableObject animation)
         {
+            if (animation != null && !SkillEditorExtensions.Supports(animation)) throw new ArgumentException("未注册的时间轴资产类型。", nameof(animation));
             using var so = new SerializedObject(ability);
             PortRules.Write(so, new PortId(PortKind.Animation), animation);
             so.ApplyModifiedProperties();
@@ -33,7 +34,9 @@ namespace ZFramework.GAS.Editor
             ScriptableObject created = null;
             EditCommand.Transaction(doc, "创建" + name, doc.Root, () =>
             {
-                created = type == typeof(SkillAnimationAsset) ? AddEmbedded<SkillAnimationAsset>(doc.Root, name) : AddEmbedded<GameplayEffectAsset>(doc.Root, name);
+                created = type == typeof(GameplayEffectAsset) ? AddEmbedded<GameplayEffectAsset>(doc.Root, name)
+                    : type != null && type == SkillEditorExtensions.Timeline?.AssetType ? SkillEditorExtensions.Timeline.CreateEmbedded(doc.Root, name)
+                    : throw new ArgumentException("未知的技能资产类型。", nameof(type));
                 using (var so = new SerializedObject(created))
                 {
                     if (created is GameplayEffectAsset)
@@ -46,7 +49,6 @@ namespace ZFramework.GAS.Editor
                             tags.GetArrayElementAtIndex(0).FindPropertyRelative("m_Name").stringValue = "Cooldown." + doc.Root.name;
                         }
                     }
-                    else so.FindProperty("clipName").stringValue = "Attack";
                     so.ApplyModifiedProperties();
                 }
                 if (parent != null && port.HasValue)
@@ -77,7 +79,7 @@ namespace ZFramework.GAS.Editor
                 using var so = new SerializedObject(item);
                 foreach (var pair in map) AssetReferences.Replace(so, pair.Key, pair.Value);
                 so.ApplyModifiedPropertiesWithoutUndo();
-                if (item is SkillAnimationAsset animation) TimelineCommands.EnsureIds(animation);
+                SkillEditorExtensions.EnsureIds(item);
             }
             copied.name = Path.GetFileNameWithoutExtension(destination); EditorUtility.SetDirty(copied);
             AssetDatabase.SaveAssetIfDirty(copied); return copied;
@@ -104,7 +106,7 @@ namespace ZFramework.GAS.Editor
                     using var so = new SerializedObject(item);
                     foreach (var pair in map) AssetReferences.Replace(so, pair.Key, pair.Value);
                     so.ApplyModifiedProperties();
-                    if (item is SkillAnimationAsset animation) TimelineCommands.EnsureIds(animation);
+                    SkillEditorExtensions.EnsureIds(item);
                 }
                 EditorUtility.SetDirty(doc.Root);
             });
@@ -122,10 +124,7 @@ namespace ZFramework.GAS.Editor
         }
         internal static IEnumerable<ScriptableObject> ReferenceOwners()
         {
-            var paths=new HashSet<string>();
-            foreach(string filter in new[]{"t:GameplayAbilityAsset","t:GameplayEffectAsset","t:SkillAnimationAsset","t:SkillActionModuleAsset"})
-                foreach(string guid in AssetDatabase.FindAssets(filter))paths.Add(AssetDatabase.GUIDToAssetPath(guid));
-            foreach(string path in paths)foreach(var asset in AssetDatabase.LoadAllAssetsAtPath(path))
+            foreach(string path in SkillReferenceGuard.Files())foreach(var asset in AssetDatabase.LoadAllAssetsAtPath(path))
                 if(asset is ScriptableObject so)yield return so;
         }
         public static void DeleteNode(SkillDocument doc, ScriptableObject asset)

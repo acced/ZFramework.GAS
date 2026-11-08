@@ -1,19 +1,43 @@
+using System;
+using ZFramework.GAS.Unity;
 using UnityEngine;
 using UnityEngine.UIElements;
 
 namespace ZFramework.GAS.Editor
 {
+    public sealed class AnimationTaskSnapshot : RuntimeSnapshot.PresentationTask
+    {
+        public readonly SkillAnimationDefinition Definition;
+        public readonly string SectionId, QueuedSectionId;
+        public readonly ClipWeight[] Weights;
+        internal AnimationTaskSnapshot(AnimationTask task)
+        {
+            Definition = task.Definition; SectionId = task.SectionId; QueuedSectionId = task.QueuedSectionId;
+            var weights = new ClipWeight[8]; int count = task.CopyWeights(weights); Array.Resize(ref weights, count); Weights = weights;
+            AbilityAsset = DefinitionSource.Of(task.Ability.Definition) as GameplayAbilityAsset;
+            Asset = DefinitionSource.Of(Definition) as SkillAnimationAsset;
+            AbilityName = AbilityAsset != null ? AbilityAsset.name : Definition.ClipName;
+            ClipName = Definition.ClipName; Loop = Definition.Loop; AuthoredDuration = Definition.Duration;
+            Duration = task.Duration; NormalizedTime = task.NormalizedTime;
+        }
+        public override void BindStrip(VisualElement host)
+        {
+            if (host.childCount == 0) host.Add(new TaskStrip());
+            ((TaskStrip)host[0]).SetTask(this);
+        }
+    }
+
     /// <summary>运行中定义的只读时间轴，不读取可能已修改的授权资产。</summary>
     public sealed class TaskStrip : VisualElement
     {
-        private RuntimeSnapshot.Animation _task;
+        private AnimationTaskSnapshot _task;
         public TaskStrip()
         {
             AddToClassList("debug-task-strip");
             generateVisualContent += Draw;
             tooltip = "从上到下：动画 / 混入、效果标记点、Cue 区间、标签窗口、任务事件。竖线为授权时间播放头。";
         }
-        public void SetTask(RuntimeSnapshot.Animation task) { _task = task; tooltip=task==null?null:string.Join(" · ",System.Array.ConvertAll(task.Weights,w=>w.Name+" "+w.Weight.ToString("P0"))); MarkDirtyRepaint(); }
+        public void SetTask(AnimationTaskSnapshot task) { _task = task; tooltip=task==null?null:string.Join(" · ",System.Array.ConvertAll(task.Weights,w=>w.Name+" "+w.Weight.ToString("P0"))); MarkDirtyRepaint(); }
         private void Draw(MeshGenerationContext context)
         {
             if (_task == null || contentRect.width <= 16) return;

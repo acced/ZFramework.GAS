@@ -15,7 +15,7 @@ namespace ZFramework.GAS.Editor
             try
             {
                 if (asset is GameplayAbilityAsset skill) { skill.ResolveParameters(1); skill.BuildActions(); }
-                else if (asset is SkillAnimationAsset animation) { _ = animation.Definition; }
+                else if (SkillEditorExtensions.Supports(asset)) SkillEditorExtensions.Timeline.BuildDefinition(asset);
                 else if (asset is SkillActionModuleAsset module) module.Build();
             }
             catch (Exception error)
@@ -30,16 +30,6 @@ namespace ZFramework.GAS.Editor
             var known = new Dictionary<string, SkillParameter>();
             foreach (var p in SkillNumberDrawer.Parameters(asset is SkillActionModuleAsset ? asset : context.Document.Root)) if (p != null) known[p.Id] = p;
             using var serialized = new SerializedObject(asset); var field = serialized.GetIterator();
-            if(asset is SkillAnimationAsset tracks && tracks.runtimeTracks!=null)
-                for(int i=0;i<tracks.runtimeTracks.Length;i++){
-                    string service=tracks.runtimeTracks[i] switch{CameraShakeTrack=>"ISkillCameraService",HitStopTrack or TimeScaleTrack=>"ISkillTimeService",LookAtTrack=>"ISkillRigService",_=>null};
-                    if(service==null)continue;
-                    var prefab=context.Document.PreviewPrefab;
-                    if(prefab!=null && prefab.GetComponentsInChildren<MonoBehaviour>(true).Any(b=>b!=null && b.GetType().GetInterfaces().Any(t=>t.Name==service)))continue;
-                    if(service=="ISkillRigService" && prefab!=null && prefab.GetComponentInChildren<SkillAnimator>(true)?.Backend is PlayableAnimationBackend)continue;
-                    var path=$"runtimeTracks.Array.data[{i}]";
-                    context.Add(issues,"GAS_PRESENTATION",asset,path,"此轨道需要 "+service+"；可由场景宿主在施放时提供，缺少服务时不播放。",IssueSeverity.Info,track:"@field",elementId:path);
-                }
             SkillParameter FindParameter(SerializedProperty property,string id)
             {
                 var local=SkillNumberDrawer.LocalScope(property);

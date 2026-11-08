@@ -233,12 +233,12 @@ namespace ZFramework.GAS.Editor
         private void RefreshOutline()
         {
             _outline.Clear(); if (_doc.Root == null) return;
-            foreach (var group in _doc.Assets.Where(a => a != _doc.Root).GroupBy(a => a is SkillAnimationAsset ? "动画" : AssetDatabase.GetAssetPath(a) == AssetDatabase.GetAssetPath(_doc.Root) ? "效果 · 内嵌" : "引用 · 外部"))
+            foreach (var group in _doc.Assets.Where(a => a != _doc.Root).GroupBy(a => SkillEditorExtensions.Supports(a) ? SkillEditorExtensions.Timeline.DisplayName : AssetDatabase.GetAssetPath(a) == AssetDatabase.GetAssetPath(_doc.Root) ? "效果 · 内嵌" : "引用 · 外部"))
             {
                 var fold = new Foldout { text = group.Key + $"  ({group.Count()})", value = true }; _outline.Add(fold);
                 foreach (var asset in group)
                 {
-                    var row = Row(asset, asset is SkillAnimationAsset ? "▶" : "▪", asset is SkillAnimationAsset ? SkillColors.Animation : SkillColors.Instant, () => _doc.Selection.Select(asset));
+                    var row = Row(asset, SkillEditorExtensions.Supports(asset) ? "▶" : "▪", SkillEditorExtensions.Supports(asset) ? SkillColors.Animation : SkillColors.Instant, () => _doc.Selection.Select(asset));
                     fold.Add(row);
                     row.AddManipulator(new ContextualMenuManipulator(e => e.menu.AppendAction("查找引用", _ =>
                     { SkillReferenceWindow.Show(asset); })));

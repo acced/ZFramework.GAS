@@ -18,7 +18,7 @@ namespace ZFramework.GAS.Editor
         public string GenerateAdditionalLinkXmlFile(BuildReport report,UnityLinkerBuildPipelineData data)
         {
             var player=CompilationPipeline.GetAssemblies(AssembliesType.Player).Select(a=>a.name).ToHashSet();
-            var roots=new[]{typeof(SkillAction),typeof(AnimationBackend),typeof(SkillRuntimeTrack)};
+            var roots=new[] { typeof(SkillAction) }.Concat(SkillEditorExtensions.Timeline?.ManagedReferenceRoots ?? Array.Empty<Type>());
             var types=roots.SelectMany(t=>TypeCache.GetTypesDerivedFrom(t)).Distinct()
                 .Where(t=>!t.IsAbstract && !t.ContainsGenericParameters && player.Contains(t.Assembly.GetName().Name));
             var xml=new XElement("linker",types.GroupBy(t=>t.Assembly.GetName().Name).OrderBy(g=>g.Key)

@@ -65,7 +65,7 @@ namespace ZFramework.GAS.Editor
                 foreach (var obj in DragAndDrop.objectReferences)
                 {
                     if (obj is GameplayAbilityAsset ability) { SkillEditorWindow.Open().Show(ability); break; }
-                    if (obj is GameplayEffectAsset || obj is SkillAnimationAsset)
+                    if (obj is GameplayEffectAsset || SkillEditorExtensions.Supports(obj))
                     { var asset = (ScriptableObject)obj; _doc.AddLoose(asset); SuggestPosition(asset, contentViewContainer.WorldToLocal(e.mousePosition)); _doc.Selection.Select(asset); }
                 }
                 DragAndDrop.AcceptDrag(); e.StopPropagation();
@@ -444,7 +444,7 @@ namespace ZFramework.GAS.Editor
         public void Dispose() { _disposed = true; _layoutWork?.Pause(); _doc.Changed -= Sync; _doc.Selection.Changed -= SyncSelection; this.Unbind(); }
     }
 
-    internal sealed class SkillNode : Node
+    internal sealed class SkillNode : Node, ISkillNodeFields
     {
         private readonly SkillDocument _doc;
         private readonly SkillGraphView _graph;
@@ -473,12 +473,8 @@ namespace ZFramework.GAS.Editor
                 Field(so, "duration", new FloatField("时长 / s") { isDelayed = true });
                 Field(so, "period", new FloatField("周期 / s") { isDelayed = true });
             }
-            else if (asset is SkillAnimationAsset)
-            {
-                Field(so, "clipName", new TextField("片段") { isDelayed = true });
-                Field(so, "duration", new FloatField("时长 / s") { isDelayed = true });
-                Field(so, "loop", new Toggle("循环"));
-            }
+            else if (SkillEditorExtensions.Supports(asset))
+                SkillEditorExtensions.Timeline.AddNodeFields(this, so);
             else
             {
                 var button = new Button(() => { doc.Selection.Select(asset); SkillEditorWindow.Open().ShowAbilitySettings(); }) { text = "编辑能力标签与门禁" };
@@ -490,7 +486,7 @@ namespace ZFramework.GAS.Editor
             RegisterCallback<ClickEvent>(_ => schedule.Execute(() =>
             { if (Asset != null && doc.Layout.IsCollapsed(Asset) == expanded) { doc.Layout.SetCollapsed(Asset, !expanded); doc.Layout.Save(); } }));
         }
-        private void Field<T>(SerializedObject so, string path, BaseField<T> field)
+        public void Field<T>(SerializedObject so, string path, BaseField<T> field)
         {
             var property = so.FindProperty(path);
             object initial = property.propertyType switch
@@ -517,23 +513,27 @@ namespace ZFramework.GAS.Editor
         private void SyncCues(SerializedObject so)
         {
             _cues.Clear();
-            bool regions = Asset is SkillAnimationAsset;
-            var array = so.FindProperty(regions ? "cueRegions" : "cueTags");
-            if (array != null) for (int i = 0; i < array.arraySize; i++)
+            IEnumerable<SkillNodeCue> EffectCues()
             {
-                var item = array.GetArrayElementAtIndex(i);
-                string tag = item.FindPropertyRelative(regions ? "cueTag.m_Name" : "m_Name").stringValue;
-                if (string.IsNullOrEmpty(tag) && !regions) continue;
-                string id = regions ? item.FindPropertyRelative("id").stringValue : null;
+                var tags = so.FindProperty("cueTags");
+                for (int i = 0; tags != null && i < tags.arraySize; i++)
+                {
+                    string tag = tags.GetArrayElementAtIndex(i).FindPropertyRelative("m_Name").stringValue;
+                    if (!string.IsNullOrEmpty(tag)) yield return new SkillNodeCue(tag);
+                }
+            }
+            var cues = SkillEditorExtensions.Supports(Asset) ? SkillEditorExtensions.Timeline.Cues(so) : EffectCues();
+            foreach (var cue in cues)
+            {
+                string tag = cue.Tag;
                 string label = "Cue · " + (string.IsNullOrEmpty(tag) ? "未设置标签" : tag.StartsWith("Cue.", StringComparison.Ordinal) ? tag.Substring(4) : tag);
-                if (regions) label += $"  {item.FindPropertyRelative("start").floatValue:0.##}–" +
-                    (item.FindPropertyRelative("end").floatValue < 0 ? "动画结束" : $"{item.FindPropertyRelative("end").floatValue:0.##}s");
-                var strip = new Button(() => _doc.Selection.Select(Asset, regions ? "cueRegions" : null, id))
-                { text = label, userData = id, tooltip = tag + (regions ? " · 点击定位时间轴区间" : " · 效果触发的 Cue") };
+                if (cue.Span != null) label += "  " + cue.Span;
+                var strip = new Button(() => _doc.Selection.Select(Asset, cue.Track, cue.Id))
+                { text = label, name = cue.Track, userData = cue.Id, tooltip = tag + (cue.Track != null ? " · 点击定位时间轴区间" : " · 效果触发的 Cue") };
                 strip.AddToClassList("node-cue-strip"); _cues.Add(strip);
                 // The graph's node-selection manipulator must not replace a region selection.
                 strip.RegisterCallback<PointerDownEvent>(e =>
-                { if (e.button == 0) { _doc.Selection.Select(Asset, regions ? "cueRegions" : null, id); e.StopPropagation(); } }, TrickleDown.TrickleDown);
+                { if (e.button == 0) { _doc.Selection.Select(Asset, cue.Track, cue.Id); e.StopPropagation(); } }, TrickleDown.TrickleDown);
                 strip.RegisterCallback<MouseDownEvent>(e => e.StopPropagation());
             }
             _cues.style.display = _cues.childCount == 0 ? DisplayStyle.None : DisplayStyle.Flex;
@@ -543,7 +543,7 @@ namespace ZFramework.GAS.Editor
         {
             foreach (var strip in _cues.Children())
             {
-                bool selected = _doc.Selection.Asset == Asset && _doc.Selection.Track == "cueRegions" && (string)strip.userData == _doc.Selection.ElementId;
+                bool selected = _doc.Selection.Asset == Asset && _doc.Selection.Track == strip.name && strip.userData != null && (string)strip.userData == _doc.Selection.ElementId;
                 strip.EnableInClassList("selected-cue", selected);
                 var cue = SkillColors.Cue;
                 strip.style.color = Color.Lerp(cue, Color.white, .72f);
@@ -559,7 +559,7 @@ namespace ZFramework.GAS.Editor
             var so = _doc.Serialized(Asset); var desired = new Dictionary<PortId, string>(); Color color;
             if (Asset is GameplayAbilityAsset)
             {
-                foreach (var kind in new[] { PortKind.Cost, PortKind.Cooldown, PortKind.Animation }) { var id = new PortId(kind); desired[id] = id.Label; }
+                foreach (var kind in new[] { PortKind.Cost, PortKind.Cooldown, PortKind.Animation }) { var id = new PortId(kind); if (id.AcceptedType != null) desired[id] = id.Label; }
                 color = SkillColors.Ability; _summary.text = "ABILITY  /  技能定义";
             }
             else if (Asset is GameplayEffectAsset)
@@ -573,15 +573,12 @@ namespace ZFramework.GAS.Editor
                 int count = so.FindProperty("modifiers").arraySize;
                 _summary.text = count == 0 ? "EFFECT  /  无修改器" : count + " 个修改器 · " + ModifierDrawer.Summary(so.FindProperty("modifiers").GetArrayElementAtIndex(0));
             }
-            else if (Asset is SkillAnimationAsset)
+            else if (SkillEditorExtensions.Supports(Asset))
             {
-                color = SkillColors.Animation; var markers = so.FindProperty("markers");
-                for (int i = 0; i < markers.arraySize; i++)
-                {
-                    var m = markers.GetArrayElementAtIndex(i); var id = new PortId(PortKind.Marker, m.FindPropertyRelative("id").stringValue);
-                    desired[id] = $"◆ {m.FindPropertyRelative("time").floatValue:0.00}s  {m.FindPropertyRelative("key").stringValue}";
-                }
-                _summary.text = "ANIMATION  /  " + markers.arraySize + " 个事件";
+                color = SkillColors.Animation;
+                foreach (var entry in SkillEditorExtensions.Entries(so))
+                    desired[new PortId(PortKind.Marker, entry.Id)] = "◆ " + entry.Label;
+                _summary.text = SkillEditorExtensions.Timeline.DisplayName + "  /  " + desired.Count + " 个事件";
             }
             else { color = SkillColors.Task; _summary.text = Asset is SkillActionModuleAsset ? "MODULE  /  共享动作模块" : "PARAMETERS  /  共享参数"; }
             int actionCount = 0;
@@ -607,7 +604,7 @@ namespace ZFramework.GAS.Editor
                         foreach (var asset in DragAndDrop.objectReferences.OfType<ScriptableObject>()) if (id.AcceptedType.IsInstanceOfType(asset)) PortRules.Attach(_doc, Asset, id, asset);
                         DragAndDrop.AcceptDrag(); e.StopPropagation();
                     });
-                    port.RegisterCallback<MouseDownEvent>(e => { if (id.Kind == PortKind.Marker) { _doc.Selection.Select(Asset, "markers", id.ElementId); if (e.clickCount == 2) { _doc.OpenFlow(); e.StopPropagation(); } } });
+                    port.RegisterCallback<MouseDownEvent>(e => { if (id.Kind == PortKind.Marker) { _doc.Selection.Select(Asset, SkillEditorExtensions.Timeline.EntryTrack, id.ElementId); if (e.clickCount == 2) { _doc.OpenFlow(); e.StopPropagation(); } } });
                     _outputs[id] = port; outputContainer.Add(port);
                 }
                 port.portName = pair.Value; port.portColor = color;

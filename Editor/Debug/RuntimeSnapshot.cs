@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using GameplayTags;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UIElements;
 using ZFramework.GAS.Unity;
 
 namespace ZFramework.GAS.Editor
@@ -14,7 +15,7 @@ namespace ZFramework.GAS.Editor
         public string UnitName { get; }
         public double CapturedAt { get; }
         public IReadOnlyList<Ability> Abilities { get; }
-        public IReadOnlyList<Animation> Tasks { get; }
+        public IReadOnlyList<PresentationTask> Tasks { get; }
         public IReadOnlyList<Tag> Tags { get; }
         public IReadOnlyList<Attribute> Attributes { get; }
         public IReadOnlyList<Effect> Effects { get; }
@@ -51,25 +52,19 @@ namespace ZFramework.GAS.Editor
                 CooldownDuration = spec.CooldownDuration;
             }
         }
-        public sealed class Animation
+        // Frozen common data for runtime follow; the provider owns the optional detail strip.
+        public abstract class PresentationTask
         {
-            public readonly GameplayAbilityAsset AbilityAsset;
-            public readonly SkillAnimationAsset Asset;
-            public readonly SkillAnimationDefinition Definition;
-            public readonly string AbilityName, SectionId, QueuedSectionId;
-            public readonly ClipWeight[] Weights;
-            public readonly float Duration, NormalizedTime, AuthoredTime;
-            public bool Loop => Definition.Loop;
-            internal Animation(AnimationTask task)
-            {
-                Definition = task.Definition; SectionId=task.SectionId; QueuedSectionId=task.QueuedSectionId;
-                var weights=new ClipWeight[8]; int count=task.CopyWeights(weights); Array.Resize(ref weights,count); Weights=weights;
-                AbilityAsset = DefinitionSource.Of(task.Ability.Definition) as GameplayAbilityAsset;
-                Asset = DefinitionSource.Of(Definition) as SkillAnimationAsset;
-                AbilityName = AbilityAsset != null ? AbilityAsset.name : Definition.ClipName;
-                Duration = task.Duration; NormalizedTime = task.NormalizedTime;
-                AuthoredTime = NormalizedTime * Definition.Duration;
-            }
+            public ScriptableObject Asset { get; protected set; }
+            public GameplayAbilityAsset AbilityAsset { get; protected set; }
+            public string AbilityName { get; protected set; }
+            public string ClipName { get; protected set; }
+            public float Duration { get; protected set; }
+            public float NormalizedTime { get; protected set; }
+            public float AuthoredDuration { get; protected set; }
+            public float AuthoredTime => NormalizedTime * AuthoredDuration;
+            public bool Loop { get; protected set; }
+            public abstract void BindStrip(VisualElement host);
         }
         public readonly struct Tag
         {
@@ -124,9 +119,13 @@ namespace ZFramework.GAS.Editor
             var abilities = new List<Ability>(owner.GrantedAbilityCount);
             for (int i = 0; i < owner.GrantedAbilityCount; i++) abilities.Add(new Ability(owner.GetGrantedAbility(i), i));
             Abilities = abilities.AsReadOnly();
-            var tasks = new List<Animation>();
-            for (int i = 0; i < owner.ActiveTaskCount; i++)
-                if (owner.GetActiveTask(i) is AnimationTask task && task.IsActive) tasks.Add(new Animation(task));
+            var tasks = new List<PresentationTask>();
+            if (SkillEditorExtensions.Timeline is { } editor)
+                for (int i = 0; i < owner.ActiveTaskCount; i++)
+                {
+                    var task = owner.GetActiveTask(i);
+                    if (task.IsActive && editor.Capture(task) is { } captured) tasks.Add(captured);
+                }
             Tasks = tasks.AsReadOnly();
             var actions = new List<ActionState>();
             for (int i = 0; i < owner.ActiveTaskCount; i++)

@@ -48,7 +48,7 @@ namespace ZFramework.GAS.Editor
         }
         internal static IEnumerable<SkillParameter> Parameters(SerializedProperty property)
             => LocalScope(property) ?? Parameters(property.serializedObject.targetObject);
-        internal static IEnumerable<SkillParameter> Parameters(Object asset)
+        public static IEnumerable<SkillParameter> Parameters(Object asset)
         {
             if (asset is SkillActionModuleAsset module) return module.parameters != null ? module.parameters.parameters : System.Array.Empty<SkillParameter>();
             var root = asset as GameplayAbilityAsset ?? AssetDatabase.LoadMainAssetAtPath(AssetDatabase.GetAssetPath(asset)) as GameplayAbilityAsset;

@@ -55,7 +55,7 @@ namespace ZFramework.GAS.Editor
                     else if(type==SerializedPropertyType.ObjectReference && p.objectReferenceValue is ScriptableObject child)
                     {
                         text=child.name;
-                        if(child is GameplayEffectAsset || child is SkillAnimationAsset || child is SkillActionModuleAsset || child is SkillParameterSetAsset)children.Add(child);
+                        if(child is GameplayEffectAsset || SkillEditorExtensions.Supports(child) || child is SkillActionModuleAsset || child is SkillParameterSetAsset)children.Add(child);
                     }
                     if(!string.IsNullOrEmpty(text)) list.Add(new Hit{Skill=root,Asset=asset,Path=p.propertyPath,Text=text,Id=actions.Count>0?actions.Peek().id:null});
                 }
