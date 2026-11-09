@@ -7,7 +7,7 @@ using ZFramework.GAS.Unity;
 
 namespace ZFramework.GAS.Editor
 {
-    internal sealed class RealtimeTimelineEditor : ISkillTimelineEditor
+    internal sealed class RealtimeTimelineEditor : ISkillTimelineEditor, ISkillTimelineEffectSlots
     {
         [InitializeOnLoadMethod]
         private static void Register() => SkillEditorExtensions.RegisterTimeline(new RealtimeTimelineEditor());
@@ -15,7 +15,6 @@ namespace ZFramework.GAS.Editor
         public Type AssetType => typeof(SkillAnimationAsset);
         public string DisplayName => "动画";
         public string EntryTrack => "markers";
-        public SkillTemplate DefaultTemplate => new MeleeTemplate();
         public IEnumerable<Type> ManagedReferenceRoots => new[] { typeof(AnimationBackend), typeof(SkillRuntimeTrack) };
         public ISkillTimelineWorkspace OpenWorkspace(SkillDocument doc) => new RealtimeWorkspace(doc);
         public RuntimeSnapshot.PresentationTask Capture(GameplayAbilityTask task) =>
@@ -48,6 +47,16 @@ namespace ZFramework.GAS.Editor
                 float time = marker.FindPropertyRelative("time").floatValue;
                 string label = $"标记 {marker.FindPropertyRelative("key").stringValue} · {time:0.###}s";
                 yield return new SkillFlowEntry(marker.FindPropertyRelative("id").stringValue, label, marker.propertyPath, marker.FindPropertyRelative("actions"), time);
+            }
+        }
+        public IEnumerable<SkillTimelineEffectSlot> EffectSlots(SerializedObject asset)
+        {
+            var windows = asset.FindProperty("hitWindows");
+            for (int i = 0; i < windows.arraySize; i++)
+            {
+                var item = windows.GetArrayElementAtIndex(i);
+                yield return new SkillTimelineEffectSlot(item.FindPropertyRelative("id").stringValue, windows.propertyPath,
+                    "命中 " + HitWindowTrack.Span(item), item.FindPropertyRelative("effect"));
             }
         }
         public IEnumerable<SkillNodeCue> Cues(SerializedObject asset)

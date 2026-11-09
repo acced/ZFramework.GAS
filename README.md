@@ -9,6 +9,8 @@ Unity 的 Gameplay Ability System 实现。属性、标签、效果、能力、C
 
 双击时间轴标记可进入动作流程；在分支上创建、重排动作，或将连续动作提取为共享模块。Play 时可在流程节点按 F9，然后在运行时调试窗口查看单位的事件历史、参数和实际走过的分支。
 
+命中来源由技能配置：回合制可直接对指定单位结算，挥剑可用真实武器碰撞体，也可用几何范围或接入项目自己的目标名单。它们可复用同一个伤害效果，见[接入与配置示例](Docs~/ConfigurableSkills.md#目标由谁决定)。
+
 动画支持曲线混合、Section 跳入过渡和片段替换。Playables 后端支持独立变速、按技能遮罩和按单位降频；玩法标记仍由 ASC 逐步推进。多目标预演和各后端的支持范围见 [编辑器指南](Docs~/EditorGuide.md)，真实窗口截图、规模数据和平台验证结果见 [五阶段改进验证](Docs~/EditorImprovementVerification.md)。
 
 接入、生命周期、参数覆盖规则与配置示例见 [可配置技能工作流](Docs~/ConfigurableSkills.md)，从现有项目制作或导入资产见[项目接入](Docs~/ConfigurableSkills.md#从现有项目接入)。测试及限制见 [实施验证记录](Docs~/SkillImplementationVerification.md)。BasicCombat 示例由其生成器更新。
@@ -21,9 +23,9 @@ Unity 的 Gameplay Ability System 实现。属性、标签、效果、能力、C
 | `ZFramework.GAS.Unity` | 授权资产、动作执行、参数、查询与宿主服务 | ZFramework.GAS + Tags Core + UnityEngine |
 | `ZFramework.GAS.Unity.Realtime` | 动画播放、时间轴、投射物、区域效果和 Cue 表现 | GAS Core + GAS Unity + Tags Core |
 | `ZFramework.GAS.Editor` | 技能文档、结构图、动作流程、详情、基础校验与调试 | GAS Core + GAS Unity + Tags Core + UnityEditor |
-| `ZFramework.GAS.Editor.Realtime` | 时间轴编辑、预览、动画模板、实时校验与调试条 | GAS Editor + GAS Unity.Realtime + 两者的基础依赖 |
+| `ZFramework.GAS.Editor.Realtime` | 时间轴编辑、预览、实时校验与调试条 | GAS Editor + GAS Unity.Realtime + 两者的基础依赖 |
 
-只使用基础编辑器时，可以从「新建技能 → 空白技能」开始。实时功能在加载编辑器扩展后出现；[编辑器依赖边界](Docs~/EditorAssemblyBoundaries.md)列出了各接入点和基础配置的验证方法。
+点击「＋新建技能」或按 Ctrl+N，选择名称和位置后就会打开空白技能；安装 Realtime 后也一样。实时功能在加载编辑器扩展后出现；[编辑器依赖边界](Docs~/EditorAssemblyBoundaries.md)列出了各接入点和基础配置的验证方法。
 
 两个 Core asmdef 都设为 `noEngineReferences: true`。Core 只能引用 Core，Unity 层引用 Core 和引擎；禁止反向引用。项目生成的标签词表属于项目，GAS 不引用 Generated 程序集。
 
@@ -321,7 +323,7 @@ var result = runner.TryCast(skill, new SkillCastTarget(targetAsc, aimPoint));
 
 | 操作 | 行为 |
 |---|---|
-| 新建技能 | 近战、投射物、Buff、持续伤害（打断后继续）、引导（随施放取消）、召唤骨架 |
+| 新建技能 | 直接创建空白技能；要复用配置，可在技能库复制已有技能。六种预设位于 Tools → ZFramework GAS → BasicCombat → 技能模板 |
 | Space／右键／端口拖到空白 | 创建内嵌资产或引用项目资产，并连接类型兼容的端口 |
 | 双击节点 | 在 Project 中定位来源资产 |
 | 删除连线 | 只清除该引用 |

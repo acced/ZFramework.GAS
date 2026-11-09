@@ -138,9 +138,10 @@ namespace ZFramework.GAS.Unity
             var scope = new SkillExecutionContext(this); scope._branch.Target = target?.SourceIdentity;
             scope.Services.RebindTarget(transform); scope._branch.AimOffset = null; return scope;
         }
-        internal SkillExecutionContext Selected(AbilitySystemComponent target, Transform t, Vector3 point){
-            var scope=WithTarget(target,t);scope.Services.TargetPosition=point;
-            scope._branch.AimOffset=t!=null?point-t.position:Vector3.zero;return scope;
+        internal SkillExecutionContext Selected(AbilitySystemComponent target, Transform t, Vector3? point){
+            var scope=WithTarget(target,t);
+            if (point.HasValue) scope.Services.TargetPosition=point.Value; else scope.Services.ClearTargetPosition();
+            scope._branch.AimOffset=t!=null && point.HasValue ? point.Value-t.position : (Vector3?)null;return scope;
         }
         public SkillExecutionContext WithParameters(SkillParameterValues parameters)
             => new SkillExecutionContext(this, Values.WithParameters(parameters));

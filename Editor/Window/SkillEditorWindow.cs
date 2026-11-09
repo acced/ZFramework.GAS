@@ -155,8 +155,7 @@ namespace ZFramework.GAS.Editor
         private void BuildToolbar(VisualElement host)
         {
             var toolbar = new Toolbar(); toolbar.AddToClassList("main-toolbar");
-            var create = new ToolbarMenu { text = "+ 新建技能" }; create.AddToClassList("primary-button");
-            foreach (var item in SkillTemplateRegistry.Templates) { var template = item; create.menu.AppendAction(template.DisplayName, _ => SkillTemplateRegistry.Choose(template, Show)); }
+            var create = new ToolbarButton(NewSkill) { text = "+ 新建技能", tooltip = "创建空白技能" }; create.AddToClassList("primary-button");
             toolbar.Add(create); toolbar.Add(new ToolbarButton(Save) { text = "保存", tooltip = "Ctrl+S" });
             _followRuntime = new ToolbarToggle { text = "跟随运行时", name = "follow-runtime", tooltip = "跟随运行时调试窗口观察的单位，标出生效的技能与效果" };
             _followRuntime.SetEnabled(EditorApplication.isPlaying);
@@ -183,6 +182,7 @@ namespace ZFramework.GAS.Editor
                 activeAbility = ability;
                 _doc.Open(ability); _presentation?.Fit();
             }
+            else _doc.RefreshIfChanged();
             SyncToolbar(); Focus();
         }
         private void RestoreHistory(GameplayAbilityAsset current)
@@ -265,7 +265,7 @@ namespace ZFramework.GAS.Editor
             if (compact) split.CollapseChild(_compactPreview ? 1 : 0); else split.UnCollapse();
         }
         public void Save() { _doc?.Save(); _validation?.ValidateNow(true); }
-        public void NewSkill() => SkillTemplateRegistry.Choose(SkillEditorExtensions.Timeline?.DefaultTemplate ?? new EmptySkillTemplate(), Show);
+        public void NewSkill() => SkillTemplateRegistry.Choose(Show);
         public void FocusSearch() => _library?.FocusSearch();
         private void Tick()
             => AdvancePlayback(EditorApplication.timeSinceStartup);

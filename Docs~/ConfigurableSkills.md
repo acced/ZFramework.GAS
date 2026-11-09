@@ -12,13 +12,30 @@
 
 ## 从现有项目接入
 
-**单位接一次，技能按资产接。** 已有角色组件实现 `IAbilitySystemProvider`，让碰撞体能找到单位的 ASC。初始化时把施法挂点和项目服务交给 `SkillRunner`，用技能套组授予资产。项目自己的战斗循环继续推进 ASC，每单位每步一次。
+**单位接一次，技能按资产接。** 初始化时把项目服务交给 `SkillRunner`，用技能套组授予资产。需要物理选敌时，在目标的碰撞体或其父级实现 `IAbilitySystemProvider`，供查询找到单位 ASC。指定对象的回合制技能无需挂点或任何物理组件。项目自己的战斗循环继续推进 ASC，每单位每步一次。
+
+### 目标由谁决定
+
+时间点或窗口决定**何时**结算；目标来源决定**对谁**结算；同一个效果资产可以在几种模式下复用。这个区分参考 UE GAS 的 [对象列表目标数据](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Plugins/GameplayAbilities/FGameplayAbilityTargetData_Actor-) 和 [碰撞命中目标数据](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Plugins/GameplayAbilities/FGameplayAbilityTargetData_Singl-)。
+
+| 玩法 | 策划配置 | 单位或项目接入 |
+|---|---|---|
+| 回合制点选敌人，当场结算 | 激活动作 → 施加效果 → 施放时指定的对象 | `runner.TryCast(skill, new SkillCastTarget(chosenAsc))`；不依赖距离、Transform 或 Collider |
+| 剑刃接触才算命中 | 命中窗口 → 武器 / 单位碰撞体 → 槽位 Sword | 在 `SkillUnitServices.Origin` 所在物体加 **GAS → Skill Hitboxes**，增加槽位 Sword，拖入剑上的 3D Collider；换武器更新槽位即可 |
+| 前方、扇形或地面范围 | 选择相应形状、尺寸和碰撞层 | 目标有 3D Collider 和单位组件 |
+| 棋盘行列、2D 接触名单或服务器裁定 | 项目提供的目标 → 填来源键 | 单位初始化时 `services.Set<ISkillTargetSource>(resolver)`。实现 `Collect(key, cast, results)`，按优先级调用 `results.Add(unit)`；有瞄准位置时可附上 Transform 或世界坐标 |
+
+指定对象和项目名单不会再查物理。各种来源都使用同一套标签、阵营、排除自身和单位去重规则；物理来源按距离取前 N 个，项目名单按提交顺序取前 N 个。项目来源同步提供已知结果；需要等待玩家或服务器时，先用项目选择或等待任务取得结果。预演不执行任意项目逻辑。
+
+内置武器来源按窗口采样**启用的 Box、Sphere 或 Capsule Collider 当前姿势**，包括其中心、旋转和缩放；不需要 Rigidbody 或触发器回调。同一窗口中多个受击碰撞体、离开再进入都只对同一单位结算一次。高速挥砍若要求覆盖两次采样之间的轨迹，可用项目来源提交扫掠结果。投射物动作已有自己的扫掠，只配置碰撞过滤。
 
 ```csharp
 // 单位初始化。MatchesTeam 使用项目自己的阵营表；没有敌友规则可省略。
-var runner = new SkillRunner(asc, () => skillAnimator.Driver, new SkillUnitServices {
+var runner = new SkillRunner(asc, new SkillUnitServices {
     Origin = transform, LaunchPoint = muzzle, TargetRelations = MatchesTeam
 });
+// 仅使用实时时间轴时接入，并在单位释放时 Dispose。
+var timelinePlayer = new SkillTimelinePlayer(runner, () => skillAnimator.Driver);
 abilitySet.GrantTo(runner);
 
 // 施放时只交输入；以下是三种不同瞄准方式。
@@ -88,7 +105,7 @@ Clamp(常量 + 来源属性 × 系数 × 参数 - 目标属性 × 目标系数, 
 
 `SceneSkillTaskHost` 随场景卸载清理。项目可在 `TimelineTaskContext.SceneTasks` 注入手动调度宿主（适合测试或已有世界时钟），此时由项目负责 Tick 和 Clear。
 
-新建技能时，**持续伤害（打断后继续）** 会在标记触发时把周期效果挂到目标，此后由目标的 ASC 结算；**引导（随施放取消）** 会在标记触发时启动技能所属的周期任务，每半秒对固定目标施加一次瞬时伤害。打断前都能造成伤害，打断后只有前者继续。要修改每跳间隔，前者改效果的周期，后者改区域动作的周期。
+要对比两种打断行为，在 **Tools → ZFramework GAS → BasicCombat → 技能模板** 下分别创建示例。**持续伤害（打断后继续）** 会在标记触发时把周期效果挂到目标，此后由目标的 ASC 结算；**引导（随施放取消）** 会在标记触发时启动技能所属的周期任务，每半秒对固定目标施加一次瞬时伤害。打断前都能造成伤害，打断后只有前者继续。要修改每跳间隔，前者改效果的周期，后者改区域动作的周期。
 
 `ISkillObjectService` 接管生成与归还，默认实现为 Instantiate / Destroy。池实现必须在 Spawn 时重置对象，Release 时归还同一个对象。Prefab 可实现 `ISkillSpawnInitializer` 接收初始化上下文；AI、导航和阵营属于项目代码。
 

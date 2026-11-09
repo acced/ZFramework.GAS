@@ -28,6 +28,8 @@ namespace ZFramework.GAS.Editor
         }
         internal static IEnumerable<SkillFlowEntry> Entries(SerializedObject asset) =>
             asset != null && Supports(asset.targetObject) ? Timeline.Entries(asset) : Array.Empty<SkillFlowEntry>();
+        internal static IEnumerable<SkillTimelineEffectSlot> EffectSlots(SerializedObject asset) =>
+            Supports(asset.targetObject) && Timeline is ISkillTimelineEffectSlots slots ? slots.EffectSlots(asset) : Array.Empty<SkillTimelineEffectSlot>();
     }
 
     public interface ISkillTimelineEditor
@@ -35,7 +37,6 @@ namespace ZFramework.GAS.Editor
         Type AssetType { get; }
         string DisplayName { get; }
         string EntryTrack { get; }
-        SkillTemplate DefaultTemplate { get; }
         IEnumerable<Type> ManagedReferenceRoots { get; }
         ScriptableObject CreateEmbedded(GameplayAbilityAsset root, string name);
         void EnsureIds(ScriptableObject asset, bool recordUndo);
@@ -53,6 +54,18 @@ namespace ZFramework.GAS.Editor
     public interface ISkillNodeFields
     {
         void Field<T>(SerializedObject asset, string path, BaseField<T> field);
+    }
+
+    public interface ISkillTimelineEffectSlots
+    {
+        IEnumerable<SkillTimelineEffectSlot> EffectSlots(SerializedObject asset);
+    }
+    public readonly struct SkillTimelineEffectSlot
+    {
+        public readonly string Id, Track, Label;
+        public readonly SerializedProperty Effect;
+        public SkillTimelineEffectSlot(string id, string track, string label, SerializedProperty effect)
+        { Id = id; Track = track; Label = label; Effect = effect; }
     }
 
     public readonly struct SkillFlowEntry

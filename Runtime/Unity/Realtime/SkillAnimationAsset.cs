@@ -60,6 +60,7 @@ namespace ZFramework.GAS.Unity
     public sealed class SkillAnimationAsset : ScriptableObject, IDefinitionAsset
     {
         public AnimationSection[] sections = Array.Empty<AnimationSection>();
+        public SkillHitWindow[] hitWindows = Array.Empty<SkillHitWindow>();
         [SerializeReference] public SkillRuntimeTrack[] runtimeTracks = Array.Empty<SkillRuntimeTrack>();
         [Header("片段")]
         [Tooltip("交给驱动的片段名：旧版 Animation 的片段名 / Animator 的状态名 / 序列帧的序列名")]
@@ -128,9 +129,12 @@ namespace ZFramework.GAS.Unity
             var builtWindows = new AnimationTagWindow[tagWindows.Length];
             for (int i = 0; i < tagWindows.Length; i++) builtWindows[i] = tagWindows[i].Build();
             DefinitionSource.DependsOn(this,boneWeights);
+            var tracks = new RuntimeTrackDefinition[runtimeTracks.Length + hitWindows.Length];
+            for (int i = 0; i < runtimeTracks.Length; i++) tracks[i] = runtimeTracks[i].Build();
+            for (int i = 0; i < hitWindows.Length; i++) tracks[runtimeTracks.Length + i] = hitWindows[i].Build(actions);
             var definition = new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray(), builtWindows,
                 blendIn, blendOut, Array.ConvertAll(sections, section => section.Build()),
-                Array.ConvertAll(runtimeTracks, track => track.Build()), BlendInSpec, BlendOutSpec, mask, additive, layerWeight, boneWeights?.Build());
+                tracks, BlendInSpec, BlendOutSpec, mask, additive, layerWeight, boneWeights?.Build());
             DefinitionSource.Register(definition, this);
             return definition;
         }

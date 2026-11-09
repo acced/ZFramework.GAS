@@ -7,7 +7,7 @@ using ZFramework.GAS.Unity;
 
 namespace ZFramework.GAS.Editor
 {
-    public enum PortKind { Cost, Cooldown, Animation, Marker, Applied, Periodic, Removed, ActionReference }
+    public enum PortKind { Cost, Cooldown, Animation, Marker, Applied, Periodic, Removed, ActionReference, TimelineEffect }
     public readonly struct PortId : IEquatable<PortId>
     {
         public readonly PortKind Kind;
@@ -16,9 +16,9 @@ namespace ZFramework.GAS.Editor
         public bool Equals(PortId other) => Kind == other.Kind && ElementId == other.ElementId;
         public override bool Equals(object obj) => obj is PortId other && Equals(other);
         public override int GetHashCode() => ((int)Kind * 397) ^ (ElementId?.GetHashCode() ?? 0);
-        public string Label => Kind switch { PortKind.Cost => "消耗", PortKind.Cooldown => "冷却", PortKind.Animation => SkillEditorExtensions.Timeline?.DisplayName ?? "表现", PortKind.Marker => "事件", PortKind.Applied => "生效时", PortKind.Periodic => "每周期", _ => "移除时" };
+        public string Label => Kind switch { PortKind.Cost => "消耗", PortKind.Cooldown => "冷却", PortKind.Animation => SkillEditorExtensions.Timeline?.DisplayName ?? "表现", PortKind.Marker => "事件", PortKind.TimelineEffect => "区间效果", PortKind.Applied => "生效时", PortKind.Periodic => "每周期", _ => "移除时" };
         public Type AcceptedType => Kind == PortKind.ActionReference ? typeof(ScriptableObject) : Kind == PortKind.Animation ? SkillEditorExtensions.Timeline?.AssetType : typeof(GameplayEffectAsset);
-        public bool Single => Kind <= PortKind.Marker;
+        public bool Single => Kind <= PortKind.Marker || Kind == PortKind.TimelineEffect;
         public EffectTrigger Trigger => Kind == PortKind.Periodic ? EffectTrigger.Periodic : Kind == PortKind.Removed ? EffectTrigger.Removed : EffectTrigger.Applied;
     }
     public readonly struct AssetLink
@@ -53,6 +53,9 @@ namespace ZFramework.GAS.Editor
                     }
                 }
             }
+            foreach (var slot in SkillEditorExtensions.EffectSlots(so))
+                if (slot.Effect.objectReferenceValue is GameplayEffectAsset effect)
+                    yield return new AssetLink(asset, new PortId(PortKind.TimelineEffect, slot.Id), effect);
             var cursor = so.GetIterator();
             int actionDepth = int.MaxValue;
             while (cursor.Next(true))
@@ -72,6 +75,11 @@ namespace ZFramework.GAS.Editor
             if (port.Kind == PortKind.ActionReference) error = "动作引用请在 Details 中配置";
             else if (parent == null || child == null || port.AcceptedType?.IsInstanceOfType(child) != true) error = "端口类型不匹配";
             else if (parent == child) error = "不能引用自身";
+            else if (port.Kind == PortKind.TimelineEffect)
+            {
+                using var owner = new SerializedObject(parent);
+                if (!SkillEditorExtensions.EffectSlots(owner).Any(slot => slot.Id == port.ElementId)) error = "效果区间已不存在";
+            }
             else if (parent is GameplayAbilityAsset && port.Kind > PortKind.Animation || SkillEditorExtensions.Supports(parent) && port.Kind != PortKind.Marker || parent is GameplayEffectAsset && port.Kind < PortKind.Applied)
                 error = "该资产没有此端口";
             else
@@ -121,6 +129,11 @@ namespace ZFramework.GAS.Editor
         {
             if (port.Kind == PortKind.ActionReference)
             { var property = so.FindProperty(port.ElementId); if (property != null) property.objectReferenceValue = remove ? null : child; }
+            else if (port.Kind == PortKind.TimelineEffect)
+            {
+                var field = SkillEditorExtensions.EffectSlots(so).FirstOrDefault(slot => slot.Id == port.ElementId).Effect;
+                if (field != null && (!remove || field.objectReferenceValue == child)) field.objectReferenceValue = remove ? null : child;
+            }
             else if (port.Kind <= PortKind.Animation)
                 so.FindProperty(port.Kind == PortKind.Cost ? "cost" : port.Kind == PortKind.Cooldown ? "cooldown" : "animation").objectReferenceValue = remove ? null : child;
             else if (port.Kind == PortKind.Marker)

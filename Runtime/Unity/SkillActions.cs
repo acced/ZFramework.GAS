@@ -105,7 +105,11 @@ namespace ZFramework.GAS.Unity
         public void Query(TargetQuery query)
         {
             if (query == null || query.maxTargets < 1 || query.maxTargets > 256) throw new InvalidOperationException("目标查询容量必须为 1–256。");
-            Number(query.radius, 0); Number(query.width, 0); Number(query.height, 0); Number(query.angle, 0, 360);
+            if (query.kind is TargetQueryKind.Hitbox or TargetQueryKind.Project && string.IsNullOrWhiteSpace(query.sourceKey))
+                throw new InvalidOperationException("请选择碰撞体槽位或填写项目目标来源键。");
+            if (TargetQuery.IsVolume(query.kind)) Number(query.radius, 0);
+            if (query.kind == TargetQueryKind.Line) { Number(query.width, 0); Number(query.height, 0); }
+            if (query.kind == TargetQueryKind.Sector) Number(query.angle, 0, 360);
         }
         public void DependsOn(ScriptableObject asset) => DefinitionSource.DependsOn(_owner, asset);
         private readonly HashSet<SkillActionModuleAsset> _modules = new();
@@ -180,7 +184,7 @@ namespace ZFramework.GAS.Unity
                     context.Services.Searcher.Query(query, context, buffer);
                     GasAssert.That(!buffer.Saturated, "目标查询缓冲区已满（256 个碰撞体），请收窄 LayerMask 或范围。");
                     for (int i = 0; i < buffer.Count; i++)
-                    { if (!context.CanContinue) break; Apply(context, effect, buffer.Units[i]); }
+                    { if (!context.CanContinue) break; if (buffer.IsCurrent(i)) Apply(context, effect, buffer.Units[i]); }
                 }
                 finally { context.ReturnBuffer(buffer); }
             });
@@ -259,7 +263,7 @@ namespace ZFramework.GAS.Unity
                     context.Services.Searcher.Query(query, context, buffer);
                     GasAssert.That(!buffer.Saturated, "事件目标查询缓冲已满，请收窄范围或碰撞层。");
                     for (int i = 0; i < buffer.Count && context.CanContinue; i++)
-                        buffer.Units[i].Events.Send(new GameplayEvent(eventTag, context.SourceIdentity, data, context.Values,eventPosition));
+                        if (buffer.IsCurrent(i)) buffer.Units[i].Events.Send(new GameplayEvent(eventTag, context.SourceIdentity, data, context.Values,eventPosition));
                 }
                 finally { context.ReturnBuffer(buffer); }
             });

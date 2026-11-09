@@ -162,7 +162,7 @@ namespace ZFramework.GAS.Editor
         {
             _cueWarning = null;
             if(_instance!=null)_error=null;
-            bool hasTrajectory=false;
+            bool hasTrajectory=false; string sourceNote = null;
             if(!_targetTools.value){_simulation?.Dispose();_simulation=null;_doc.PreviewEnd=0;}
             var animation = _doc.Root?.Animation();
             if (_sampler != null && animation != null)
@@ -243,6 +243,23 @@ namespace ZFramework.GAS.Editor
             }
             void DrawTargets(){
                 _contentBounds=_bounds;
+                if (!_targetTools.value && animation != null)
+                    foreach (var window in animation.hitWindows)
+                    {
+                        if (_doc.Playback.Time < window.start || _doc.Playback.Time >= window.end) continue;
+                        var query = window.targets.Build();
+                        if (query.Kind == TargetQueryKind.Hitbox)
+                        {
+                            if (SkillColliderVolume.TryRead(_instance.GetComponent<SkillHitboxes>()?.Find(query.SourceKey), out var weapon)) _tools.Hitbox(weapon);
+                            else sourceNote = "预览角色没有可用的碰撞体槽位：" + query.SourceKey;
+                        }
+                        if (query.Kind == TargetQueryKind.Project) sourceNote = "项目来源「" + query.SourceKey + "」的命中仅在运行时确定。";
+                        if (!TargetQuery.IsVolume(query.Kind)) continue;
+                        if (query.EffectiveOrigin != SkillSpawnPosition.Caster) continue;
+                        var source = _instance.transform;
+                        var values = new EffectEvaluationContext(_level, _doc.Root.ResolveParameters(_level));
+                        _tools.Query(query.ResolveShape(values), source, source.position + source.rotation * window.offset, window.yaw);
+                    }
                 if(_targetTools.value){
                     _simulation??=new SkillPreviewSimulation(_preview);
                     _simulation.SourceTags=_sourceTags; _simulation.TargetTags=_targetTags; _simulation.AimIndex=_aimIndex;
@@ -263,7 +280,7 @@ namespace ZFramework.GAS.Editor
                 }
             }
             _rootMotion.style.display=hasTrajectory?DisplayStyle.Flex:DisplayStyle.None;
-            _caption.text = _error ?? _cueWarning ?? _rangeNote ?? (_simulation!=null?$"几何预演 · 命中 {_simulation.HitCount} / {_dummyCount}（不含阵营与物理遮挡）":"拖动旋转 · 滚轮缩放 · 双击聚焦");
+            _caption.text = _error ?? _cueWarning ?? sourceNote ?? _simulation?.SourceNote ?? _rangeNote ?? (_simulation!=null?$"几何预演 · 命中 {_simulation.HitCount} / {_dummyCount}（不含阵营与物理遮挡）":"拖动旋转 · 滚轮缩放 · 双击聚焦");
             _caption.tooltip = _cueWarning;
             _viewport.MarkDirtyRepaint();
         }
@@ -305,6 +322,13 @@ namespace ZFramework.GAS.Editor
             var animationAsset = _doc.Root?.Animation();
             if (animationAsset == null) return;
             var regions = _doc.Serialized(animationAsset).FindProperty("cueRegions"); int line = 0;
+            float head = _doc.Playback.Time;
+            foreach (var hit in animationAsset.hitWindows)
+            {
+                string state = head < hit.start ? "未开启" : head < hit.end ? "生效中" : "已关闭";
+                GUI.Label(new Rect(rect.x + 8, rect.y + 28 + line++ * 18, rect.width - 16, 18),
+                    $"命中判定：{state}   {hit.start:0.00#}–{hit.end:0.00#} s · {HitWindowTrack.SourceLabel(hit.targets)}", EditorStyles.whiteMiniLabel);
+            }
             for (int i = 0; i < regions.arraySize; i++)
             {
                 var r = regions.GetArrayElementAtIndex(i); float start = r.FindPropertyRelative("start").floatValue, end = r.FindPropertyRelative("end").floatValue;

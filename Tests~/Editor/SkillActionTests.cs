@@ -52,6 +52,8 @@ namespace ZFramework.GAS.Editor.Tests
         private readonly GameplayTaskHost _scene = new();
         private sealed class Driver : IAnimationDriver
         { public float Play(string name, float duration, bool loop) => .2f; public void Stop() { } public void Advance(float dt) { } }
+        private sealed class AuthoredClock : IAnimationDriver
+        { public float Play(string name, float duration, bool loop) => duration; public void Stop() { } public void Advance(float dt) { } }
         private sealed class Pool : ISkillObjectService
         {
             public int Created, Returned;
@@ -101,6 +103,128 @@ namespace ZFramework.GAS.Editor.Tests
         private TimelineTaskContext Services(Transform origin, Transform target = null, Pool pool = null)
             => new TimelineTaskContext { Origin = origin, Target = target, TargetPosition = target != null ? target.position : Vector3.forward * 3,
                 Objects = pool ?? new Pool(), Searcher = new TargetSearcher(), SceneTasks = _scene };
+
+        [Test] public void TurnBasedCastHitsChosenLogicalUnitWithoutSceneOrTimeline()
+        {
+            var owner = new AbilitySystemComponent(); var chosen = new AbilitySystemComponent();
+            chosen.Attributes.Add(new AttributeId(1), 100);
+            var skill = Skill(new ApplyEffectAction { effect = Effect(), targets = new TargetQuery {
+                kind = TargetQueryKind.FixedTarget, radius = new SkillNumber { parameterId = "unused geometry" }, origin = SkillSpawnPosition.HitPoint } });
+            var runner = new SkillRunner(owner); runner.Grant(skill);
+            runner.TryCast(skill); Assert.AreEqual(100, chosen.Attributes.GetCurrent(new AttributeId(1)));
+            runner.TryCast(skill, new SkillCastTarget(chosen)); Assert.AreEqual(90, chosen.Attributes.GetCurrent(new AttributeId(1)));
+        }
+
+        [Test] public void SwordWindowUsesMovingWeaponInsteadOfAimAndStopsOnCancel()
+        {
+            var caster = Unit("caster", new Vector3(200, 0, 0)); var origin = caster.transform;
+            var selected = Unit("selected, outside blade", origin.position + 2 * Vector3.forward);
+            var struck = Unit("struck", origin.position + 3 * Vector3.left);
+            struck.gameObject.AddComponent<BoxCollider>().size = Vector3.one * .1f;
+            var sword = Go("blade"); sword.transform.SetParent(origin, false);
+            sword.transform.localRotation = Quaternion.Euler(0, -90, 0);
+            sword.transform.localScale = new Vector3(1, 1, 2);
+            var blade = sword.AddComponent<BoxCollider>(); blade.center = Vector3.forward; blade.size = new Vector3(.1f,.1f,1.4f);
+            origin.gameObject.AddComponent<SkillHitboxes>().slots = new[] { new SkillHitboxes.Slot { key = "Sword", collider = blade } };
+            var skill = Skill(); var timeline = New<SkillAnimationAsset>();
+            SkillTimelineAuthoring.Edit(timeline, t => t.Clip("swing", 2));
+            timeline.hitWindows = new[] { new SkillHitWindow { start = .65f, end = 1.5f, effect = Effect(),
+                targets = new TargetQuery { kind = TargetQueryKind.Hitbox, sourceKey = "Sword" } } };
+            SkillAssetFactory.SetMainAnimation(skill, timeline);
+            var owner = caster.AbilitySystem; var runner = new SkillRunner(owner, new SkillUnitServices { Origin = origin });
+            using var player = new SkillTimelinePlayer(runner, () => new AuthoredClock()); runner.Grant(skill);
+            float HP(SkillActionTestUnit u) => u.AbilitySystem.Attributes.GetCurrent(new AttributeId(1));
+            Physics.SyncTransforms(); runner.TryCast(skill, new SkillCastTarget(selected.AbilitySystem)); owner.Tick(.64f);
+            Assert.AreEqual(100, HP(struck));
+            owner.Tick(.02f); owner.Tick(.1f); Assert.AreEqual(90, HP(struck)); Assert.AreEqual(100, HP(selected));
+            sword.transform.localRotation = Quaternion.identity; Physics.SyncTransforms(); owner.Tick(.1f);
+            Assert.AreEqual(90, HP(selected));
+            runner.Cancel(skill); var fresh = Unit("after interrupt", selected.transform.position);
+            Physics.SyncTransforms(); owner.Tick(.2f); Assert.AreEqual(100, HP(fresh));
+        }
+
+        [TestCase(false)] [TestCase(true)]
+        public void RoundWeaponVolumesAgreeWithUnityColliderAndPreview(bool capsule)
+        {
+            var caster = Unit("caster", new Vector3(250,0,0)); var weapon = Go("weapon");
+            weapon.transform.SetParent(caster.transform, false);
+            weapon.transform.localScale = new Vector3(2, 1, .5f); weapon.transform.rotation = Quaternion.Euler(0,0,40);
+            Collider collider;
+            if(capsule) { var c = weapon.AddComponent<CapsuleCollider>(); c.direction=0; c.radius=.25f; c.height=2; collider=c; }
+            else { var s=weapon.AddComponent<SphereCollider>(); s.radius=.5f; collider=s; }
+            caster.gameObject.AddComponent<SkillHitboxes>().slots = new[] { new SkillHitboxes.Slot { key="weapon", collider=collider } };
+            var inside=Unit("inside",weapon.transform.position+weapon.transform.right*(capsule?1.8f:.9f));
+            var outside=Unit("outside",weapon.transform.position+weapon.transform.up*(capsule?.6f:1.4f));
+            Physics.SyncTransforms(); Assert.IsTrue(SkillColliderVolume.TryRead(collider, out var volume));
+            foreach(var unit in new[]{inside,outside}) {
+                Vector3 p=unit.transform.position;
+                Assert.AreEqual((collider.ClosestPoint(p)-p).sqrMagnitude <= .2f*.2f, volume.TouchesSphere(p,.2f));
+            }
+            var skill=Skill(new ApplyEffectAction { effect=Effect(), targets=new TargetQuery { kind=TargetQueryKind.Hitbox, sourceKey="weapon" } });
+            var runner = new SkillRunner(caster.AbilitySystem,new SkillUnitServices { Origin=caster.transform }); runner.Grant(skill); runner.TryCast(skill);
+            Assert.AreEqual(90,inside.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
+            Assert.AreEqual(100,outside.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
+        }
+
+        private sealed class BoardSelection : ISkillTargetSource
+        {
+            internal AbilitySystemComponent[] InOrder;
+            public void Collect(string key, SkillExecutionContext cast, SkillTargetResults list)
+            {
+                Assert.AreEqual("chosen-row", key);
+                foreach (var unit in InOrder) list.Add(unit);
+            }
+        }
+        [Test] public void ProjectSelectionRespectsPriorityFilterAndLimitWithoutInventingWorldPoints()
+        {
+            var owner = new AbilitySystemComponent(); var a = new AbilitySystemComponent(); var b = new AbilitySystemComponent();
+            foreach (var u in new[] { owner, a, b }) u.Attributes.Add(new AttributeId(1), 100);
+            var input = new BoardSelection { InOrder = new[] { owner, a, a, b } };
+            var services = new SkillUnitServices(); services.Set<ISkillTargetSource>(input);
+            services.TargetRelations = (_, unit, _) => unit != owner;
+            var run = new SkillRunner(owner, services);
+            var skill = Skill(new SelectTargetsAction { targets = new TargetQuery { kind = TargetQueryKind.Project, sourceKey = "chosen-row", maxTargets = 1, relation = TargetRelation.Enemy },
+                actions = new SkillAction[] { new ApplyEffectAction { effect = Effect() } } });
+            run.Grant(skill); run.TryCast(skill); Assert.AreEqual(90, a.Attributes.GetCurrent(new AttributeId(1)));
+            Assert.AreEqual(100, b.Attributes.GetCurrent(new AttributeId(1))); Assert.AreEqual(100, owner.Attributes.GetCurrent(new AttributeId(1)));
+            input.InOrder = new[] { b }; run.TryCast(skill); Assert.AreEqual(90, b.Attributes.GetCurrent(new AttributeId(1)));
+        }
+
+        [Test] public void ForwardHitWindowIncludesLateEntriesOnceAndClosesAtItsRightEdge()
+        {
+            var source = Unit("caster", new Vector3(180, 0, 0));
+            var center = source.transform.position + Vector3.up;
+            var front = Unit("front", center + Vector3.right);
+            var back = Unit("back", center - Vector3.right);
+            var late = Unit("late", center + 5 * Vector3.forward);
+            var end = Unit("end", late.transform.position);
+            var skill = Skill();
+            var timeline = New<SkillAnimationAsset>();
+            SkillTimelineAuthoring.Edit(timeline, t => t.Clip("swing", 2));
+            timeline.hitWindows = new[] { new SkillHitWindow { start = .65f, end = 1.5f, effect = Effect(),
+                offset = Vector3.up, yaw = 90, targets = new TargetQuery { kind = TargetQueryKind.Line, radius = new SkillNumber(2) } } };
+            SkillAssetFactory.SetMainAnimation(skill, timeline);
+            var owner = source.AbilitySystem;
+            var runner = new SkillRunner(owner, new SkillUnitServices { Origin = source.transform });
+            using var player = new SkillTimelinePlayer(runner, () => new AuthoredClock());
+            runner.Grant(skill);
+            float HP(SkillActionTestUnit u) => u.AbilitySystem.Attributes.GetCurrent(new AttributeId(1));
+            Physics.SyncTransforms(); runner.TryCast(skill); owner.Tick(.64f);
+            Assert.AreEqual(100, HP(front));
+            owner.Tick(.02f); Assert.AreEqual(90, HP(front)); Assert.AreEqual(100, HP(back));
+            front.transform.position = center - Vector3.right;
+            late.transform.position = center + Vector3.right;
+            Physics.SyncTransforms(); owner.Tick(.34f);
+            Assert.AreEqual(90, HP(late));
+            front.transform.position = center + Vector3.right; Physics.SyncTransforms(); owner.Tick(.25f);
+            Assert.AreEqual(90, HP(front), "Re-entry is still the same swing.");
+            end.transform.position = center + Vector3.right; Physics.SyncTransforms(); owner.Tick(.25f);
+            Assert.AreEqual(100, HP(end), "The closing sample at 1.50 must not deal damage.");
+            runner.Cancel(skill);
+            runner.TryCast(skill); owner.Tick(.75f); Assert.AreEqual(80, HP(front));
+            runner.Cancel(skill); back.transform.position = center + Vector3.right; Physics.SyncTransforms();
+            owner.Tick(1); Assert.AreEqual(100, HP(back));
+        }
 
         [Test] public void BoundServicesUseAssetRelationAndDoNotLeakAimBetweenCasts()
         {

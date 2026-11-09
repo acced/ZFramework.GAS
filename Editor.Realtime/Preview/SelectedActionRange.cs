@@ -35,7 +35,9 @@ namespace ZFramework.GAS.Editor
                     if(field.boxedValue is TargetQuery found){query=found;break;}
                 } while(field.Next(false));
             }
-            if(query==null || query.kind<TargetQueryKind.TargetPoint)return null;
+            if(query == null) return null;
+            if(query.kind == TargetQueryKind.Project) { note = "目标由项目提供；几何预演不会运行项目逻辑。"; return null; }
+            if(!TargetQuery.IsVolume(query.kind)) return null;
             var def=query.Build(); origin=def.EffectiveOrigin;
             if(origin==SkillSpawnPosition.HitPoint || origin==SkillSpawnPosition.EventPosition) {
                 note="范围原点由实际命中或事件提供。"; return null;

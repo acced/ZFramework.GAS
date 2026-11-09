@@ -18,7 +18,12 @@ namespace ZFramework.GAS.Editor.Tests
             var owner = new AbilitySystemComponent(1);
             try
             {
-                var skill = SkillTemplateRegistry.Create(path, new EmptySkillTemplate());
+                var skill = SkillTemplateRegistry.Create(path);
+                Assert.IsNull(skill.Presentation);
+                Assert.IsNull(skill.Definition.Cost);
+                Assert.IsNull(skill.Definition.Cooldown);
+                Assert.IsEmpty(skill.activationActions);
+                Assert.AreEqual(1, AssetDatabase.LoadAllAssetsAtPath(path).Length, "A new skill must not own any generated assets.");
                 editor.Show(); editor.Show(skill);
                 var cost = SkillAssetFactory.Create(editor.Document, typeof(GameplayEffectAsset), "Cost",
                     EffectDurationPolicy.Instant, skill, new PortId(PortKind.Cost));

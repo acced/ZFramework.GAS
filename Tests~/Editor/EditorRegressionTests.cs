@@ -10,6 +10,7 @@ using UnityEngine;
 using UnityEngine.TestTools;
 using UnityEngine.UIElements;
 using ZFramework.GAS.Unity;
+using ZFramework.GAS.Samples.BasicCombat.Editor;
 using Object = UnityEngine.Object;
 
 namespace ZFramework.GAS.Editor.Tests
@@ -98,6 +99,74 @@ namespace ZFramework.GAS.Editor.Tests
             using (var so = new SerializedObject(animation)) Assert.AreEqual(effect, ((ApplyEffectAction)TimelineCommands.Find(so, "markers", first).FindPropertyRelative("actions").GetArrayElementAtIndex(0).managedReferenceValue).effect);
             Assert.AreSame(effect, PortRules.Links(animation).Single().Child);
             Undo.PerformUndo(); Assert.AreSame(effect, PortRules.Links(animation).Single().Child); Assert.AreNotEqual(first, second);
+        }
+        [Test]
+        public void HitWindowToolbarCreatesIndependentRangesAndPreviewsTheAuthoredFacing()
+        {
+            var animation = Animation(); var effect = Effect();
+            var track = TrackTypeRegistry.Get("hitWindows");
+            string id = TimelineCommands.Add(_doc, track, .2f, effect);
+            Assert.AreEqual(effect, animation.hitWindows.Single().effect);
+            EditCommand.Run(_doc, "设置前方长方体判定", animation, so => {
+                var window = TimelineCommands.Find(so, track.PropertyPath, id);
+                window.FindPropertyRelative("targets.kind").enumValueIndex = (int)TargetQueryKind.Line;
+                window.FindPropertyRelative("yaw").floatValue = 90;
+            });
+            var points = new[] { Vector3.right, Vector3.left };
+            using var sim = new SkillPreviewSimulation();
+            void Check(float time, int hits)
+            {
+                _doc.Playback.Seek(time, 1); sim.ProjectContacts(_doc, points, Vector3.zero, 1, null, null);
+                Assert.AreEqual(hits, sim.HitCount);
+                if (hits != 0) { Assert.IsTrue(sim.WasHit(0)); Assert.IsFalse(sim.WasHit(1)); }
+            }
+            Check(.19f, 0); Check(.2f, 1); Check(.45f, 0);
+            string second = TimelineCommands.Add(_doc, track, .7f);
+            Assert.AreNotEqual(id, second); Assert.IsNull(animation.hitWindows[1].effect);
+        }
+        [Test]
+        public void SwitchingSourcePreviewsOnlyTheDesignatedUnitAndDoesNotGuessProjectResults()
+        {
+            var clip = Animation(); var track = TrackTypeRegistry.Get("hitWindows");
+            string id = TimelineCommands.Add(_doc, track, .2f, Effect());
+            var points = new[] { Vector3.forward, Vector3.right * 50 };
+            using var sim = new SkillPreviewSimulation { AimIndex = 2 };
+            _doc.Playback.Seek(.3f, 1);
+            sim.ProjectContacts(_doc, points, Vector3.zero, 1, null, null);
+            Assert.AreEqual(1, sim.HitCount); Assert.IsTrue(sim.WasHit(1), "The distant but selected unit is the only target.");
+            EditCommand.Run(_doc, "改为棋盘目标", clip, so => {
+                var q = TimelineCommands.Find(so, track.PropertyPath, id).FindPropertyRelative("targets");
+                q.FindPropertyRelative("kind").enumValueIndex = (int)TargetQueryKind.Project;
+                q.FindPropertyRelative("sourceKey").stringValue = "front-row";
+            });
+            sim.ProjectContacts(_doc, points, Vector3.zero, 1, null, null);
+            Assert.AreEqual(0, sim.HitCount); StringAssert.Contains("front-row", sim.SourceNote);
+        }
+        [UnityTest]
+        public IEnumerator OpenTimelineShowsImportedHitWindowWithoutReselectingOrSaving()
+        {
+            var clip = Animation(); var effect = Effect("Slash damage");
+            SkillTimelineAuthoring.Edit(clip, timeline => timeline.Clip("swing", 2));
+            var track = TrackTypeRegistry.Get("hitWindows");
+            string id = TimelineCommands.Add(_doc, track, .65f, effect);
+            EditCommand.Run(_doc, "设置关闭时间", clip, so =>
+                TimelineCommands.Find(so, track.PropertyPath, id).FindPropertyRelative("end").floatValue = 1.5f);
+            _doc.Save();
+            string path = AssetDatabase.GetAssetPath(_ability);
+            var withWindow = System.IO.File.ReadAllBytes(path);
+            TimelineCommands.Delete(_doc, track.PropertyPath, new[] { id }); _doc.Save();
+            var window = SkillEditorWindow.Open(); window.Show(_ability);
+            yield return null;
+            var timelineView = window.rootVisualElement.Q<TimelinePanel>();
+            Assert.That(timelineView.Query<Label>().ToList().Any(l => l.text?.Contains("Slash damage") == true), Is.False);
+            System.IO.File.WriteAllBytes(path, withWindow);
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+            yield return null; yield return null;
+            Assert.That(timelineView.Query<Label>().ToList().Any(l => l.text?.Contains("0.65–1.50 s · Slash damage") == true), Is.True);
+            var link = PortRules.Links(window.Document.Root.Animation()).Single(l => l.Port.Kind == PortKind.TimelineEffect);
+            Assert.AreEqual(id, link.Port.ElementId);
+            Assert.AreEqual(effect, link.Child);
+            Assert.That(window.rootVisualElement.Query<Label>().ToList().Any(l => l.text?.Contains("1 个命中窗口") == true), Is.True);
         }
         [Test]
         public void NewElementDoesNotCopyPreviousPayload()
@@ -614,18 +683,16 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.IsFalse(TimelineCommands.EnsureIds(saved));
         }
         [Test]
-        public void RegisteredTemplatesCreateStandaloneOrAnimatedAbilities()
+        public void BasicCombatTemplatesCreateAbilitiesWithEmbeddedTimelines()
         {
-            int index = 0;
-            foreach (var template in SkillTemplateRegistry.Templates)
+            SkillTemplate[] examples = { new MeleeTemplate(), new ProjectileTemplate(), new BuffTemplate(),
+                new ChannelTemplate(), new DamageOverTimeTemplate(), new SummonTemplate() };
+            foreach (var template in examples)
             {
-                var ability = SkillTemplateRegistry.Create(Folder + "/Template" + index++ + ".asset", template);
-                if (template is EmptySkillTemplate) Assert.IsNull(ability.Presentation);
-                else { Assert.IsNotNull(ability.Animation()); Assert.IsTrue(AssetDatabase.IsSubAsset(ability.Animation())); }
+                var ability = SkillTemplateRegistry.Create(Folder + "/" + template.DisplayName + ".asset", template);
+                Assert.IsNotNull(ability.Animation(), template.DisplayName);
+                Assert.IsTrue(AssetDatabase.IsSubAsset(ability.Animation()));
             }
-            Assert.That(SkillTemplateRegistry.Templates.Select(t => t.GetType()),
-                Is.SupersetOf(new[] { typeof(EmptySkillTemplate), typeof(MeleeTemplate), typeof(ProjectileTemplate), typeof(BuffTemplate),
-                    typeof(ChannelTemplate), typeof(DamageOverTimeTemplate), typeof(SummonTemplate) }));
         }
         private sealed class TemplateClock : IAnimationDriver
         {

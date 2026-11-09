@@ -102,6 +102,28 @@ namespace ZFramework.GAS.Editor
             e.FindPropertyRelative("inputBufferEnd").floatValue = time + .5f;
         }
     }
+    public sealed class HitWindowTrack : TrackType
+    {
+        public override string DisplayName => "命中窗口";
+        public override string PropertyPath => "hitWindows";
+        public override Color Color => SkillColors.Instant;
+        public override TrackElementShape Shape => TrackElementShape.Range;
+        internal static string Span(SerializedProperty e) =>
+            $"{e.FindPropertyRelative("start").floatValue:0.00#}–{e.FindPropertyRelative("end").floatValue:0.00#} s";
+        public override string Label(SerializedProperty e) =>
+            Span(e) + " · " + (e.FindPropertyRelative("effect").objectReferenceValue?.name ?? "选择命中效果") + " · " + SourceLabel((TargetQuery)e.FindPropertyRelative("targets").boxedValue);
+        internal static string SourceLabel(TargetQuery q) => q.kind switch {
+            TargetQueryKind.Hitbox => "碰撞体：" + q.sourceKey, TargetQueryKind.Project => "由项目提供：" + q.sourceKey,
+            TargetQueryKind.FixedTarget => "指定对象", TargetQueryKind.Self => "自身", TargetQueryKind.Circle => "圆形范围",
+            TargetQueryKind.TargetPoint => "目标点周围", TargetQueryKind.Sector => "扇形范围", _ => "前方长方体" };
+        public override bool AcceptsDrop(Object dropped) => dropped is GameplayEffectAsset;
+        public override void InitializeNew(SerializedProperty e, float time, Object dropped)
+        {
+            float duration = ((SkillAnimationAsset)e.serializedObject.targetObject).Duration;
+            float start = Mathf.Clamp(time, 0, Mathf.Max(0, duration - .01f));
+            e.boxedValue = new SkillHitWindow { start = start, end = Mathf.Min(duration, start + .25f), effect = dropped as GameplayEffectAsset };
+        }
+    }
     public sealed class RuntimeTrack : TrackType
     {
         public override string DisplayName => "曲线 / 扩展轨道";

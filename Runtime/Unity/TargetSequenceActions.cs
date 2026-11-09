@@ -96,7 +96,7 @@ namespace ZFramework.GAS.Unity
                     GasAssert.That(!buffer.Saturated, "选择目标缓冲区已满，请缩小范围或碰撞层。");
                     for(int i=0;i<buffer.Count && take>0 && c.CanContinue && c.Sequence?.Full!=true;i++){
                         var unit=buffer.Units[i];var t=buffer.Transforms[i];
-                        if(t==null || !c.Allows(query,unit) ||
+                        if(!buffer.IsCurrent(i) || !c.Allows(query,unit) ||
                             skip && ReferenceEquals(unit,c.Target) || visited && (c.Sequence?.Excludes(unit)==true || record?.Contains(unit.SourceIdentity)==true))continue;
                         if(remember)record.Add(unit.SourceIdentity);take--;c.Selected(unit,t,buffer.Points[i]).Execute(sub);
                     }

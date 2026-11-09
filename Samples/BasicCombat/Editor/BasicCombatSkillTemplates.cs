@@ -1,14 +1,23 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using ZFramework.GAS.Editor;
 using ZFramework.GAS.Unity;
 
-namespace ZFramework.GAS.Editor
+namespace ZFramework.GAS.Samples.BasicCombat.Editor
 {
-    internal static class RealtimeTemplateAssets
+    internal static class BasicCombatSkillTemplates
     {
+        private const string Menu = "Tools/ZFramework GAS/BasicCombat/技能模板/";
+        private static void Choose(SkillTemplate template) =>
+            SkillTemplateRegistry.Choose(template, asset => SkillEditorWindow.Open().Show(asset));
+
+        [MenuItem(Menu + "近战普攻")] private static void Melee() => Choose(new MeleeTemplate());
+        [MenuItem(Menu + "投射物")] private static void Projectile() => Choose(new ProjectileTemplate());
+        [MenuItem(Menu + "狂暴 Buff")] private static void Buff() => Choose(new BuffTemplate());
+        [MenuItem(Menu + "持续伤害（打断后继续）")] private static void DamageOverTime() => Choose(new DamageOverTimeTemplate());
+        [MenuItem(Menu + "引导（随施放取消）")] private static void Channel() => Choose(new ChannelTemplate());
+        [MenuItem(Menu + "召唤骨架")] private static void Summon() => Choose(new SummonTemplate());
+
         internal static GameplayEffectAsset Effect(GameplayAbilityAsset root, string name, EffectDurationPolicy policy, float duration, int attribute = -1, float magnitude = 0)
         {
             var effect = SkillAssetFactory.AddEmbedded<GameplayEffectAsset>(root, name);
@@ -44,16 +53,16 @@ namespace ZFramework.GAS.Editor
         public override string DisplayName => "近战普攻";
         public override void Build(GameplayAbilityAsset ability)
         {
-            var cost = RealtimeTemplateAssets.Effect(ability, "消耗 · 体力", EffectDurationPolicy.Instant, 0, 4, -10);
-            RealtimeTemplateAssets.Bind(ability, "cost", cost); RealtimeTemplateAssets.Cooldown(ability, .8f);
-            var damage = RealtimeTemplateAssets.Effect(ability, "伤害 · 挥砍", EffectDurationPolicy.Instant, 0, 1, 0);
+            var cost = BasicCombatSkillTemplates.Effect(ability, "消耗 · 体力", EffectDurationPolicy.Instant, 0, 4, -10);
+            BasicCombatSkillTemplates.Bind(ability, "cost", cost); BasicCombatSkillTemplates.Cooldown(ability, .8f);
+            var damage = BasicCombatSkillTemplates.Effect(ability, "伤害 · 挥砍", EffectDurationPolicy.Instant, 0, 1, 0);
             using (var so = new SerializedObject(damage))
             {
                 var m = so.FindProperty("modifiers").GetArrayElementAtIndex(0).FindPropertyRelative("magnitude");
                 m.FindPropertyRelative("kind").enumValueIndex = 1; m.FindPropertyRelative("captureAttributeId").intValue = 3;
                 m.FindPropertyRelative("coefficient").floatValue = -1.2f; so.ApplyModifiedProperties();
             }
-            RealtimeTemplateAssets.Animation(ability, "命中", .8f, new ApplyEffectAction { effect = damage });
+            BasicCombatSkillTemplates.Animation(ability, "命中", .8f, new ApplyEffectAction { effect = damage });
         }
     }
     public sealed class ProjectileTemplate : SkillTemplate
@@ -61,11 +70,11 @@ namespace ZFramework.GAS.Editor
         public override string DisplayName => "投射物";
         public override void Build(GameplayAbilityAsset ability)
         {
-            var damage = RealtimeTemplateAssets.Effect(ability, "伤害 · 投射物", EffectDurationPolicy.Instant, 0, 1, -20);
-            RealtimeTemplateAssets.Animation(ability, "发射", 1, new LaunchProjectileAction {
+            var damage = BasicCombatSkillTemplates.Effect(ability, "伤害 · 投射物", EffectDurationPolicy.Instant, 0, 1, -20);
+            BasicCombatSkillTemplates.Animation(ability, "发射", 1, new LaunchProjectileAction {
                 onHit = new SkillAction[]{ new ApplyEffectAction { effect = damage } }
             });
-            RealtimeTemplateAssets.Cooldown(ability, 1);
+            BasicCombatSkillTemplates.Cooldown(ability, 1);
         }
     }
     public sealed class BuffTemplate : SkillTemplate
@@ -73,11 +82,11 @@ namespace ZFramework.GAS.Editor
         public override string DisplayName => "狂暴 Buff";
         public override void Build(GameplayAbilityAsset ability)
         {
-            var buff = RealtimeTemplateAssets.Effect(ability, "狂暴 · 攻击加成", EffectDurationPolicy.Duration, 5, 3, 10);
-            RealtimeTemplateAssets.Animation(ability, "施加增益", .6f, new ApplyEffectAction {
+            var buff = BasicCombatSkillTemplates.Effect(ability, "狂暴 · 攻击加成", EffectDurationPolicy.Duration, 5, 3, 10);
+            BasicCombatSkillTemplates.Animation(ability, "施加增益", .6f, new ApplyEffectAction {
                 effect = buff, targets = new TargetQuery { kind = TargetQueryKind.Self }
             });
-            RealtimeTemplateAssets.Cooldown(ability, 8);
+            BasicCombatSkillTemplates.Cooldown(ability, 8);
         }
     }
     public sealed class ChannelTemplate : SkillTemplate
@@ -85,8 +94,8 @@ namespace ZFramework.GAS.Editor
         public override string DisplayName => "引导（随施放取消）";
         public override void Build(GameplayAbilityAsset ability)
         {
-            var hit = RealtimeTemplateAssets.Effect(ability, "引导 · 单次伤害", EffectDurationPolicy.Instant, 0, 1, -5);
-            RealtimeTemplateAssets.Animation(ability, "开始引导", 3, new CreateAreaAction {
+            var hit = BasicCombatSkillTemplates.Effect(ability, "引导 · 单次伤害", EffectDurationPolicy.Instant, 0, 1, -5);
+            BasicCombatSkillTemplates.Animation(ability, "开始引导", 3, new CreateAreaAction {
                 targets = new TargetQuery { kind = TargetQueryKind.FixedTarget }, ownership = SkillTaskOwnership.Ability,
                 duration = new SkillNumber(3), period = new SkillNumber(.5f),
                 onPeriod = new SkillAction[] { new ApplyEffectAction { effect = hit } }
@@ -98,15 +107,15 @@ namespace ZFramework.GAS.Editor
         public override string DisplayName => "持续伤害（打断后继续）";
         public override void Build(GameplayAbilityAsset ability)
         {
-            var effect = RealtimeTemplateAssets.Effect(ability, "持续伤害", EffectDurationPolicy.Duration, 3, 1, -5);
+            var effect = BasicCombatSkillTemplates.Effect(ability, "持续伤害", EffectDurationPolicy.Duration, 3, 1, -5);
             using (var so = new SerializedObject(effect)) { so.FindProperty("period").floatValue = .5f; so.ApplyModifiedProperties(); }
-            RealtimeTemplateAssets.Animation(ability, "施加持续伤害", 3, new ApplyEffectAction { effect = effect });
+            BasicCombatSkillTemplates.Animation(ability, "施加持续伤害", 3, new ApplyEffectAction { effect = effect });
         }
     }
     public sealed class SummonTemplate : SkillTemplate
     {
         public override string DisplayName => "召唤骨架";
         public override void Build(GameplayAbilityAsset ability) =>
-            RealtimeTemplateAssets.Animation(ability, "生成", 1.5f, new SpawnPrefabAction());
+            BasicCombatSkillTemplates.Animation(ability, "生成", 1.5f, new SpawnPrefabAction());
     }
 }

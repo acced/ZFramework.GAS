@@ -90,7 +90,15 @@ namespace ZFramework.GAS.Editor
         public event Action<string> Feedback;
         public event Action FlowRequested;
         public void OpenFlow() => FlowRequested?.Invoke();
-        public SkillDocument() { Undo.undoRedoPerformed += OnUndo; }
+        public SkillDocument() { Undo.undoRedoPerformed += OnUndo; SkillIndexPostprocessor.ImportedAssets += OnImported; }
+
+        private void OnImported(string[] paths)
+        {
+            if (Root == null) return;
+            foreach (var asset in _assets)
+                if (asset != null && Array.IndexOf(paths, AssetDatabase.GetAssetPath(asset)) >= 0)
+                { RefreshIfChanged(); return; }
+        }
 
         public SerializedObject Serialized(Object asset)
         {
@@ -252,7 +260,7 @@ namespace ZFramework.GAS.Editor
         }
         public void Dispose()
         {
-            Undo.undoRedoPerformed -= OnUndo; ClearPendingChanges();
+            Undo.undoRedoPerformed -= OnUndo; SkillIndexPostprocessor.ImportedAssets -= OnImported; ClearPendingChanges();
             _contentHashes.Clear(); Layout?.Save(); Layout?.Dispose(); ClearPool();
         }
     }

@@ -302,6 +302,8 @@ namespace ZFramework.GAS.Editor
             {var m=markers.GetArrayElementAtIndex(i);if(m.FindPropertyRelative("actions").arraySize==0)continue;
              float at=m.FindPropertyRelative("time").floatValue;first=Mathf.Min(first,at);last=Mathf.Max(last,at);}
             int Frame(float t)=>Mathf.RoundToInt(t*Fps/Mathf.Max(.001f,_doc.Playback.Speed));
+            foreach (var hit in _animation.hitWindows)
+            { first = Mathf.Min(first, hit.start); last = Mathf.Max(last, hit.end); }
             var ranges=new List<string>();
             foreach(var s in _animation.sections??Array.Empty<AnimationSection>())if(s!=null && s.inputBufferEnd>s.inputBufferStart)
                 ranges.Add("输入 "+Frame(s.inputBufferStart)+"–"+Frame(s.inputBufferEnd)+"f");
@@ -487,6 +489,7 @@ namespace ZFramework.GAS.Editor
                 _selected.Add(element.Key);
                 _doc.Selection.Select(_doc.Root.Animation(), element.Track.PropertyPath, element.Id);
                 if (e.clickCount == 2 && element.Track.PropertyPath == "markers") { _doc.OpenFlow(); e.StopPropagation(); return; }
+                if (e.clickCount == 2 && element.Track is HitWindowTrack) { Seek(element.Start); e.StopPropagation(); return; }
                 moved = _elements.Where(x => _selected.Contains(x.Key)).ToArray();
                 origin = e.position.x; delta = 0; dragging = true; _dragging = true;
                 resize = element.Track.Shape == TrackElementShape.Range ? e.localPosition.x < 7 ? -1 : e.localPosition.x > element.View.layout.width - 7 ? 1 : 0 : 0;

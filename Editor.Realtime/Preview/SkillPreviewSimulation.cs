@@ -45,6 +45,7 @@ namespace ZFramework.GAS.Editor
         private Action<SkillPreviewContact> _contact;
         internal IReadOnlyList<Vector3> Targets=>_points;
         public int HitCount=>_hit.Count;
+        public string SourceNote { get; private set; }
         internal bool WasHit(int dummy)=>_hit.Contains(dummy);
         public float End {get;private set;}
         public AnimationClip Reaction { get;set; }
@@ -101,15 +102,31 @@ namespace ZFramework.GAS.Editor
             public Vector3? Origin(SkillSpawnPosition origin)=>origin switch{
                 SkillSpawnPosition.HitPoint=>HitPoint, SkillSpawnPosition.Target=>Target>=0?Sim._points[Target]:(Vector3?)null,
                 SkillSpawnPosition.TargetPoint=>Aim, SkillSpawnPosition.EventPosition=>null, _=>Vector3.zero};
-            public void Candidates(TargetQueryDefinition q, TargetShape shape, Vector3? origin, bool draw)
+            public void Candidates(TargetQueryDefinition q, TargetShape shape, Vector3? origin, bool draw, float yaw = 0)
             {
                 Sim._ordered.Clear();
-                if (draw && origin.HasValue) Drawing?.Query(shape,Caster,Caster.TransformPoint(origin.Value));
+                if (draw && origin.HasValue && TargetQuery.IsVolume(q.Kind)) Drawing?.Query(shape,Caster,Caster.TransformPoint(origin.Value),yaw);
                 if (q.Kind == TargetQueryKind.Self || !q.MatchesTags(Sim._targetTags)) return;
                 if (q.Kind == TargetQueryKind.FixedTarget) { if (Target >= 0) Sim._ordered.Add(Target); return; }
+                if (q.Kind == TargetQueryKind.Project) { Sim.SourceNote = "项目来源「" + q.SourceKey + "」的命中仅在运行时确定。"; return; }
+                if (q.Kind == TargetQueryKind.Hitbox)
+                {
+                    if (Caster == null || !SkillColliderVolume.TryRead(Caster.GetComponent<SkillHitboxes>()?.Find(q.SourceKey), out var volume))
+                    { Sim.SourceNote = "预览角色没有可用的碰撞体槽位：" + q.SourceKey; return; }
+                    if (draw) Drawing?.Hitbox(volume);
+                    for (int i = 0; i < Count; i++)
+                    {
+                        var point = Caster.TransformPoint(Sim._points[i]) + Vector3.up * DummyRadius;
+                        if ((q.LayerMask.value & (1 << Sim.LayerOf(i))) != 0 && volume.TouchesSphere(point, DummyRadius)) Sim._ordered.Add(i);
+                    }
+                    var worldCenter = volume.Center;
+                    Sim._ordered.Sort((a,b) => (Caster.TransformPoint(Sim._points[a])-worldCenter).sqrMagnitude.CompareTo((Caster.TransformPoint(Sim._points[b])-worldCenter).sqrMagnitude));
+                    return;
+                }
                 if (origin is not Vector3 center) return;
+                var inverse = Quaternion.Euler(0, -yaw, 0);
                 for(int i=0;i<Count;i++)
-                    if((q.LayerMask.value & (1<<Sim.LayerOf(i)))!=0 && Contains(shape,Sim._points[i]-center,DummyRadius)) Sim._ordered.Add(i);
+                    if((q.LayerMask.value & (1<<Sim.LayerOf(i)))!=0 && Contains(shape,inverse*(Sim._points[i]-center),DummyRadius)) Sim._ordered.Add(i);
                 Sim._ordered.Sort((a,b) => {
                     int order=(Sim._points[a]-center).sqrMagnitude.CompareTo((Sim._points[b]-center).sqrMagnitude);
                     return order!=0 ? order : a.CompareTo(b);
@@ -153,7 +170,7 @@ namespace ZFramework.GAS.Editor
         private void Evaluate(SkillDocument doc,Transform caster,Vector3 groundPoint,int level,SkillParameterOverride[] castOverrides,bool showEffects,SkillPreviewTools drawing)
         {
             int count=_points.Count;
-            _hit.Clear(); End=doc.Root?.Animation()?.Duration??0;
+            _hit.Clear(); SourceNote = null; End=doc.Root?.Animation()?.Duration??0;
             if(doc.Root==null) return;
             SetTags(_sourceTags, SourceTags, ref _lastSourceTags);
             SetTags(_targetTags, TargetTags, ref _lastTargetTags);
@@ -166,6 +183,15 @@ namespace ZFramework.GAS.Editor
             _ctx.HitPoint=null; _ctx.Chain=default; _ctx.Records.Clear();
 
             foreach(var a in root.activationActions) Visit(a,0,values,1);
+            if (root.Animation() is { } animation)
+                foreach (var window in animation.hitWindows)
+                {
+                    if (now < window.start || now >= window.end) continue;
+                    var q = window.targets.Build();
+                    _ctx.Candidates(q, q.ResolveShape(values), _ctx.Origin(q.EffectiveOrigin) + window.offset, true, window.yaw);
+                    if (window.effect != null)
+                        for (int j = 0; j < Math.Min(_ordered.Count, q.MaxTargets); j++) _hit.Add(_ordered[j]);
+                }
             var markers=root.Animation()!=null?doc.Serialized(root.Animation()).FindProperty("markers"):null;
             for(int i=0;i<(markers?.arraySize??0);i++)
             {

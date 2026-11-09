@@ -16,19 +16,22 @@ namespace ZFramework.GAS.Editor
     {
         public static IReadOnlyList<SkillTemplate> Templates => TypeCache.GetTypesDerivedFrom<SkillTemplate>()
             .Where(t => !t.IsAbstract && t.GetConstructor(Type.EmptyTypes) != null).Select(t => (SkillTemplate)Activator.CreateInstance(t)).OrderBy(t => t.DisplayName).ToArray();
-        public static GameplayAbilityAsset Create(string path, SkillTemplate template)
+        public static GameplayAbilityAsset Create(string path, SkillTemplate template = null)
         {
             var ability = ScriptableObject.CreateInstance<GameplayAbilityAsset>(); ability.name = System.IO.Path.GetFileNameWithoutExtension(path);
             AssetDatabase.CreateAsset(ability, path);
             Undo.RegisterCreatedObjectUndo(ability, "新建技能");
-            template.Build(ability); EditorUtility.SetDirty(ability); AssetDatabase.SaveAssetIfDirty(ability);
+            template?.Build(ability); EditorUtility.SetDirty(ability); AssetDatabase.SaveAssetIfDirty(ability);
             SkillIndex.Invalidate(); return ability;
         }
+        public static void Choose(Action<GameplayAbilityAsset> open) => Choose(null, open);
         public static void Choose(SkillTemplate template, Action<GameplayAbilityAsset> open)
         {
-            string path = EditorUtility.SaveFilePanelInProject("新建技能 · " + template.DisplayName, template.DisplayName, "asset", "选择技能资产的保存位置");
+            string title = template == null ? "新建技能" : "新建技能 · " + template.DisplayName;
+            string path = EditorUtility.SaveFilePanelInProject(title, template?.DisplayName ?? "新技能", "asset", "选择技能资产的保存位置");
             if (string.IsNullOrEmpty(path)) return;
-            int group = Undo.GetCurrentGroup(); Undo.SetCurrentGroupName("新建技能「" + template.DisplayName + "」");
+            Undo.IncrementCurrentGroup();
+            int group = Undo.GetCurrentGroup(); Undo.SetCurrentGroupName(title);
             var ability = Create(path, template); Undo.CollapseUndoOperations(group); open(ability);
         }
     }

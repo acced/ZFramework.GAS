@@ -229,7 +229,7 @@ namespace ZFramework.GAS.Editor
             }
             foreach (var edge in _edges.Values)
                 if (edge.userData is AssetLink link)
-                    edge.selected = link.Parent == _doc.Selection.Asset && link.Port.ElementId == _doc.Selection.ElementId && link.Port.Kind == PortKind.Marker;
+                    edge.selected = link.Parent == _doc.Selection.Asset && link.Port.ElementId == _doc.Selection.ElementId && link.Port.Kind is PortKind.Marker or PortKind.TimelineEffect;
         }
         public void FocusAsset(Object asset)
         {
@@ -578,7 +578,12 @@ namespace ZFramework.GAS.Editor
                 color = SkillColors.Animation;
                 foreach (var entry in SkillEditorExtensions.Entries(so))
                     desired[new PortId(PortKind.Marker, entry.Id)] = "◆ " + entry.Label;
-                _summary.text = SkillEditorExtensions.Timeline.DisplayName + "  /  " + desired.Count + " 个事件";
+                int events = desired.Count;
+                foreach (var slot in SkillEditorExtensions.EffectSlots(so))
+                    desired[new PortId(PortKind.TimelineEffect, slot.Id)] = slot.Label;
+                int windows = desired.Count - events;
+                _summary.text = SkillEditorExtensions.Timeline.DisplayName + "  /  " +
+                    (windows == 0 ? events + " 个事件" : (events > 0 ? events + " 个事件 · " : "") + windows + " 个命中窗口");
             }
             else { color = SkillColors.Task; _summary.text = Asset is SkillActionModuleAsset ? "MODULE  /  共享动作模块" : "PARAMETERS  /  共享参数"; }
             int actionCount = 0;
@@ -605,6 +610,11 @@ namespace ZFramework.GAS.Editor
                         DragAndDrop.AcceptDrag(); e.StopPropagation();
                     });
                     port.RegisterCallback<MouseDownEvent>(e => { if (id.Kind == PortKind.Marker) { _doc.Selection.Select(Asset, SkillEditorExtensions.Timeline.EntryTrack, id.ElementId); if (e.clickCount == 2) { _doc.OpenFlow(); e.StopPropagation(); } } });
+                    if (id.Kind == PortKind.TimelineEffect) port.RegisterCallback<MouseDownEvent>(e =>
+                    {
+                        var slot = SkillEditorExtensions.EffectSlots(_doc.Serialized(Asset)).FirstOrDefault(s => s.Id == id.ElementId);
+                        if (slot.Track != null) _doc.Selection.Select(Asset, slot.Track, slot.Id);
+                    });
                     _outputs[id] = port; outputContainer.Add(port);
                 }
                 port.portName = pair.Value; port.portColor = color;

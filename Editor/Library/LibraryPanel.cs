@@ -62,6 +62,7 @@ namespace ZFramework.GAS.Editor
     public sealed class SkillIndexPostprocessor : AssetPostprocessor
     {
         private static readonly HashSet<string> Imported = new(), Deleted = new();
+        internal static event Action<string[]> ImportedAssets;
         private static bool _queued;
         private static void OnPostprocessAllAssets(string[] imported, string[] deleted, string[] moved, string[] oldPaths)
         {
@@ -78,6 +79,7 @@ namespace ZFramework.GAS.Editor
             {
                 _queued = false; var added = Imported.ToArray(); var removed = Deleted.ToArray(); Imported.Clear(); Deleted.Clear();
                 SkillIndex.UpdatePaths(added, removed, Array.Empty<string>(), Array.Empty<string>());
+                ImportedAssets?.Invoke(added);
             };
         }
     }
@@ -172,7 +174,7 @@ namespace ZFramework.GAS.Editor
             var shared = new Foldout { text = "共享效果", value = false }; _library.Add(shared);
             foreach (var effect in SkillIndex.Effects.Where(e => !AssetDatabase.IsSubAsset(e) && Matches(e))) shared.Add(Row(effect, "↗", SkillColors.Instant, () => { _doc.AddLoose(effect); _doc.Selection.Select(effect); }));
             if (SkillIndex.Abilities.Count == 0)
-                _library.Add(new HelpBox("还没有技能。点击「新建技能」选择模板开始。", HelpBoxMessageType.Info));
+                _library.Add(new HelpBox("还没有技能。点击「新建技能」创建空白技能。", HelpBoxMessageType.Info));
         }
         private void RefreshParameters()
         {

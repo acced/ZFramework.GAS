@@ -79,7 +79,7 @@ namespace ZFramework.GAS.Unity
         public int maxHits = 1;
         public SkillSpawnPosition origin;
         public bool onlySelectedTarget;
-        public TargetQuery collision = new TargetQuery { kind = TargetQueryKind.Circle };
+        [TargetFiltersOnly] public TargetQuery collision = new TargetQuery { kind = TargetQueryKind.Circle };
         [FlowField("归属")] public SkillTaskOwnership ownership;
         [SerializeReference, FlowBranch("命中时")] public SkillAction[] onHit = Array.Empty<SkillAction>();
         public override bool IsDetachedBranch(string field) => field == nameof(onHit) && ownership == SkillTaskOwnership.Scene;
@@ -95,7 +95,7 @@ namespace ZFramework.GAS.Unity
             if (owner == SkillTaskOwnership.Ability) builder.RequireAbilityTask(Id);
             int limit = Math.Max(1, maxHits); var query = collision.Build(); var hit = BuildBranch(builder, nameof(onHit), onHit); var id = Id;var start=origin;bool targeted=onlySelectedTarget;
             if (visual == null) throw new InvalidOperationException("投射物缺少 Prefab。");
-            builder.Query(collision); builder.Number(speed,float.Epsilon); builder.Number(lifetime,float.Epsilon);
+            builder.Number(speed,float.Epsilon); builder.Number(lifetime,float.Epsilon);
             if (!float.IsFinite(radius) || radius<=0 || !float.IsFinite(arcHeight) || maxHits<1) throw new InvalidOperationException("投射物形状或命中上限无效。");
             return Define("发射投射物", context =>
             {
