@@ -6,6 +6,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
 using ZFramework.GAS.Unity;
+using ZFramework.GAS.Samples.BasicCombat;
 using Object = UnityEngine.Object;
 
 namespace ZFramework.GAS.Editor.Tests
@@ -100,9 +101,9 @@ namespace ZFramework.GAS.Editor.Tests
         { var runner = new SkillRunner(owner); if (driver != null) new SkillTimelinePlayer(runner, driver); runner.Grant(skill); return runner; }
         private GameplayAbilityAsset Skill(params SkillAction[] actions)
         { var skill = New<GameplayAbilityAsset>(); skill.activationActions = actions; return skill; }
-        private TimelineTaskContext Services(Transform origin, Transform target = null, Pool pool = null)
-            => new TimelineTaskContext { Origin = origin, Target = target, TargetPosition = target != null ? target.position : Vector3.forward * 3,
-                Objects = pool ?? new Pool(), Searcher = new TargetSearcher(), SceneTasks = _scene };
+        private SkillExecutionServices Services(Transform origin, Transform target = null, Pool pool = null)
+            => new SkillExecutionServices { Origin = origin, Target = target, TargetPosition = target != null ? target.position : Vector3.forward * 3,
+                Objects = pool ?? new Pool(), Searcher = new PhysicsTargetSearcher(), SceneTasks = _scene };
 
         [Test] public void TurnBasedCastHitsChosenLogicalUnitWithoutSceneOrTimeline()
         {
@@ -131,7 +132,7 @@ namespace ZFramework.GAS.Editor.Tests
             timeline.hitWindows = new[] { new SkillHitWindow { start = .65f, end = 1.5f, effect = Effect(),
                 targets = new TargetQuery { kind = TargetQueryKind.Hitbox, sourceKey = "Sword" } } };
             SkillAssetFactory.SetMainAnimation(skill, timeline);
-            var owner = caster.AbilitySystem; var runner = new SkillRunner(owner, new SkillUnitServices { Origin = origin });
+            var owner = caster.AbilitySystem; var runner = new SkillRunner(owner, new SkillUnitServices { Origin = origin, Searcher = new PhysicsTargetSearcher() });
             using var player = new SkillTimelinePlayer(runner, () => new AuthoredClock()); runner.Grant(skill);
             float HP(SkillActionTestUnit u) => u.AbilitySystem.Attributes.GetCurrent(new AttributeId(1));
             Physics.SyncTransforms(); runner.TryCast(skill, new SkillCastTarget(selected.AbilitySystem)); owner.Tick(.64f);
@@ -161,7 +162,7 @@ namespace ZFramework.GAS.Editor.Tests
                 Assert.AreEqual((collider.ClosestPoint(p)-p).sqrMagnitude <= .2f*.2f, volume.TouchesSphere(p,.2f));
             }
             var skill=Skill(new ApplyEffectAction { effect=Effect(), targets=new TargetQuery { kind=TargetQueryKind.Hitbox, sourceKey="weapon" } });
-            var runner = new SkillRunner(caster.AbilitySystem,new SkillUnitServices { Origin=caster.transform }); runner.Grant(skill); runner.TryCast(skill);
+            var runner = new SkillRunner(caster.AbilitySystem,new SkillUnitServices { Origin=caster.transform, Searcher = new PhysicsTargetSearcher() }); runner.Grant(skill); runner.TryCast(skill);
             Assert.AreEqual(90,inside.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
             Assert.AreEqual(100,outside.AbilitySystem.Attributes.GetCurrent(new AttributeId(1)));
         }
@@ -205,7 +206,7 @@ namespace ZFramework.GAS.Editor.Tests
                 offset = Vector3.up, yaw = 90, targets = new TargetQuery { kind = TargetQueryKind.Line, radius = new SkillNumber(2) } } };
             SkillAssetFactory.SetMainAnimation(skill, timeline);
             var owner = source.AbilitySystem;
-            var runner = new SkillRunner(owner, new SkillUnitServices { Origin = source.transform });
+            var runner = new SkillRunner(owner, new SkillUnitServices { Origin = source.transform, Searcher = new PhysicsTargetSearcher() });
             using var player = new SkillTimelinePlayer(runner, () => new AuthoredClock());
             runner.Grant(skill);
             float HP(SkillActionTestUnit u) => u.AbilitySystem.Attributes.GetCurrent(new AttributeId(1));
@@ -232,7 +233,7 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.That(SkillActionFields.For(typeof(LaunchProjectileAction)).Inline, Does.Contain(("collision.relation", "目标关系")));
             var source = Unit("caster", Vector3.zero); var ally = Unit("ally", Vector3.right);
             var enemy = Unit("enemy", Vector3.forward); Physics.SyncTransforms();
-            var services = new SkillUnitServices { Origin = source.transform, TargetRelations = (from, to, relation) =>
+            var services = new SkillUnitServices { Origin = source.transform, Searcher = new PhysicsTargetSearcher(), TargetRelations = (from, to, relation) =>
                 from == source.AbilitySystem.SourceIdentity && (relation == TargetRelation.Enemy) == (to == enemy.AbilitySystem) };
             var runner = new SkillRunner(source.AbilitySystem, services);
             GameplayAbilityAsset Area(TargetRelation side, float amount) => Skill(new ApplyEffectAction {
@@ -251,7 +252,7 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.IsNull(cast.Target); Assert.IsNull(cast.Services.Target); Assert.IsFalse(cast.Services.HasTargetPosition);
             Assert.AreSame(source.transform, cast.Services.Origin);
             // An unconfigured project cannot accidentally damage friends. Any remains compatible.
-            var noTeams = new SkillRunner(ally.AbilitySystem, null);
+            var noTeams = new SkillRunner(ally.AbilitySystem, new SkillUnitServices { Searcher = new PhysicsTargetSearcher() });
             noTeams.Grant(attack); noTeams.TryCast(attack, new SkillCastTarget(enemy.AbilitySystem));
             Assert.AreEqual(40, HP(enemy));
         }
@@ -536,7 +537,7 @@ namespace ZFramework.GAS.Editor.Tests
             float radius=SkillPreviewSimulation.DummyRadius;var collider=dummy.GetComponent<SphereCollider>();
             collider.radius=radius;collider.center=Vector3.up*radius;dummy.gameObject.layer=29;
             var ctx=new SkillExecutionContext(null,origin.AbilitySystem.GrantAbility(new GameplayAbilityDefinition()),null,new EffectEvaluationContext(1),Services(origin.transform));
-            var buffer=new TargetQueryBuffer();var searcher=new TargetSearcher();
+            var searcher=new PhysicsTargetSearcher();var buffer=searcher.CreateBuffer();
             foreach(var kind in new[]{TargetQueryKind.Circle,TargetQueryKind.Sector,TargetQueryKind.Line})
             {
                 var query=new TargetQuery{kind=kind,radius=new SkillNumber(3),width=new SkillNumber(1),layerMask=1<<29}.Build();
@@ -849,7 +850,7 @@ namespace ZFramework.GAS.Editor.Tests
         {
             var owner = new AbilitySystemComponent(); var service = new ImmediateCancelSelection();
             var skill = Skill(new WaitSkillAction { kind = SkillWaitKind.Target });
-            Granted(owner, null, skill).TryCast(skill, taskContext: new TimelineTaskContext { TargetSelection = service });
+            Granted(owner, null, skill).TryCast(skill, taskContext: new SkillExecutionServices { TargetSelection = service });
             Assert.AreEqual(1, service.Disposed); Assert.AreEqual(0, owner.ActiveTaskCount);
         }
         [Test] public void EditingParametersAndDefinitionsOnlyChangesNextCast()
@@ -985,7 +986,7 @@ namespace ZFramework.GAS.Editor.Tests
             var levels = new[] { 7f }; runner.Grant(skill, 2, new[] { new SkillParameterOverride { parameterId = parameter.Id, levels = levels } }); levels[0] = 999;
             runner.TryCast(skill); Assert.AreEqual(7, runner.GetExecution(skill).Values.Parameter(parameter.Id));
         }
-        [Test] public void ClearRegrantsOriginalSetLevelAndOverridesAndStillRevokesCorrectly()
+        [Test] public void ClearRequiresExplicitRegrantAndPreservesSetOverrides()
         {
             var owner = new AbilitySystemComponent(); var runner = new SkillRunner(owner, null); var parameter = new SkillParameter { defaultValue = 1 };
             var skill = Skill(); skill.parameters = new[] { parameter };
@@ -993,7 +994,8 @@ namespace ZFramework.GAS.Editor.Tests
                 parameters = new[] { new SkillParameterOverride { parameterId = parameter.Id, value = 7 } } } };
             set.GrantTo(runner); var previous = runner.GetSpec(skill); owner.Clear();
             Assert.IsNull(runner.GetSpec(skill)); Assert.IsFalse(runner.IsActive(skill)); Assert.AreEqual(0, owner.GrantedAbilityCount);
-            runner.TryCast(skill);
+            Assert.Throws<InvalidOperationException>(() => runner.TryCast(skill));
+            set.GrantTo(runner); runner.TryCast(skill);
             Assert.AreNotSame(previous, runner.GetSpec(skill)); Assert.AreEqual(3, runner.GetExecution(skill).Values.Level);
             Assert.AreEqual(7, runner.GetExecution(skill).Values.Parameter(parameter.Id)); set.RevokeFrom(runner);
             Assert.IsNull(runner.GetSpec(skill)); Assert.AreEqual(0, owner.GrantedAbilityCount);
@@ -1002,7 +1004,7 @@ namespace ZFramework.GAS.Editor.Tests
         [Test] public void TargetRebindingWithoutTransformPreservesAimAndHostCanClearIt()
         {
             var owner = new AbilitySystemComponent(); var target = new AbilitySystemComponent(); var spec = owner.GrantAbility(new GameplayAbilityDefinition());
-            owner.TryActivateAbility(spec); var services = new TimelineTaskContext { TargetPosition = Vector3.right * 7 };
+            owner.TryActivateAbility(spec); var services = new SkillExecutionServices { TargetPosition = Vector3.right * 7 };
             var context = new SkillExecutionContext(null, spec, null, spec.EvaluationContext, services);
             Assert.AreEqual(services.TargetPosition, context.WithTarget(target).Services.RequireTargetPosition());
             services.ClearTargetPosition(); Assert.IsFalse(services.HasTargetPosition); Assert.Throws<InvalidOperationException>(() => services.RequireTargetPosition());

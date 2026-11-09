@@ -1,0 +1,33 @@
+name: Verify GAS
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ZFramework.GAS
+      - uses: actions/checkout@v4
+        with:
+          repository: acced/ZFramework.GameplayTags
+          ref: 8dde1a43485f33031fd73b4e6cb21304f03c19df
+          path: ZFramework.GameplayTags
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Check assembly and package boundaries
+        working-directory: ZFramework.GAS
+        run: python3 Tools~/verify_architecture.py
+      - name: Compile portable core
+        working-directory: ZFramework.GAS
+        run: dotnet build Tests~/Core/Core.csproj -c Release -m:1 /nodeReuse:false -p:UseSharedCompilation=false
+      - name: Run lifecycle and allocation regressions
+        working-directory: ZFramework.GAS
+        run: dotnet .build~/tests/bin/Release/net8.0/Core.dll

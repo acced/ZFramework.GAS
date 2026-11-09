@@ -38,7 +38,8 @@ namespace ZFramework.GAS.Samples.BasicCombat
             AbilitySystem = new AbilitySystemComponent(5, router);
             GetComponent<CueVfxPlayer>()?.Bind(AbilitySystem);
             Timeline?.Dispose();
-            SkillRunner = new SkillRunner(AbilitySystem, services ?? new SkillUnitServices { Origin = transform });
+            SkillRunner = new SkillRunner(AbilitySystem, services ?? new SkillUnitServices { Origin = transform, Scene = gameObject.scene,
+                Searcher = new PhysicsTargetSearcher(), Objects = InstantiateSkillObjectService.Instance });
             Timeline = new SkillTimelinePlayer(SkillRunner, () =>
             {
                 var animator = GetComponent<SkillAnimator>();

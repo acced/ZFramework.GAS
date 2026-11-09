@@ -859,6 +859,26 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.IsFalse(issues.Any(i => i.PropertyPath.EndsWith(".booleanParameterId")));
         }
         [Test]
+        public void TimelineNumbersValidateTheCallingSkillsEffectiveOverride()
+        {
+            var parameter = new SkillParameter { defaultValue = 1 };
+            _ability.parameters = new[] { parameter };
+            _ability.parameterOverrides = new[] { new SkillParameterOverride { parameterId = parameter.Id, value = -1 } };
+            var animation = Animation();
+            Edit(animation, so =>
+            {
+                var markers = so.FindProperty("markers"); markers.arraySize = 1;
+                var actions = markers.GetArrayElementAtIndex(0).FindPropertyRelative("actions"); actions.arraySize = 1;
+                actions.GetArrayElementAtIndex(0).managedReferenceValue = new WaitSkillAction {
+                    timeout = new SkillNumber(1) { parameterId = parameter.Id }
+                };
+            });
+            _doc.Notify(new ChangeSet(animation, true));
+            using var validation = new ValidationService(_doc); validation.ValidateNow(strict: true);
+            Assert.IsTrue(validation.Issues.Any(i => i.Asset == animation && i.Id == "GAS_ACTION" &&
+                i.PropertyPath == "markers.Array.data[0].actions.Array.data[0]"));
+        }
+        [Test]
         public void MecanimWarnsForRecastAndOnlyForAJumpThatCanOccurDuringEntryBlend()
         {
             var animation=Animation();var host=new GameObject("Mecanim preview");host.AddComponent<Animator>();host.AddComponent<SkillAnimator>();

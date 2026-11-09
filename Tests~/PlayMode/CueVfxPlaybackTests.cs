@@ -72,7 +72,7 @@ namespace ZFramework.GAS.Tests
                 yield return null;
                 hero.SkillRunner.Grant(slash); hero.SkillRunner.Grant(warcry);
                 Assert.AreEqual(AbilityActivationResult.Activated, hero.SkillRunner.TryCast(slash, dummy.AbilitySystem,
-                    new TimelineTaskContext { Origin = knight.transform, Target = dummy.transform, Scene = knight.scene }));
+                    new SkillExecutionServices { Origin = knight.transform, Target = dummy.transform, Scene = knight.scene, Searcher = new PhysicsTargetSearcher() }));
                 float elapsed = 0;
                 while (elapsed < .4f) { hero.AbilitySystem.Tick(Time.deltaTime); elapsed += Time.deltaTime; yield return null; }
                 var trail = knight.GetComponentInChildren<SwordTrailVisual>();

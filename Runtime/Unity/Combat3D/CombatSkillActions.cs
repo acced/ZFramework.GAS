@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
+using UnityEngine.Scripting.APIUpdating;
 
 namespace ZFramework.GAS.Unity
 {
     [Serializable]
     [System.ComponentModel.DisplayName("生成预制体")]
+    [MovedFrom(true, "ZFramework.GAS.Unity", "ZFramework.GAS.Unity.Realtime", "SpawnPrefabAction")]
     public sealed class SpawnPrefabAction : SkillAction
     {
         [FlowField("预制体")] public GameObject prefab;
@@ -68,6 +71,7 @@ namespace ZFramework.GAS.Unity
 
     [Serializable]
     [System.ComponentModel.DisplayName("发射投射物")]
+    [MovedFrom(true, "ZFramework.GAS.Unity", "ZFramework.GAS.Unity.Realtime", "LaunchProjectileAction")]
     public sealed class LaunchProjectileAction : SkillAction
     {
         [FlowField("预制体")] public GameObject prefab;
@@ -117,7 +121,8 @@ namespace ZFramework.GAS.Unity
         private readonly SkillActionDefinition[] _onHit;
         private readonly RaycastHit[] _hits = new RaycastHit[64];
         private readonly Collider[] _overlaps = new Collider[64];
-        private readonly HashSet<AbilitySystemComponent> _struck = new();
+        private readonly HashSet<AbilitySourceIdentity> _struck = new();
+        private readonly PhysicsScene _physics;
         private Vector3 _flat, _destination;
         public override string State => "飞行中";
         public SkillProjectileTask(SkillExecutionContext context, string id, GameObject visual, float speed, float duration,
@@ -127,6 +132,7 @@ namespace ZFramework.GAS.Unity
             _targeted=targeted; _limit = limit; _query = query; _onHit = onHit; _flat = visual.transform.position;
             _destination = context.Services.Target != null ? context.Services.Target.position+(context.AimOffset??Vector3.zero) : context.Services.RequireTargetPosition();
             _initialDistance = Vector3.Distance(_flat, _destination);
+            _physics = visual.scene.GetPhysicsScene();
         }
         protected override void Tick(float dt)
         {
@@ -140,11 +146,11 @@ namespace ZFramework.GAS.Unity
             var delta = next - previous; float distance = delta.magnitude;
             _visual.transform.position = next;
             if (distance > .0001f) _visual.transform.rotation = Quaternion.LookRotation(delta);
-            int overlaps = Physics.OverlapSphereNonAlloc(previous, _radius, _overlaps, _query.LayerMask, QueryTriggerInteraction.Collide);
+            int overlaps = _physics.OverlapSphere(previous, _radius, _overlaps, _query.LayerMask, QueryTriggerInteraction.Collide);
             if (overlaps == _overlaps.Length) throw new InvalidOperationException("投射物碰撞缓冲已满，请收紧碰撞层或减少重叠碰撞体。");
             for (int i = 0; i < overlaps && IsActive; i++) Hit(_overlaps[i],_overlaps[i].ClosestPoint(previous));
             if (!IsActive) return;
-            int count = distance > .0001f ? Physics.SphereCastNonAlloc(previous, _radius, delta / distance, _hits,
+            int count = distance > .0001f ? _physics.SphereCast(previous, _radius, delta / distance, _hits,
                 distance, _query.LayerMask, QueryTriggerInteraction.Collide) : 0;
             if (count == _hits.Length) throw new InvalidOperationException("投射物扫掠缓冲已满，请收紧碰撞层。");
             for (int i = 1; i < count; i++)
@@ -159,7 +165,7 @@ namespace ZFramework.GAS.Unity
         private void Hit(Collider collider,Vector3 point)
         {
             var provider = collider.GetComponentInParent<IAbilitySystemProvider>(); var unit = provider?.AbilitySystem;
-            if (_targeted && !ReferenceEquals(unit,Execution.Target) || !Execution.Allows(_query, unit) || !_struck.Add(unit)) return;
+            if (_targeted && !ReferenceEquals(unit,Execution.Target) || !Execution.Allows(_query, unit) || !_struck.Add(unit.SourceIdentity)) return;
             var hit=Execution.WithTarget(unit, provider is Component component ? component.transform : collider.transform);
             hit.HitPoint=point;hit.Execute(_onHit);
             if (IsActive && _struck.Count >= _limit) Complete();
@@ -170,6 +176,7 @@ namespace ZFramework.GAS.Unity
 
     [Serializable]
     [System.ComponentModel.DisplayName("创建区域")]
+    [MovedFrom(true, "ZFramework.GAS.Unity", "ZFramework.GAS.Unity.Realtime", "CreateAreaAction")]
     public sealed class CreateAreaAction : SkillAction
     {
         [FlowField("预制体")] public GameObject prefab;
@@ -206,7 +213,7 @@ namespace ZFramework.GAS.Unity
     {
         private struct Occupant { public AbilitySystemComponent Unit; public int Generation; public ActiveGameplayEffectHandle Handle; public SkillExecutionContext Context; }
         private readonly List<Occupant> _occupants = new(32);
-        private readonly TargetQueryBuffer _buffer = new();
+        private readonly TargetQueryBuffer _buffer;
         private readonly TargetQueryDefinition _query;
         private readonly Vector3 _center;
         private readonly float _period;
@@ -219,7 +226,7 @@ namespace ZFramework.GAS.Unity
         public SkillAreaTask(SkillExecutionContext context, string id, GameObject visual, Vector3 center, TargetQueryDefinition query,
             float duration, float period, GameplayEffectDefinition enter, GameplayEffectDefinition exit, bool remove,
             SkillActionDefinition[] periodic) : base(context, id)
-        { _visual = visual; _center = center; _query = query; _remaining = duration == 0 ? float.PositiveInfinity : duration; _period = period; _enter = enter; _exit = exit; _remove = remove; _periodic = periodic; }
+        { _visual = visual; _center = center; _query = query; _remaining = duration == 0 ? float.PositiveInfinity : duration; _period = period; _enter = enter; _exit = exit; _remove = remove; _periodic = periodic; _buffer = context.Services.Searcher.CreateBuffer(); }
         protected override void Tick(float dt)
         {
             Execution.Services.Searcher.Query(_query, Execution, _buffer, _center, applyLimit: false);
@@ -264,25 +271,4 @@ namespace ZFramework.GAS.Unity
         }
     }
 
-    [Serializable] [System.ComponentModel.DisplayName("显示目标连线")]
-    public sealed class ShowTargetLinkAction : SkillAction
-    {
-        [Tooltip("包含 LineRenderer 的预制体。")] [FlowField("连线特效")] public GameObject prefab;
-        public SkillSpawnPosition from=SkillSpawnPosition.HitPoint;
-        public SkillNumber duration=new(.25f);
-        public override SkillActionDefinition Build(SkillActionBuildContext builder){
-            builder.Number(duration,float.Epsilon);
-            var visual=prefab;var origin=from;var life=duration;string id=Id;
-            if(visual==null || visual.GetComponentInChildren<LineRenderer>(true)==null)throw new InvalidOperationException("连接特效需要含 LineRenderer 的预制体。");
-            return Define("显示目标连线",c=>{
-                var start=c.OriginAt(origin);var end=c.Services.RequireTargetPosition();
-                var go=SkillSpawn.Create(c,visual,start,Quaternion.identity);if(go==null)return;
-                var line=go.GetComponentInChildren<LineRenderer>(true);line.useWorldSpace=true;
-                var side=Vector3.Cross(end-start,Vector3.up).normalized*Mathf.Min(.12f,(end-start).magnitude*.09f);
-                line.positionCount=5;line.SetPosition(0,start);line.SetPosition(1,Vector3.Lerp(start,end,.27f)+side);
-                line.SetPosition(2,Vector3.Lerp(start,end,.55f)-side);line.SetPosition(3,Vector3.Lerp(start,end,.78f)+side*.5f);line.SetPosition(4,end);
-                c.Start(new SpawnLifetimeTask(c,id,go,life.Resolve(c.Values),null,default,Quaternion.identity,false),SkillTaskOwnership.Scene);
-            });
-        }
-    }
 }

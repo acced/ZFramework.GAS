@@ -14,8 +14,7 @@ namespace ZFramework.GAS
     public sealed class AbilitySystemComponent
     {
         private readonly List<GameplayAbilitySpec> _abilities = new();
-        private readonly List<GameplayAbilityTask> _tasks = new();
-        private readonly List<(GameplayAbilityTask task, long run)> _frame = new();
+        private readonly GameplayTaskHost _tasks = new();
         private bool _clearing, _ticking;
         public AttributeSet Attributes { get; }
         public GameplayTagCountContainer OwnedTags { get; }
@@ -47,59 +46,24 @@ namespace ZFramework.GAS
             _ticking = true;
             try
             {
-                CurrentTask = null;
+                _tasks.CurrentTask = null;
                 Effects.Tick(deltaTime);
-                for (int i = _tasks.Count - 1; i >= 0; i--) _frame.Add((_tasks[i], _tasks[i].RunVersion));
-                foreach (var item in _frame)
-                {
-                    var task = item.task;
-                    if (task.RunVersion != item.run) continue;
-                    CurrentTask = task;
-                    if(task.IsActive)task.Advance(deltaTime);
-                    if (task.RunVersion == item.run && !task.IsActive) _tasks.Remove(task);
-                }
-                CurrentTask = null;
+                _tasks.Tick(deltaTime);
             }
-            finally { _frame.Clear(); _ticking = false; }
+            finally { _ticking = false; }
         }
 
         /// <summary>When a task throws during Tick, the host can end just that cast.</summary>
-        public GameplayAbilityTask CurrentTask { get; private set; }
+        public GameplayAbilityTask CurrentTask => _tasks.CurrentTask;
         public int ActiveTaskCount => _tasks.Count;
-
-        /// <summary>按索引只读访问当前任务；不要在枚举期间推进或取消能力。</summary>
         public GameplayAbilityTask GetActiveTask(int index) => _tasks[index];
 
-        /// <summary>
-        /// 启动一个属于 <paramref name="spec"/> 的延迟动作。能力必须处于激活状态——
-        /// 任务的存活期是能力存活期的子集，给未激活的能力挂任务没有意义。
-        /// </summary>
+        /// <summary>The task belongs to this activation and is cancelled when it ends.</summary>
         public void StartTask(GameplayAbilitySpec spec, GameplayAbilityTask task)
         {
-            if (_clearing) throw new InvalidOperationException("Owner is being recycled.");
-            if (spec == null)
-            {
-                throw new ArgumentNullException(nameof(spec));
-            }
-
-            if (task == null)
-            {
-                throw new ArgumentNullException(nameof(task));
-            }
-
-            if (!ReferenceEquals(spec.Owner, this))
-            {
-                throw new ArgumentException("Ability was granted by a different AbilitySystemComponent.", nameof(spec));
-            }
-
-            if (!spec.IsActive)
-            {
-                throw new InvalidOperationException("Cannot start a task on an ability that is not active.");
-            }
-
-            if (task.IsActive) throw new InvalidOperationException("Task is already running.");
-            _tasks.Add(task);
-            task.Begin(spec, spec.ActivationVersion);
+            GasAssert.That(ReferenceEquals(spec.Owner, this) && spec.IsGranted, "Unknown grant.");
+            if (_clearing || !spec.IsActive) throw new InvalidOperationException("Cannot start a task outside an active ability.");
+            _tasks.Start(spec, task);
         }
 
         public int GrantedAbilityCount => _abilities.Count;
@@ -138,23 +102,53 @@ namespace ZFramework.GAS
             spec.Definition = definition ?? throw new ArgumentNullException(nameof(definition));
         }
 
-        /// <summary>
-        /// 尝试激活。检查顺序：归属 → 是否已激活 → 标签门禁 → **冷却** → 消耗，
-        /// 全部通过后才提交（扣消耗、上冷却、授予激活标签）。
-        ///
-        /// 冷却检查是显式的一步——旧实现的 <c>TryActivateAbility</c> 完全不查冷却，
-        /// 只能靠冷却效果授予的标签恰好落进 <c>activationBlockedTags</c> 才间接生效。
-        /// </summary>
-        public AbilityActivationResult TryActivateAbility(GameplayAbilitySpec spec, EffectEvaluationContext context = null)
+        /// <summary>Activate after checking tags, cooldown and cost. Set autoCommit to false for aiming or charging.</summary>
+        public AbilityActivationResult TryActivateAbility(GameplayAbilitySpec spec,
+            EffectEvaluationContext context = null, bool autoCommit = true)
         {
             context ??= spec.DefaultContext;
-            var check = CheckGates(spec);
+            if (autoCommit) return Commit(spec, context, activate: true);
+            var check = CheckActivation(spec, context);
             spec.LastActivationCheck = check;
             if (!check.Succeeded) return check.Result;
+            spec.Committing = true;
+            try { return Activate(spec, context) ? AbilityActivationResult.Activated : AbilityActivationResult.Inactive; }
+            finally { spec.Committing = false; }
+        }
+
+        /// <summary>Charge cost and start cooldown once for the current activation.</summary>
+        public AbilityActivationResult CommitAbility(GameplayAbilitySpec spec)
+            => CommitAbility(spec, spec.ActivationVersion);
+
+        /// <summary>Delayed work passes its captured version so an old task cannot commit a later activation.</summary>
+        public AbilityActivationResult CommitAbility(GameplayAbilitySpec spec, int activationVersion)
+            => spec.ActivationVersion == activationVersion
+                ? Commit(spec, spec.EvaluationContext, activate: false)
+                : AbilityActivationResult.Inactive;
+
+        public AbilityActivationCheck CheckActivation(GameplayAbilitySpec spec, EffectEvaluationContext context = null)
+        {
+            var check = CheckGates(spec);
+            return check.Succeeded ? CheckCost(spec.Definition.Cost, context ?? spec.DefaultContext) : check;
+        }
+
+        public AbilityActivationCheck CheckCommit(GameplayAbilitySpec spec)
+        {
+            var check = CheckCommitGates(spec);
+            return check.Succeeded && !spec.IsCommitted ? CheckCost(spec.Definition.Cost, spec.EvaluationContext) : check;
+        }
+
+        private AbilityActivationResult Commit(GameplayAbilitySpec spec, EffectEvaluationContext context, bool activate)
+        {
+            var check = activate ? CheckGates(spec) : CheckCommitGates(spec);
+            if (activate) spec.LastActivationCheck = check;
+            else spec.LastCommitCheck = check;
+            if (!check.Succeeded || !activate && spec.IsCommitted) return check.Result;
             var definition = spec.Definition;
             var cost = definition.Cost;
             var cooldown = definition.Cooldown;
-            int costCount = cost?.Modifiers.Length ?? 0, cooldownCount = cooldown?.Modifiers.Length ?? 0;
+            int costCount = cost == null ? 0 : cost.Modifiers.Length;
+            int cooldownCount = cooldown == null ? 0 : cooldown.Modifiers.Length;
             float[] rented = null;
             Span<float> values = costCount + cooldownCount <= 128 ? stackalloc float[costCount + cooldownCount]
                 : (rented = ArrayPool<float>.Shared.Rent(costCount + cooldownCount));
@@ -166,25 +160,25 @@ namespace ZFramework.GAS
                 var cooldownValues = values.Slice(costCount, cooldownCount);
                 for (int i = 0; i < costCount; i++) costValues[i] = costSpec.Resolve(cost.Modifiers[i].Magnitude, Attributes);
                 check = CheckCost(cost, costValues);
-                spec.LastActivationCheck = check;
+                spec.LastCommitCheck = check;
+                if (activate) spec.LastActivationCheck = check;
                 if (!check.Succeeded) return check.Result;
                 for (int i = 0; i < cooldownCount; i++) cooldownValues[i] = cooldownSpec.Resolve(cooldown.Modifiers[i].Magnitude, Attributes);
                 float duration = cooldown != null ? cooldownSpec.ResolveDuration(Attributes) : 0;
                 float period = cooldown != null ? cooldownSpec.ResolvePeriod(Attributes) : 0;
                 spec.Committing = true;
-                CancelAbilitiesWithTags(definition.CancelAbilitiesWithTags);
-                spec.EvaluationContext = context;
-                spec.ActivationVersion++;
-                // Resolve once above; project callbacks must not invalidate configuration during commit.
+                if (activate && !Activate(spec, context)) return CompleteCommit(spec, spec.ActivationVersion, activate);
+                spec.IsCommitted = true;
+                int version = spec.ActivationVersion;
+                int generation = Generation;
                 if (cost != null) Effects.ApplyResolved(costSpec, costValues, 0, 0);
+                if (generation != Generation) return CompleteCommit(spec, version, activate);
                 if (cooldown != null)
                 {
-                    Effects.ApplyResolved(cooldownSpec, cooldownValues, duration, period);
                     spec.CommittedCooldown = cooldown;
+                    Effects.ApplyResolved(cooldownSpec, cooldownValues, duration, period);
                 }
-                spec.IsActive = true;
-                definition.ActivationOwnedTags.AddTo(OwnedTags);
-                return AbilityActivationResult.Activated;
+                return CompleteCommit(spec, version, activate);
             }
             finally
             {
@@ -193,27 +187,38 @@ namespace ZFramework.GAS
             }
         }
 
-        /// <summary>The same read-only decision used by activation and the debugger.</summary>
-        public AbilityActivationCheck CheckActivation(GameplayAbilitySpec spec, EffectEvaluationContext context = null)
+        private static AbilityActivationResult CompleteCommit(GameplayAbilitySpec spec, int version, bool activate)
         {
-            if (_clearing) return new AbilityActivationCheck(AbilityActivationResult.InvalidConfiguration, "单位正在回收");
-            if (spec == null)
+            if (spec.ActivationVersion != version) return AbilityActivationResult.Inactive;
+            var check = spec.IsActive && spec.IsGranted ? default
+                : new AbilityActivationCheck(AbilityActivationResult.Inactive, "技能在提交期间结束");
+            spec.LastCommitCheck = check;
+            if (activate) spec.LastActivationCheck = check;
+            return check.Result;
+        }
+
+        private bool Activate(GameplayAbilitySpec spec, EffectEvaluationContext context)
+        {
+            CancelAbilitiesWithTags(spec.Definition.CancelAbilitiesWithTags);
+            if (!spec.IsGranted) return false;
+            spec.EvaluationContext = context;
+            spec.ActivationVersion++;
+            spec.IsActive = true;
+            spec.IsCommitted = false;
+            spec.LastCommitCheck = default;
+            var tags = spec.Definition.ActivationOwnedTags;
+            for (int i = 0; i < tags.Count && spec.IsActive; i++)
             {
-                throw new ArgumentNullException(nameof(spec));
+                spec.OwnedTagCount++;
+                OwnedTags.AddTag(tags[i]);
             }
+            return spec.IsActive;
+        }
 
-            if (!ReferenceEquals(spec.Owner, this))
-            {
-                throw new ArgumentException("Ability was granted by a different AbilitySystemComponent.", nameof(spec));
-            }
-
-            if (!spec.IsGranted) throw new ArgumentException("Ability is no longer granted.", nameof(spec));
-
-            var check = CheckGates(spec);
-            if (!check.Succeeded) return check;
-            var cost = spec.Definition.Cost;
+        private AbilityActivationCheck CheckCost(GameplayEffectDefinition cost, EffectEvaluationContext context)
+        {
             if (cost == null) return default;
-            var effect = new GameplayEffectSpec(cost, Attributes, this, context: context ?? spec.DefaultContext);
+            var effect = new GameplayEffectSpec(cost, Attributes, this, context: context);
             float[] rented = null;
             Span<float> values = cost.Modifiers.Length <= 128 ? stackalloc float[cost.Modifiers.Length]
                 : (rented = ArrayPool<float>.Shared.Rent(cost.Modifiers.Length));
@@ -227,7 +232,8 @@ namespace ZFramework.GAS
 
         private AbilityActivationCheck CheckGates(GameplayAbilitySpec spec)
         {
-            GasAssert.That(spec != null && ReferenceEquals(spec.Owner, this) && spec.IsGranted && !_clearing, "Unknown grant or clearing owner.");
+            GasAssert.That(ReferenceEquals(spec.Owner, this), "Unknown grant.");
+            if (_clearing || !spec.IsGranted) return new AbilityActivationCheck(AbilityActivationResult.Inactive, "技能已被撤销");
             if (spec.IsActive || spec.Committing) return new AbilityActivationCheck(AbilityActivationResult.AlreadyActive, "技能正在执行");
             var definition = spec.Definition;
             if (!definition.ActivationRequirements.Matches(OwnedTags))
@@ -239,7 +245,26 @@ namespace ZFramework.GAS
                     if (OwnedTags.HasTag(definition.ActivationBlockedTags[i]))
                         return new AbilityActivationCheck(AbilityActivationResult.Blocked, "被标签阻止", definition.ActivationBlockedTags[i]);
             }
-            return spec.IsOnCooldown ? new AbilityActivationCheck(AbilityActivationResult.OnCooldown, "技能冷却中", amount: spec.CooldownRemaining) : default;
+            return CheckPaymentGates(spec);
+        }
+
+        private AbilityActivationCheck CheckCommitGates(GameplayAbilitySpec spec)
+        {
+            GasAssert.That(ReferenceEquals(spec.Owner, this), "Unknown grant.");
+            if (_clearing || !spec.IsActive) return new AbilityActivationCheck(AbilityActivationResult.Inactive, "技能未激活");
+            if (spec.IsCommitted) return default;
+            if (spec.Committing) return new AbilityActivationCheck(AbilityActivationResult.AlreadyActive, "技能正在提交");
+            return CheckPaymentGates(spec);
+        }
+
+        private AbilityActivationCheck CheckPaymentGates(GameplayAbilitySpec spec)
+        {
+            if (spec.IsOnCooldown) return new AbilityActivationCheck(AbilityActivationResult.OnCooldown, "技能冷却中", amount: spec.CooldownRemaining);
+            var cost = spec.Definition.Cost;
+            var cooldown = spec.Definition.Cooldown;
+            return cost != null && !cost.ApplicationRequirements.Matches(OwnedTags) ||
+                   cooldown != null && !cooldown.ApplicationRequirements.Matches(OwnedTags)
+                ? new AbilityActivationCheck(AbilityActivationResult.Blocked, "消耗或冷却效果被标签阻止") : default;
         }
 
         /// <summary>结束激活状态，撤下激活期标签。已结束或非本组件授予的返回 false。</summary>
@@ -320,7 +345,7 @@ namespace ZFramework.GAS
                 return default;
             }
 
-            EffectModifier[] modifiers = cost.Modifiers;
+            ReadOnlySpan<EffectModifier> modifiers = cost.Modifiers;
             for (int i = 0; i < modifiers.Length; i++)
             {
                 ref readonly EffectModifier modifier = ref modifiers[i];
@@ -354,28 +379,11 @@ namespace ZFramework.GAS
             int version = spec.ActivationVersion;
             spec.IsActive = false;
             var tags = spec.Definition.ActivationOwnedTags;
-            for (int i = 0; i < tags.Count; i++)
-                OwnedTags.RemoveTag(tags[i]);
-            CancelTasksOf(spec, version);
+            int count = spec.OwnedTagCount;
+            spec.OwnedTagCount = 0;
+            for (int i = 0; i < count; i++) OwnedTags.RemoveTag(tags[i]);
+            _tasks.Cancel(spec, version);
         }
 
-        /// <summary>能力结束即取消其全部在跑任务，不留无主的跨帧状态。</summary>
-        private void CancelTasksOf(GameplayAbilitySpec spec, int version)
-        {
-            int count = _tasks.Count;
-            if (count == 0) return;
-            var snapshot = ArrayPool<(GameplayAbilityTask task, long run)>.Shared.Rent(count);
-            for (int i = 0; i < count; i++) snapshot[i] = (_tasks[i], _tasks[i].RunVersion);
-            try
-            {
-                for (int i = count - 1; i >= 0; i--)
-                {
-                    var item = snapshot[i]; var task = item.task;
-                    if (task.RunVersion != item.run || !ReferenceEquals(task.Ability, spec) || task.ActivationVersion != version || !_tasks.Remove(task)) continue;
-                    task.CancelInternal();
-                }
-            }
-            finally { ArrayPool<(GameplayAbilityTask, long)>.Shared.Return(snapshot, true); }
-        }
     }
 }

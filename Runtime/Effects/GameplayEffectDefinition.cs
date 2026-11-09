@@ -199,8 +199,8 @@ namespace ZFramework.GAS
     /// </summary>
     public sealed class GameplayEffectDefinition
     {
-        private static readonly EffectModifier[] NoModifiers = Array.Empty<EffectModifier>();
-        private static readonly ConditionalEffect[] NoConditionalEffects = Array.Empty<ConditionalEffect>();
+        private readonly EffectModifier[] _modifiers;
+        private readonly ConditionalEffect[] _conditionalEffects;
 
         public EffectDurationPolicy DurationPolicy { get; }
         /// <summary>仅 <see cref="EffectDurationPolicy.Duration"/> 有效，单位秒。</summary>
@@ -215,7 +215,7 @@ namespace ZFramework.GAS
         public AttributeId? PeriodAttribute { get; }
         /// <summary>应用当帧是否立即结算一次周期。</summary>
         public bool ExecutePeriodicOnApplication { get; }
-        public EffectModifier[] Modifiers { get; }
+        public ReadOnlySpan<EffectModifier> Modifiers => _modifiers;
         public EffectTags Tags { get; }
         private readonly GameplayTagRequirements _applicationRequirements;
         private readonly GameplayTagRequirements _ongoingRequirements;
@@ -230,14 +230,14 @@ namespace ZFramework.GAS
         public GameplayTagSet CueTags { get; }
 
         /// <summary>在本效果的特定时机施加到同一目标的子效果。</summary>
-        public ConditionalEffect[] ConditionalEffects { get; }
+        public ReadOnlySpan<ConditionalEffect> ConditionalEffects => _conditionalEffects;
 
         public bool IsPeriodic => Period > 0f || PeriodAttribute.HasValue || PeriodMagnitude.HasValue;
 
         public GameplayEffectDefinition(
             EffectDurationPolicy durationPolicy,
             float duration = 0f,
-            EffectModifier[] modifiers = null,
+            ReadOnlySpan<EffectModifier> modifiers = default,
             EffectTags tags = default,
             EffectStackingRule stacking = default,
             float period = 0f,
@@ -245,7 +245,7 @@ namespace ZFramework.GAS
             bool executePeriodicOnApplication = false,
             GameplayTagSet cueTags = default,
             AttributeId? durationAttribute = null,
-            ConditionalEffect[] conditionalEffects = null,
+            ReadOnlySpan<ConditionalEffect> conditionalEffects = default,
             EffectMagnitude? durationMagnitude = null,
             EffectMagnitude? periodMagnitude = null)
         {
@@ -256,7 +256,7 @@ namespace ZFramework.GAS
             DurationMagnitude = durationMagnitude;
             PeriodMagnitude = periodMagnitude;
             DurationAttribute = durationAttribute;
-            Modifiers = modifiers ?? NoModifiers;
+            _modifiers = modifiers.ToArray();
             Tags = tags;
             _applicationRequirements = GameplayTagRequirements.Create(
                 tags.ApplicationBlocked.AsSpan(), tags.ApplicationRequired.AsSpan());
@@ -266,7 +266,7 @@ namespace ZFramework.GAS
             PeriodAttribute = periodAttribute;
             ExecutePeriodicOnApplication = executePeriodicOnApplication;
             CueTags = cueTags;
-            ConditionalEffects = conditionalEffects ?? NoConditionalEffects;
+            _conditionalEffects = conditionalEffects.ToArray();
         }
     }
 }

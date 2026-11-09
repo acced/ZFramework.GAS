@@ -1,0 +1,9 @@
+{
+    "name": "ZFramework.GAS.Unity.Combat3D",
+    "rootNamespace": "ZFramework.GAS.Unity",
+    "references": [
+        "ZFramework.GAS",
+        "ZFramework.GAS.Unity",
+        "ZFramework.GameplayTags"
+    ]
+}

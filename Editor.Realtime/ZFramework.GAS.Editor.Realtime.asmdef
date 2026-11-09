@@ -6,7 +6,10 @@
         "ZFramework.GAS.Unity",
         "ZFramework.GAS.Unity.Realtime",
         "ZFramework.GAS.Editor",
-        "ZFramework.GameplayTags"
+        "ZFramework.GameplayTags",
+        "ZFramework.GAS.Unity.Combat3D"
     ],
-    "includePlatforms": ["Editor"]
+    "includePlatforms": [
+        "Editor"
+    ]
 }

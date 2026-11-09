@@ -72,11 +72,11 @@ namespace ZFramework.GAS
         internal float PeriodTimer;
         internal float ResolvedPeriod;
         internal float ResolvedDuration;
-        internal AttributeSet SourceAttributes;
         internal GameplayEffectSpec Spec;
         internal float[] ResolvedMagnitudes;
         internal GameplayAttribute[] ModifierAttributes;
         internal int ModifierAttributeCount;
+        internal int GrantedTagCount;
         internal bool PendingRemove;
         internal bool FullyDetached;
 
@@ -84,20 +84,19 @@ namespace ZFramework.GAS
             ActiveGameplayEffectHandle handle,
             GameplayEffectDefinition definition,
             object source,
-            AttributeSet sourceAttributes,
             float resolvedPeriod,
             float resolvedDuration)
         {
             Handle = handle;
             Definition = definition;
             Source = source;
-            SourceAttributes = sourceAttributes;
             ResolvedPeriod = resolvedPeriod;
             ResolvedDuration = resolvedDuration;
             StackCount = 1;
             ElapsedTime = 0f;
             PeriodTimer = 0f;
             ModifierAttributeCount = 0;
+            GrantedTagCount = 0;
             PendingRemove = false;
             FullyDetached = false;
         }
@@ -106,34 +105,12 @@ namespace ZFramework.GAS
             ? Math.Max(0f, ResolvedDuration - ElapsedTime)
             : -1f;
 
-        internal void Discard()
-        {
-            // 对象身份本身必须保留：遗留 ActiveModifier.Source 仍可能引用 this。
-            // 其余状态全部释放，且调用方不再持有本对象；最后一个 Modifier 脱钩后即可由 GC 回收。
-            Handle = default;
-            Definition = null;
-            Source = null;
-            SourceAttributes = null;
-            Spec = default;
-            StackCount = 0;
-            ElapsedTime = 0f;
-            PeriodTimer = 0f;
-            ResolvedPeriod = 0f;
-            ResolvedDuration = 0f;
-            PendingRemove = false;
-            FullyDetached = false;
-            ResolvedMagnitudes = null;
-            ModifierAttributes = null;
-            ModifierAttributeCount = 0;
-        }
-
         internal void PrepareForPool()
         {
             // 租出时会覆盖所有值字段和缓冲区有效区间；这里只释放可能保活对象图的强引用。
             Handle = default;
             Definition = null;
             Source = null;
-            SourceAttributes = null;
             Spec = default;
             if (ModifierAttributes != null && ModifierAttributeCount > 0)
             {

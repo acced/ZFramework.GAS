@@ -49,6 +49,8 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private GameplayTag[] cancelAbilitiesWithTags = Array.Empty<GameplayTag>();
 
         [Header("消耗与冷却")]
+        [Tooltip("激活时提交消耗与冷却。关闭后由「提交消耗与冷却」动作或 CommitAbility 显式提交。")]
+        public bool autoCommit = true;
         [Tooltip("必须是 Instant 效果")]
         [SerializeField] private GameplayEffectAsset cost;
         [Tooltip("必须至少授予一个标签——那个标签就是「在冷却中」的标志")]

@@ -11,11 +11,15 @@ namespace ZFramework.GAS.Unity
     /// <summary>把运行期定义映射回来源资产，包含缓存失效前的旧定义。弱键不会保活定义。</summary>
     public static class DefinitionSource
     {
+#if UNITY_EDITOR
         private static readonly ConditionalWeakTable<object, ScriptableObject> Sources = new();
         private static readonly ConditionalWeakTable<ScriptableObject, List<WeakReference<ScriptableObject>>> Dependents = new();
         private static HashSet<ScriptableObject> _invalidating;
+#endif
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
         public static void DependsOn(ScriptableObject parent, ScriptableObject child)
         {
+#if UNITY_EDITOR
             if (parent == null || child == null || parent == child) return;
             var entries = Dependents.GetOrCreateValue(child);
             for (int i = entries.Count - 1; i >= 0; i--)
@@ -24,9 +28,12 @@ namespace ZFramework.GAS.Unity
                 if (value == parent) return;
             }
             entries.Add(new WeakReference<ScriptableObject>(parent));
+#endif
         }
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
         public static void InvalidateDependents(ScriptableObject changed)
         {
+#if UNITY_EDITOR
             bool root = _invalidating == null; _invalidating ??= new HashSet<ScriptableObject>();
             try
             {
@@ -39,20 +46,23 @@ namespace ZFramework.GAS.Unity
                     }
             }
             finally { if (root) _invalidating = null; }
+#endif
         }
 
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
         public static void Register(object definition, ScriptableObject asset)
         {
-            if (definition == null) throw new ArgumentNullException(nameof(definition));
-            if (asset == null) throw new ArgumentNullException(nameof(asset));
-            lock (Sources)
-            {
-                Sources.Remove(definition);
-                Sources.Add(definition, asset);
-            }
+#if UNITY_EDITOR
+            Sources.Remove(definition);
+            Sources.Add(definition, asset);
+#endif
         }
 
         public static ScriptableObject Of(object definition)
+#if UNITY_EDITOR
             => definition != null && Sources.TryGetValue(definition, out var asset) && asset != null ? asset : null;
+#else
+            => null;
+#endif
     }
 }

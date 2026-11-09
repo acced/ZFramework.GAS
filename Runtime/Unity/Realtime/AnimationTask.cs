@@ -23,7 +23,7 @@ namespace ZFramework.GAS.Unity
         private readonly Action<AnimationTask> _onFinished;
         private readonly bool[] _regionOpen;
         private readonly int[] _windowTagsAdded;
-        private TimelineTaskContext _taskContext;
+        private SkillExecutionServices _taskContext;
         private EffectEvaluationContext _effectValues;
         private AbilitySourceIdentity _sourceIdentity;
         private readonly Boundary[] _boundaries;
@@ -58,7 +58,7 @@ namespace ZFramework.GAS.Unity
             float durationOverride = 0f,
             Action<AnimationTask, AnimationMarker> onMarker = null,
             Action<AnimationTask> onFinished = null,
-            TimelineTaskContext taskContext = null)
+            SkillExecutionServices taskContext = null)
         {
             _definition = definition ?? throw new ArgumentNullException(nameof(definition));
             _onMarker = onMarker;
@@ -90,7 +90,7 @@ namespace ZFramework.GAS.Unity
         }
 
         // SkillRunner leases one timeline per idle cast context. Detached work keeps its own context.
-        internal void Replay(IAnimationDriver driver,AbilitySystemComponent target,float durationOverride,TimelineTaskContext taskContext)
+        internal void Replay(IAnimationDriver driver,AbilitySystemComponent target,float durationOverride,SkillExecutionServices taskContext)
         {
             var definition=_definition;_driver=driver??throw new ArgumentNullException(nameof(driver));_target=target;
             _cycleTime=0;_section=-1;_queuedSection=null;_nextBoundary=0;_jumpVersion++;

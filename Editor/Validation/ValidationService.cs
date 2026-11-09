@@ -42,7 +42,8 @@ namespace ZFramework.GAS.Editor
         public IReadOnlyList<Issue> Issues { get; private set; } = Array.Empty<Issue>();
         public event Action Changed;
         private readonly ISkillValidationRule[] _rules = TypeCache.GetTypesDerivedFrom<ISkillValidationRule>()
-            .Where(t => !t.IsAbstract && !t.IsInterface && t.GetConstructor(Type.EmptyTypes) != null).Select(t => (ISkillValidationRule)Activator.CreateInstance(t)).ToArray();
+            .Where(t => !t.IsAbstract && !t.IsInterface && t.GetConstructor(Type.EmptyTypes) != null)
+            .OrderBy(t => t.FullName, StringComparer.Ordinal).Select(t => (ISkillValidationRule)Activator.CreateInstance(t)).ToArray();
         public ValidationService(SkillDocument doc)
         { _doc = doc; doc.Changed += Schedule; EditorApplication.update += Update; }
         private void Schedule(ChangeSet change)
@@ -53,24 +54,31 @@ namespace ZFramework.GAS.Editor
             if (_doc.Root != null) _dirty.Add(_doc.Root);
         }
         private void Update() { if (EditorApplication.timeSinceStartup >= _due) ValidateNow(); }
-        public void ValidateNow(bool all = false)
+        public void ValidateNow(bool all = false, bool strict = false)
         {
             _due = double.MaxValue; var context = new ValidationContext(_doc);
+            if (strict)
+                foreach (var asset in _doc.Assets)
+                    if (asset is IDefinitionAsset definition) definition.InvalidateDefinition();
             foreach (var key in _cache.Keys.ToArray()) if (key == null || !_doc.Assets.Contains(key)) _cache.Remove(key);
             foreach (var asset in _doc.Assets)
             {
-                if (!all && !_all && !_dirty.Contains(asset) && _cache.ContainsKey(asset)) continue;
+                if (!strict && !all && !_all && !_dirty.Contains(asset) && _cache.ContainsKey(asset)) continue;
                 var issues = new List<Issue>();
-                foreach (var rule in _rules)
-                {
-                    if (EditorPrefs.GetBool("ZFramework.GAS.Validation.Disabled." + rule.Id, false)) continue;
-                    try { rule.Validate(context, asset, issues); }
-                    catch (Exception ex) { context.Add(issues, rule.Id, asset, "", "校验规则执行失败：" + ex.Message); }
-                }
+                ValidateAsset(context, asset, issues, strict);
                 _cache[asset] = issues;
             }
             _dirty.Clear(); _all = false;
             Issues = _cache.Values.SelectMany(list => list).OrderByDescending(i => i.Severity).ThenBy(i => i.Id).ToArray(); Changed?.Invoke();
+        }
+        internal void ValidateAsset(ValidationContext context, ScriptableObject asset, List<Issue> issues, bool strict)
+        {
+            foreach (var rule in _rules)
+            {
+                if (!strict && EditorPrefs.GetBool("ZFramework.GAS.Validation.Disabled." + rule.Id, false)) continue;
+                try { rule.Validate(context, asset, issues); }
+                catch (Exception ex) { context.Add(issues, rule.Id, asset, "", "校验规则执行失败：" + ex.Message); }
+            }
         }
         public void Dispose() { _doc.Changed -= Schedule; EditorApplication.update -= Update; }
     }
@@ -219,7 +227,7 @@ namespace ZFramework.GAS.Editor
                     string name = p.stringValue;
                     bool cue = p.propertyPath.Contains("cue");
                     if (cue && string.IsNullOrEmpty(name) || !string.IsNullOrEmpty(name) && !GameplayTagManager.RequestTag(name).IsValid)
-                        c.Add(issues, Id, asset, p.propertyPath, string.IsNullOrEmpty(name) ? "Cue 标签为空；运行期会跳过该区间" : "标签未注册：「" + name + "」", IssueSeverity.Warning);
+                        c.Add(issues, Id, asset, p.propertyPath, string.IsNullOrEmpty(name) ? "Cue 标签为空；请指定标签或删除该区间" : "标签未注册：「" + name + "」");
                 }
         }
     }
@@ -236,22 +244,53 @@ namespace ZFramework.GAS.Editor
     }
     public static class BatchValidate
     {
+        /// <summary>Build every authored GAS definition, including assets not referenced by an ability.</summary>
+        public static IReadOnlyList<Issue> CheckAll()
+        {
+            string query = "t:GameplayAbilityAsset t:GameplayEffectAsset t:SkillActionModuleAsset t:SkillParameterSetAsset t:AbilitySetAsset";
+            if (SkillEditorExtensions.Timeline is { } timeline) query += " t:" + timeline.AssetType.Name;
+            var assets = AssetDatabase.FindAssets(query).Select(AssetDatabase.GUIDToAssetPath).Distinct()
+                .OrderBy(path => path, StringComparer.Ordinal).SelectMany(AssetDatabase.LoadAllAssetsAtPath)
+                .OfType<ScriptableObject>().Distinct().ToArray();
+            var issues = new List<Issue>();
+            var checkedAssets = new HashSet<ScriptableObject>();
+            foreach (var ability in assets.OfType<GameplayAbilityAsset>())
+            {
+                using var doc = new SkillDocument(); doc.Open(ability, false);
+                using var service = new ValidationService(doc); service.ValidateNow(strict: true);
+                issues.AddRange(service.Issues);
+                checkedAssets.UnionWith(doc.Assets);
+            }
+            using var standalone = new SkillDocument();
+            using var standaloneValidation = new ValidationService(standalone);
+            var context = new ValidationContext(standalone);
+            foreach (var asset in assets)
+            {
+                if (!checkedAssets.Add(asset)) continue;
+                if (asset is IDefinitionAsset definition) definition.InvalidateDefinition();
+                standaloneValidation.ValidateAsset(context, asset, issues, true);
+            }
+            return issues;
+        }
+
+        internal static int Log(IReadOnlyList<Issue> issues)
+        {
+            int errors = 0;
+            foreach (var issue in issues)
+            {
+                string text = $"[{issue.Id}] {AssetDatabase.GetAssetPath(issue.Asset)} / {issue.Asset.name} / {issue.PropertyPath}: {issue.Message}";
+                if (issue.Severity == IssueSeverity.Error) { errors++; Debug.LogError(text, issue.Asset); }
+                else if (issue.Severity == IssueSeverity.Warning) Debug.LogWarning(text, issue.Asset);
+            }
+            return errors;
+        }
+
         [MenuItem("Tools/ZFramework GAS/校验所有技能")]
         public static void Run()
         {
-            int errors = 0, warnings = 0;
-            foreach (var ability in SkillIndex.Abilities)
-            {
-                using var doc = new SkillDocument(); doc.Open(ability, false);
-                using var service = new ValidationService(doc); service.ValidateNow(true);
-                foreach (var issue in service.Issues)
-                {
-                    string text = $"[{issue.Id}] {ability.name} / {issue.Asset.name}: {issue.Message}";
-                    if (issue.Severity == IssueSeverity.Error) { errors++; Debug.LogError(text, issue.Asset); }
-                    else if (issue.Severity == IssueSeverity.Warning) { warnings++; Debug.LogWarning(text, issue.Asset); }
-                }
-            }
-            Debug.Log($"GAS 批量校验：{errors} 个错误，{warnings} 个警告。");
+            var issues = CheckAll();
+            int errors = Log(issues);
+            Debug.Log($"GAS 批量校验：{errors} 个错误，{issues.Count(i => i.Severity == IssueSeverity.Warning)} 个警告。");
             if (Application.isBatchMode) EditorApplication.Exit(errors == 0 ? 0 : 1);
         }
     }
@@ -274,8 +313,7 @@ namespace ZFramework.GAS.Editor
             {
                 if (_filter.index == 1 && issue.Severity != IssueSeverity.Error || _filter.index == 2 && issue.Severity != IssueSeverity.Warning || _filter.index == 3 && issue.Severity != IssueSeverity.Info || _filter.index == 4 && issue.Asset != _doc.Selection.Asset) continue;
                 var row = new VisualElement(); row.AddToClassList("issue-row");
-                var button = new Button(() => { _doc.Selection.Select(issue.Asset, issue.Track, issue.ElementId);
-                    if(issue.Track=="@field" && issue.PropertyPath?.IndexOf("ctions.Array.data[",StringComparison.Ordinal)>=0) _doc.OpenFlow(); })
+                var button = new Button(() => SkillActionNavigation.Select(_doc, issue))
                 { text = (issue.Severity == IssueSeverity.Error ? "✕" : issue.Severity == IssueSeverity.Warning ? "!" : "i") + $"  {issue.Id}  {issue.Asset.name}：{issue.Message}" };
                 button.style.flexGrow = 1; button.style.unityTextAlign = TextAnchor.MiddleLeft; button.style.color = issue.Severity == IssueSeverity.Error ? SkillColors.Error : issue.Severity == IssueSeverity.Warning ? SkillColors.Warning : SkillColors.Task;
                 row.Add(button); if (issue.FixAction != null) row.Add(new Button(issue.FixAction) { text = "修复" }); _list.Add(row);

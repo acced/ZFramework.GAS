@@ -12,21 +12,45 @@ namespace ZFramework.GAS.Editor
         public string Id => "GAS_ACTION";
         public void Validate(ValidationContext context, ScriptableObject asset, List<Issue> issues)
         {
-            try
+            void Check(string id, Action build)
             {
-                if (asset is GameplayAbilityAsset skill) { skill.ResolveParameters(1); skill.BuildActions(); }
-                else if (SkillEditorExtensions.Supports(asset)) SkillEditorExtensions.Timeline.BuildDefinition(asset);
-                else if (asset is SkillActionModuleAsset module) module.Build();
+                try { build(); }
+                catch (Exception error)
+                {
+                    string path = "", actionId = (error as SkillActionException)?.ActionId;
+                    using var so = new SerializedObject(asset); var p = so.GetIterator();
+                    while (!string.IsNullOrEmpty(actionId) && p.Next(true))
+                        if (p.name == "id" && p.propertyType == SerializedPropertyType.String && p.stringValue == actionId)
+                        { path = p.propertyPath.Substring(0, p.propertyPath.LastIndexOf('.')); break; }
+                    context.Add(issues, id, asset, path, error.Message, track: path.Length > 0 ? "@field" : null, elementId: path);
+                }
             }
-            catch (Exception error)
+            if (asset is GameplayAbilityAsset skill)
             {
-                string path = "", actionId = (error as SkillActionException)?.ActionId;
-                using var so = new SerializedObject(asset); var p = so.GetIterator();
-                while (!string.IsNullOrEmpty(actionId) && p.Next(true))
-                    if (p.name == "id" && p.propertyType == SerializedPropertyType.String && p.stringValue == actionId)
-                    { path = p.propertyPath.Substring(0, p.propertyPath.LastIndexOf('.')); break; }
-                context.Add(issues, Id, asset, path, error.Message, track: path.Length > 0 ? "@field" : null, elementId: path);
+                Check("GAS_DEFINITION", () => _ = skill.Definition);
+                Check(Id, () => { ValidateParameters(skill); skill.BuildActions(); });
             }
+            else if (asset is GameplayEffectAsset definitionEffect) Check("GAS_DEFINITION", () => _ = definitionEffect.Definition);
+            else if (SkillEditorExtensions.Supports(asset)) Check(Id, () =>
+            {
+                SkillEditorExtensions.Timeline.BuildDefinition(asset);
+                if (context.Document.Root == null) return;
+                var builder = new SkillActionBuildContext(context.Document.Root, new HashSet<string>());
+                using var timeline = new SerializedObject(asset);
+                foreach (var entry in SkillEditorExtensions.Entries(timeline))
+                {
+                    var actions = new SkillAction[entry.Actions.arraySize];
+                    for (int i = 0; i < actions.Length; i++) actions[i] = entry.Actions.GetArrayElementAtIndex(i).managedReferenceValue as SkillAction;
+                    builder.Build(actions);
+                }
+            });
+            else if (asset is SkillActionModuleAsset module) Check(Id, () => module.Build());
+            else if (asset is SkillParameterSetAsset parameters)
+                Check(Id, () => ParameterScopeAction.ResolveParameters(new EffectEvaluationContext(1), parameters.parameters, Array.Empty<ModuleParameterBinding>()));
+            else if (asset is AbilitySetAsset set) Check(Id, () => ValidateSet(set));
+
+            // Reusable presentation assets acquire their parameter scope at the ability use site.
+            if (asset is not GameplayAbilityAsset && asset is not SkillActionModuleAsset && context.Document.Root == null) return;
             var known = new Dictionary<string, SkillParameter>();
             foreach (var p in SkillNumberDrawer.Parameters(asset is SkillActionModuleAsset ? asset : context.Document.Root)) if (p != null) known[p.Id] = p;
             using var serialized = new SerializedObject(asset); var field = serialized.GetIterator();
@@ -55,6 +79,28 @@ namespace ZFramework.GAS.Editor
                 if (declared != null && required.HasValue && declared.kind != required)
                     context.Add(issues, Id, asset, field.propertyPath, "此处需要 " + required + " 参数。", track:"@field", elementId:field.propertyPath);
                 if (declared == null) context.Add(issues, Id, asset, field.propertyPath, "引用的技能参数已删除，或不在当前参数集中。请重新绑定。", track:"@field", elementId:field.propertyPath);
+            }
+        }
+
+        private static void ValidateParameters(GameplayAbilityAsset skill, SkillParameterOverride[] overrides = null)
+        {
+            int levels = 1;
+            void Include(SkillParameterOverride[] values)
+            {
+                if (values != null) foreach (var value in values) levels = Math.Max(levels, value.levels?.Length ?? 0);
+            }
+            Include(skill.parameterOverrides); Include(overrides);
+            for (int level = 1; level <= levels; level++) skill.ResolveParameters(level, overrides);
+        }
+
+        private static void ValidateSet(AbilitySetAsset set)
+        {
+            var skills = new HashSet<GameplayAbilityAsset>();
+            foreach (var entry in set.abilities)
+            {
+                if (entry?.skill == null || !skills.Add(entry.skill)) throw new InvalidOperationException("技能套组包含缺失或重复技能。");
+                if (entry.level < 1) throw new InvalidOperationException("技能授予等级必须大于零。");
+                ValidateParameters(entry.skill, entry.parameters);
             }
         }
     }

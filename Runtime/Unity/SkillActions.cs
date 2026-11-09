@@ -73,17 +73,30 @@ namespace ZFramework.GAS.Unity
                 foreach (var p in skill.parameterSet.parameters) if (p.Id == id) return p;
             throw new InvalidOperationException("缺少参数: " + id);
         }
-        public SkillActionBuildContext(ScriptableObject owner = null) { _owner = owner; }
+        public SkillActionBuildContext(ScriptableObject owner = null)
+        {
+            _owner = owner;
+            if (owner is GameplayAbilityAsset skill) DependsOn(skill.parameterSet);
+        }
         /// <param name="entryIds">多个入口（例如时间轴上的多个事件）共用的动作 ID 集合，用于跨入口查重。</param>
-        public SkillActionBuildContext(ScriptableObject owner,HashSet<string> entryIds) { _owner=owner;_entryIds=entryIds; }
+        public SkillActionBuildContext(ScriptableObject owner,HashSet<string> entryIds) : this(owner) { _entryIds=entryIds; }
         public void Number(SkillNumber number, float min = float.MinValue, float max = float.MaxValue, bool integer = false)
         {
             if (!string.IsNullOrEmpty(number.parameterId)) {
                 if (_owner is not GameplayAbilityAsset && Parameters == null) return;
                 var p = Parameter(number.parameterId);
                 if (p.kind == SkillParameterKind.Bool) throw new InvalidOperationException("数值绑定不能使用 Bool。");
-                if (p.levels == null || p.levels.Length == 0) Number(new SkillNumber(p.defaultValue * number.coefficient), min, max, integer);
-                else foreach (var v in p.levels) Number(new SkillNumber(v * number.coefficient), min, max, integer);
+                float parameterValue = p.defaultValue;
+                var levels = p.levels;
+                if (_parameters == null && _owner is GameplayAbilityAsset skill)
+                    foreach (var entry in skill.parameterOverrides)
+                        if (entry.parameterId == p.Id)
+                        {
+                            if (entry.kind != p.kind) throw new InvalidOperationException("参数覆盖类型不匹配: " + p.Id);
+                            parameterValue = entry.value; levels = entry.levels;
+                        }
+                if (levels == null || levels.Length == 0) Number(new SkillNumber(parameterValue * number.coefficient), min, max, integer);
+                else foreach (var v in levels) Number(new SkillNumber(v * number.coefficient), min, max, integer);
                 return;
             }
             float value = number.value;
@@ -146,6 +159,7 @@ namespace ZFramework.GAS.Unity
         }
         public SkillActionDefinition[] Scope(SkillAction[] actions, SkillParameter[] parameters)
         {
+            ValidateParameters(parameters);
             var previous = _parameters; _parameters = parameters;
             try { return Build(actions); } finally { _parameters = previous; }
         }
@@ -156,8 +170,29 @@ namespace ZFramework.GAS.Unity
             if (!_modules.Add(module)) throw new InvalidOperationException($"模块循环引用：{module.name}");
             var parentIds=_scopeIds; _scopeIds=new HashSet<string>();
             var parameters = _parameters; _parameters = module.parameters?.parameters ?? Array.Empty<SkillParameter>();
-            try { return Build(module.actions); }
+            try { ValidateParameters(_parameters); return Build(module.actions); }
             finally { _parameters = parameters; _scopeIds=parentIds; _modules.Remove(module); }
+        }
+        private static void ValidateParameters(SkillParameter[] parameters)
+        {
+            var values = new Dictionary<string, SkillParameterValue>(parameters.Length);
+            SkillParameterSetAsset.AddTo(values, parameters, 1);
+        }
+    }
+
+    [Serializable]
+    [System.ComponentModel.DisplayName("提交消耗与冷却")]
+    public sealed class CommitAbilityAction : SkillAction
+    {
+        public override SkillActionDefinition Build(SkillActionBuildContext builder)
+        {
+            builder.RequireAbilityTask(Id);
+            return Define("提交消耗与冷却", context =>
+            {
+                var owner = context.Ability.Owner;
+                if (owner.CommitAbility(context.Ability, context.Version) != AbilityActivationResult.Activated && context.IsCastActive)
+                    owner.EndAbility(context.Ability);
+            });
         }
     }
 
@@ -316,7 +351,12 @@ namespace ZFramework.GAS.Unity
         }
         protected SkillActionDefinition Bind(SkillActionBuildContext builder, SkillActionDefinition[] actions, SkillParameter[] parameters)
         {
-            foreach (var binding in bindings) builder.CheckBinding(binding, parameters);
+            var bound = new HashSet<string>();
+            foreach (var binding in bindings)
+            {
+                builder.CheckBinding(binding, parameters);
+                if (!bound.Add(binding.moduleParameterId)) throw new InvalidOperationException("重复模块参数绑定: " + binding.moduleParameterId);
+            }
             return new ModuleDefinition(this, actions, parameters);
         }
     }

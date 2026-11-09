@@ -31,11 +31,14 @@ namespace ZFramework.GAS.Editor
         private readonly Func<SkillSpawnPosition, Vector3?> _origin;
         private readonly Action<TargetQuery> _mark;
         private readonly Action<SkillAction[], float, Vector3?> _visit;
+        private readonly Action<SkillSpawnPosition, float> _link;
         internal PreviewFrame(EffectEvaluationContext values, float age, Func<SkillSpawnPosition, Vector3?> origin,
-            Action<TargetQuery> mark, Action<SkillAction[], float, Vector3?> visit)
-        { Values=values; Age=age; _origin=origin; _mark=mark; _visit=visit; }
+            Action<TargetQuery> mark, Action<SkillAction[], float, Vector3?> visit, Action<SkillSpawnPosition, float> link)
+        { Values=values; Age=age; _origin=origin; _mark=mark; _visit=visit; _link=link; }
         public Vector3? Origin(SkillSpawnPosition origin) => _origin(origin);
         public void Mark(TargetQuery query) => _mark(query);
+        /// <summary>Project a connection to the selected target and include it in the contact trace.</summary>
+        public void Link(SkillSpawnPosition from, float duration) => _link(from, duration);
         /// <summary>Project a branch after a relative delay. A ground point clears the selected unit for this branch only.</summary>
         public void Visit(SkillAction[] branch, float delay = 0, Vector3? groundPoint = null) => _visit(branch,delay,groundPoint);
     }

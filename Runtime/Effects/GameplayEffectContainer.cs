@@ -43,6 +43,7 @@ namespace ZFramework.GAS
         private readonly Stack<ActiveGameplayEffect> _pool = new();
         private int _operationDepth;
         private int _chainDepth;
+        private int _pendingRemoveCount;
         private bool _ticking;
         private bool _clearing;
 
@@ -58,25 +59,19 @@ namespace ZFramework.GAS
             _owner = owner;
         }
 
-        public int Count
+        public int Count => _active.Count - _pendingRemoveCount;
+
+        /// <summary>按当前容器顺序取得只读快照。删除或 swap-remove 不会改变已取得的快照。</summary>
+        public ActiveGameplayEffectInfo this[int index]
         {
             get
             {
-                int count = 0;
+                if (_pendingRemoveCount == 0) return CreateInfo(_active[index]);
                 for (int i = 0; i < _active.Count; i++)
-                {
-                    if (!_active[i].PendingRemove)
-                    {
-                        count++;
-                    }
-                }
-
-                return count;
+                    if (!_active[i].PendingRemove && index-- == 0) return CreateInfo(_active[i]);
+                throw new ArgumentOutOfRangeException(nameof(index));
             }
         }
-
-        /// <summary>按当前容器顺序取得只读快照。删除或 swap-remove 不会改变已取得的快照。</summary>
-        public ActiveGameplayEffectInfo this[int index] => CreateInfo(_active[index]);
 
         public EffectApplicationResult Apply(in GameplayEffectSpec spec) => Apply(spec, out _);
 
@@ -112,7 +107,7 @@ namespace ZFramework.GAS
             GameplayEffectDefinition definition = spec.Definition;
             EffectTags tags = definition.Tags;
 
-            if (!definition.ApplicationRequirements.Matches(_ownedTags))
+            if (!resolved && !definition.ApplicationRequirements.Matches(_ownedTags))
             {
                 return EffectApplicationResult.Blocked;
             }
@@ -159,11 +154,11 @@ namespace ZFramework.GAS
             // Reapplications use the retained spec. Copy caller values only when publishing a new effect.
             spec = spec.Snapshot();
             ActiveGameplayEffect active = RentEffect(
-                definition, spec.Source, spec.SourceAttributes, period, duration);
+                definition, spec.Source, period, duration);
             active.Spec = spec;
             handle = active.Handle;
 
-            EffectModifier[] modifiers = definition.Modifiers;
+            ReadOnlySpan<EffectModifier> modifiers = definition.Modifiers;
             if (resolved)
             {
                 if (active.ResolvedMagnitudes == null || active.ResolvedMagnitudes.Length < modifiers.Length)
@@ -171,6 +166,7 @@ namespace ZFramework.GAS
                 magnitudes.CopyTo(active.ResolvedMagnitudes);
             }
             else ResolveMagnitudes(spec, active, modifiers);
+            RemoveEffectsWithAnyTag(tags.RemoveEffectsWith);
             _active.Add(active);
             if (active.ResolvedPeriod <= 0f)
             {
@@ -180,10 +176,13 @@ namespace ZFramework.GAS
                         new AttributeModifier(modifiers[i].Target, modifiers[i].Operation, active.ResolvedMagnitudes[i]), active);
             }
 
+            for (int i = 0; i < tags.Granted.Count && !active.PendingRemove; i++)
+            {
+                active.GrantedTagCount++;
+                _ownedTags.AddTag(tags.Granted[i]);
+            }
+            if (active.PendingRemove) return EffectApplicationResult.Applied;
             GasDebugHooks.Apply(_owner, definition, spec.Source, active.StackCount);
-            tags.Granted.AddTo(_ownedTags);
-
-            RemoveEffectsWithAnyTag(tags.RemoveEffectsWith);
 
             // 回调可立即删除 active；operation scope 保证它在本调用退出前不会被复用。
             DispatchCues(definition, GameplayCueEvent.OnActive, spec.Source, active.StackCount);
@@ -337,11 +336,14 @@ namespace ZFramework.GAS
                         continue;
                     }
 
-                    effect.ElapsedTime += deltaTime;
+                    float activeTime = definition.DurationPolicy == EffectDurationPolicy.Duration
+                        ? Math.Min(deltaTime, Math.Max(0f, effect.ResolvedDuration - effect.ElapsedTime))
+                        : deltaTime;
+                    effect.ElapsedTime += activeTime;
 
                     if (effect.ResolvedPeriod > 0f)
                     {
-                        effect.PeriodTimer += deltaTime;
+                        effect.PeriodTimer += activeTime;
                         while (!effect.PendingRemove && effect.PeriodTimer >= effect.ResolvedPeriod)
                         {
                             effect.PeriodTimer -= effect.ResolvedPeriod;
@@ -413,11 +415,6 @@ namespace ZFramework.GAS
 
         private void EndOperation()
         {
-            if (_operationDepth <= 0)
-            {
-                throw new InvalidOperationException("Gameplay effect operation scope is unbalanced.");
-            }
-
             _operationDepth--;
             if (_operationDepth != 0)
             {
@@ -429,18 +426,20 @@ namespace ZFramework.GAS
 
         private bool MarkForRemoval(ActiveGameplayEffect effect)
         {
-            if (effect == null || effect.PendingRemove)
+            if (effect.PendingRemove)
             {
                 return false;
             }
 
             effect.PendingRemove = true;
+            _pendingRemoveCount++;
             DetachEffect(effect);
             return true;
         }
 
         private void FlushPendingRemovals()
         {
+            if (_pendingRemoveCount == 0) return;
             for (int i = _active.Count - 1; i >= 0; i--)
             {
                 var effect = _active[i];
@@ -449,17 +448,17 @@ namespace ZFramework.GAS
                 _active[i] = _active[last]; _active.RemoveAt(last);
                 if (effect.FullyDetached) ReturnToPool(effect);
             }
+            _pendingRemoveCount = 0;
         }
 
         private ActiveGameplayEffect RentEffect(
             GameplayEffectDefinition definition,
             object source,
-            AttributeSet sourceAttributes,
             float resolvedPeriod,
             float resolvedDuration)
         {
             ActiveGameplayEffect effect = _pool.Count > 0 ? _pool.Pop() : new ActiveGameplayEffect();
-            effect.Initialize(NextHandle(), definition, source, sourceAttributes, resolvedPeriod, resolvedDuration);
+            effect.Initialize(NextHandle(), definition, source, resolvedPeriod, resolvedDuration);
             return effect;
         }
 
@@ -485,7 +484,8 @@ namespace ZFramework.GAS
         {
             for (int i = 0; i < effect.ModifierAttributeCount; i++)
                 effect.ModifierAttributes[i]?.RemoveModifiersFromSource(effect);
-            effect.Definition.Tags.Granted.RemoveFrom(_ownedTags);
+            for (int i = 0; i < effect.GrantedTagCount; i++)
+                _ownedTags.RemoveTag(effect.Definition.Tags.Granted[i]);
             GasDebugHooks.Remove(_owner, effect.Definition, effect.Source, effect.StackCount);
             DispatchCues(effect.Definition, GameplayCueEvent.Removed, effect.Source, effect.StackCount);
             ApplyConditional(effect.Spec, EffectTrigger.Removed);
@@ -533,7 +533,7 @@ namespace ZFramework.GAS
         private void ApplyConditional(
             in GameplayEffectSpec spec, EffectTrigger trigger)
         {
-            ConditionalEffect[] children = spec.Definition.ConditionalEffects;
+            ReadOnlySpan<ConditionalEffect> children = spec.Definition.ConditionalEffects;
             if (children.Length == 0)
             {
                 return;
@@ -590,7 +590,7 @@ namespace ZFramework.GAS
 
         private void PushStackCount(ActiveGameplayEffect effect)
         {
-            EffectModifier[] modifiers = effect.Definition.Modifiers;
+            ReadOnlySpan<EffectModifier> modifiers = effect.Definition.Modifiers;
             for (int i = 0; i < modifiers.Length; i++)
             {
                 if (_attributes.TryGet(modifiers[i].Target, out GameplayAttribute attribute))
@@ -609,7 +609,7 @@ namespace ZFramework.GAS
         private float ResolvePeriod(in GameplayEffectSpec spec) => spec.ResolvePeriod(_attributes);
         private float ResolveDuration(in GameplayEffectSpec spec) => spec.ResolveDuration(_attributes);
 
-        private void PrepareModifierAttributes(ActiveGameplayEffect effect, EffectModifier[] modifiers)
+        private void PrepareModifierAttributes(ActiveGameplayEffect effect, ReadOnlySpan<EffectModifier> modifiers)
         {
             if (effect.ModifierAttributes == null || effect.ModifierAttributes.Length < modifiers.Length)
             {
@@ -624,7 +624,7 @@ namespace ZFramework.GAS
         }
 
         private void ResolveMagnitudes(
-            in GameplayEffectSpec spec, ActiveGameplayEffect effect, EffectModifier[] modifiers)
+            in GameplayEffectSpec spec, ActiveGameplayEffect effect, ReadOnlySpan<EffectModifier> modifiers)
         {
             if (modifiers.Length == 0)
             {
@@ -647,7 +647,7 @@ namespace ZFramework.GAS
             float[] magnitudes = effect.ResolvedMagnitudes;
             if (magnitudes != null)
             {
-                EffectModifier[] modifiers = effect.Definition.Modifiers;
+                ReadOnlySpan<EffectModifier> modifiers = effect.Definition.Modifiers;
                 for (int i = 0; i < modifiers.Length; i++)
                 {
                     ref readonly EffectModifier modifier = ref modifiers[i];
@@ -665,7 +665,7 @@ namespace ZFramework.GAS
 
         private void ApplyInstant(in GameplayEffectSpec spec, int stackCount)
         {
-            EffectModifier[] modifiers = spec.Definition.Modifiers;
+            ReadOnlySpan<EffectModifier> modifiers = spec.Definition.Modifiers;
             float[] rented = null;
             Span<float> resolved = modifiers.Length <= 128 ? stackalloc float[modifiers.Length]
                 : (rented = ArrayPool<float>.Shared.Rent(modifiers.Length));
@@ -679,7 +679,7 @@ namespace ZFramework.GAS
             finally { if (rented != null) ArrayPool<float>.Shared.Return(rented); }
         }
 
-        private void ApplyMagnitudes(EffectModifier[] modifiers, ReadOnlySpan<float> values, int stacks)
+        private void ApplyMagnitudes(ReadOnlySpan<EffectModifier> modifiers, ReadOnlySpan<float> values, int stacks)
         {
             for (int i = 0; i < modifiers.Length; i++)
                 if (_attributes.TryGet(modifiers[i].Target, out var attribute))
@@ -698,15 +698,8 @@ namespace ZFramework.GAS
                     attribute.BaseValue *= 1f + (magnitude - 1f) * stackCount;
                     break;
                 case ModifierOperation.Divide:
-                {
-                    float divisor = 1f + (magnitude - 1f) * stackCount;
-                    if (Math.Abs(divisor) > 1e-6f)
-                    {
-                        attribute.BaseValue /= divisor;
-                    }
-
+                    attribute.BaseValue /= 1f + (magnitude - 1f) * stackCount;
                     break;
-                }
                 case ModifierOperation.Override:
                     attribute.BaseValue = magnitude;
                     break;

@@ -69,11 +69,13 @@ namespace ZFramework.GAS.Samples.BasicCombat
             if (!TagsRegistered()) { enabled = false; return; }
             _router = new GameplayCueRouter();
             _presentation = gameObject.AddComponent<ArenaPresentation>();
-            var searcher = new TargetSearcher(16);
+            var searcher = new PhysicsTargetSearcher();
+            var sceneTasks = gameObject.AddComponent<SceneSkillTaskHost>().Tasks;
             void Bind(CombatUnit unit, int team, Transform launch = null)
             {
                 var services = new SkillUnitServices {
-                    Origin = unit.transform, LaunchPoint = launch, TargetRelations = MatchesTeam, Searcher = searcher, Scene = gameObject.scene
+                    Origin = unit.transform, LaunchPoint = launch, TargetRelations = MatchesTeam, Searcher = searcher, Scene = gameObject.scene,
+                    SceneTasks = sceneTasks, Objects = InstantiateSkillObjectService.Instance
                 };
                 services.Set<ISkillCameraService>(_presentation);
                 services.Set<ISkillTimeService>(_presentation);

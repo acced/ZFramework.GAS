@@ -36,6 +36,7 @@ internal static class Program
         Run(nameof(RandomCountMutations), RandomCountMutations);
         Run(nameof(DebugReadback), DebugReadback);
         SkillExecutionTests.Run();
+        ArchitectureRegressionTests.Run();
         HotPath();
     }
 

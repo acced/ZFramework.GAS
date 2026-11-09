@@ -88,7 +88,7 @@ namespace ZFramework.GAS.Tests
                 float before = target.Get(CombatUnit.Health); arena.Cast(0); yield return new WaitForSeconds(.6f);
                 Assert.Greater(before - target.Get(CombatUnit.Health), health - before, "Empowered branch should do greater damage");
                 arena.Cast(1); yield return new WaitForSeconds(Skill("分叉闪电").Animation().Duration + .1f);
-                var host = SceneSkillTaskHost.For(scene);
+                var host = arena.GetComponent<SceneSkillTaskHost>();
                 Assert.IsFalse(hero.SkillRunner.IsActive(Skill("分叉闪电")));
                 Assert.Greater(host.Tasks.Count, 0, "Slow projectile must still be in flight after animation ends");
                 float beforeImpact = target.Get(CombatUnit.Health); yield return new WaitForSeconds(2.5f);
