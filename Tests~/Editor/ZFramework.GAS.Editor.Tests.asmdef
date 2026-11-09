@@ -1,20 +1,18 @@
 {
-    "name": "ZFramework.GAS.Editor.Tests",
-    "references": [
-        "ZFramework.GAS",
-        "ZFramework.GAS.Unity",
-        "ZFramework.GAS.Unity.Realtime",
-        "ZFramework.GAS.Editor",
-        "ZFramework.GAS.Editor.Realtime",
-        "ZFramework.GAS.Samples.BasicCombat",
-        "ZFramework.GAS.Samples.BasicCombat.Editor",
-        "ZFramework.GameplayTags",
-        "ZFramework.GAS.Unity.Combat3D"
-    ],
-    "includePlatforms": [
-        "Editor"
-    ],
-    "optionalUnityReferences": [
-        "TestAssemblies"
-    ]
+  "name": "ZFramework.GAS.Editor.Tests",
+  "references": [
+    "ZFramework.GAS",
+    "ZFramework.GAS.Unity",
+    "ZFramework.GAS.Unity.Realtime",
+    "ZFramework.GAS.Editor",
+    "ZFramework.GAS.Editor.Realtime",
+    "ZFramework.GameplayTags",
+    "ZFramework.GAS.Unity.Combat3D"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
 }

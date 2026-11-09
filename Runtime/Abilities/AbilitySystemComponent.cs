@@ -103,28 +103,23 @@ namespace ZFramework.GAS
         }
 
         /// <summary>Activate after checking tags, cooldown and cost. Set autoCommit to false for aiming or charging.</summary>
-        public AbilityActivationResult TryActivateAbility(GameplayAbilitySpec spec,
+        public AbilityActivationCheck TryActivateAbility(GameplayAbilitySpec spec,
             EffectEvaluationContext context = null, bool autoCommit = true)
         {
             context ??= spec.DefaultContext;
             if (autoCommit) return Commit(spec, context, activate: true);
             var check = CheckActivation(spec, context);
-            spec.LastActivationCheck = check;
-            if (!check.Succeeded) return check.Result;
+            if (!check.Succeeded) return check;
             spec.Committing = true;
-            try { return Activate(spec, context) ? AbilityActivationResult.Activated : AbilityActivationResult.Inactive; }
+            try { return Activate(spec, context) ? default : new AbilityActivationCheck(AbilityActivationResult.Inactive, "技能在激活期间结束"); }
             finally { spec.Committing = false; }
         }
 
-        /// <summary>Charge cost and start cooldown once for the current activation.</summary>
-        public AbilityActivationResult CommitAbility(GameplayAbilitySpec spec)
-            => CommitAbility(spec, spec.ActivationVersion);
-
         /// <summary>Delayed work passes its captured version so an old task cannot commit a later activation.</summary>
-        public AbilityActivationResult CommitAbility(GameplayAbilitySpec spec, int activationVersion)
+        public AbilityActivationCheck CommitAbility(GameplayAbilitySpec spec, int activationVersion)
             => spec.ActivationVersion == activationVersion
                 ? Commit(spec, spec.EvaluationContext, activate: false)
-                : AbilityActivationResult.Inactive;
+                : new AbilityActivationCheck(AbilityActivationResult.Inactive, "施放版本已结束");
 
         public AbilityActivationCheck CheckActivation(GameplayAbilitySpec spec, EffectEvaluationContext context = null)
         {
@@ -138,12 +133,10 @@ namespace ZFramework.GAS
             return check.Succeeded && !spec.IsCommitted ? CheckCost(spec.Definition.Cost, spec.EvaluationContext) : check;
         }
 
-        private AbilityActivationResult Commit(GameplayAbilitySpec spec, EffectEvaluationContext context, bool activate)
+        private AbilityActivationCheck Commit(GameplayAbilitySpec spec, EffectEvaluationContext context, bool activate)
         {
             var check = activate ? CheckGates(spec) : CheckCommitGates(spec);
-            if (activate) spec.LastActivationCheck = check;
-            else spec.LastCommitCheck = check;
-            if (!check.Succeeded || !activate && spec.IsCommitted) return check.Result;
+            if (!check.Succeeded || !activate && spec.IsCommitted) return check;
             var definition = spec.Definition;
             var cost = definition.Cost;
             var cooldown = definition.Cooldown;
@@ -160,25 +153,23 @@ namespace ZFramework.GAS
                 var cooldownValues = values.Slice(costCount, cooldownCount);
                 for (int i = 0; i < costCount; i++) costValues[i] = costSpec.Resolve(cost.Modifiers[i].Magnitude, Attributes);
                 check = CheckCost(cost, costValues);
-                spec.LastCommitCheck = check;
-                if (activate) spec.LastActivationCheck = check;
-                if (!check.Succeeded) return check.Result;
+                if (!check.Succeeded) return check;
                 for (int i = 0; i < cooldownCount; i++) cooldownValues[i] = cooldownSpec.Resolve(cooldown.Modifiers[i].Magnitude, Attributes);
                 float duration = cooldown != null ? cooldownSpec.ResolveDuration(Attributes) : 0;
                 float period = cooldown != null ? cooldownSpec.ResolvePeriod(Attributes) : 0;
                 spec.Committing = true;
-                if (activate && !Activate(spec, context)) return CompleteCommit(spec, spec.ActivationVersion, activate);
+                if (activate && !Activate(spec, context)) return CompleteCommit(spec, spec.ActivationVersion);
                 spec.IsCommitted = true;
                 int version = spec.ActivationVersion;
                 int generation = Generation;
                 if (cost != null) Effects.ApplyResolved(costSpec, costValues, 0, 0);
-                if (generation != Generation) return CompleteCommit(spec, version, activate);
+                if (generation != Generation) return CompleteCommit(spec, version);
                 if (cooldown != null)
                 {
                     spec.CommittedCooldown = cooldown;
                     Effects.ApplyResolved(cooldownSpec, cooldownValues, duration, period);
                 }
-                return CompleteCommit(spec, version, activate);
+                return CompleteCommit(spec, version);
             }
             finally
             {
@@ -187,15 +178,9 @@ namespace ZFramework.GAS
             }
         }
 
-        private static AbilityActivationResult CompleteCommit(GameplayAbilitySpec spec, int version, bool activate)
-        {
-            if (spec.ActivationVersion != version) return AbilityActivationResult.Inactive;
-            var check = spec.IsActive && spec.IsGranted ? default
+        private static AbilityActivationCheck CompleteCommit(GameplayAbilitySpec spec, int version)
+            => spec.ActivationVersion == version && spec.IsActive && spec.IsGranted ? default
                 : new AbilityActivationCheck(AbilityActivationResult.Inactive, "技能在提交期间结束");
-            spec.LastCommitCheck = check;
-            if (activate) spec.LastActivationCheck = check;
-            return check.Result;
-        }
 
         private bool Activate(GameplayAbilitySpec spec, EffectEvaluationContext context)
         {
@@ -205,7 +190,6 @@ namespace ZFramework.GAS
             spec.ActivationVersion++;
             spec.IsActive = true;
             spec.IsCommitted = false;
-            spec.LastCommitCheck = default;
             var tags = spec.Definition.ActivationOwnedTags;
             for (int i = 0; i < tags.Count && spec.IsActive; i++)
             {

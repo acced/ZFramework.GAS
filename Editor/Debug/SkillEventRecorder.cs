@@ -21,10 +21,10 @@ namespace ZFramework.GAS.Editor
         private readonly float _before,_after;
         public string Label => Kind==TraceKind.属性 ? AttributeCatalog.Name(_number)+$" {_before:g4} → {_after:g4}" :
             Kind==TraceKind.标签 ? _tag.Name+" ×"+_number : _label;
-        public readonly string RawId, NavigationId;
+        public readonly string ActionId;
         public readonly GameplayAbilityAsset Skill;
-        public SkillTrace(TraceKind kind,string label,GameplayAbilityAsset skill=null,string raw=null,string nav=null,int cast=0, GameplayTag tag=default, int number=0,float before=0,float after=0)
-        { Serial=++_serial; Frame=UnityEngine.Time.frameCount; Time=EditorApplication.timeSinceStartup; Kind=kind; _label=label;_tag=tag;_number=number;_before=before;_after=after; Skill=skill; RawId=raw; NavigationId=nav; Cast=cast; }
+        public SkillTrace(TraceKind kind,string label,GameplayAbilityAsset skill=null,string actionId=null,int cast=0, GameplayTag tag=default, int number=0,float before=0,float after=0)
+        { Serial=++_serial; Frame=UnityEngine.Time.frameCount; Time=EditorApplication.timeSinceStartup; Kind=kind; _label=label;_tag=tag;_number=number;_before=before;_after=after; Skill=skill; ActionId=actionId; Cast=cast; }
     }
     internal sealed class SkillHistory
     {
@@ -54,7 +54,7 @@ namespace ZFramework.GAS.Editor
         private static SkillTrace Scoped(TraceKind kind,string label,GameplayAbilityAsset fallback=null,GameplayTag tag=default,int number=0,float before=0,float after=0)
         {
             if(Actions.Count==0)return new SkillTrace(kind,label,fallback,tag:tag,number:number,before:before,after:after);
-            var (c,id)=Actions.Peek();return new SkillTrace(kind,label,c.Asset,id,c.EditorCallSiteId ?? id,c.Version,tag,number,before,after);
+            var (c,id)=Actions.Peek();return new SkillTrace(kind,label,c.Asset,id,c.Version,tag,number,before,after);
         }
         internal static SkillHistory Of(AbilitySystemComponent owner) =>
             owner!=null && _unit?.Owner==owner && _unit.Generation==owner.Generation ? _unit.History : null;
@@ -82,12 +82,12 @@ namespace ZFramework.GAS.Editor
         }
         internal static void Clear(){_unit?.Dispose();_unit=null;Actions.Clear();}
         private static void Begin(SkillExecutionContext c,SkillActionDefinition a)
-        {Actions.Push((c,a.Id));if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.动作开始,a.Label,c.Asset,a.Id,c.EditorCallSiteId ?? a.Id,c.Version));}
-        private static void Branch(SkillExecutionContext c,string id,bool taken){if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.条件分支,taken?"满足":"不满足",c.Asset,id,c.EditorCallSiteId ?? id,c.Version));}
+        {Actions.Push((c,a.Id));if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.动作开始,a.Label,c.Asset,a.Id,c.Version));}
+        private static void Branch(SkillExecutionContext c,string id,bool taken){if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.条件分支,taken?"满足":"不满足",c.Asset,id,c.Version));}
         private static void Point(SkillExecutionContext c,string id,string label)
-        {if(c!=null && Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.标记,label,c.Asset,id,id,c.Version));}
+        {if(c!=null && Of(c.Source)!=null)Add(c.Source,new SkillTrace(TraceKind.标记,label,c.Asset,id,c.Version));}
         private static void End(SkillExecutionContext c,SkillActionDefinition a,Exception e)
-        {if(Actions.Count>0)Actions.Pop();if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(e==null?TraceKind.动作结束:TraceKind.失败,e?.Message??a.Label,c.Asset,a.Id,c.EditorCallSiteId ?? a.Id,c.Version));}
+        {if(Actions.Count>0)Actions.Pop();if(Of(c.Source)!=null)Add(c.Source,new SkillTrace(e==null?TraceKind.动作结束:TraceKind.失败,e?.Message??a.Label,c.Asset,a.Id,c.Version));}
         private static void Cue(GameplayCueParameters e){ if(Of(e.Target as AbilitySystemComponent)!=null) _unit.History.Add(Scoped(TraceKind.Cue,e.CueTag.Name+" "+e.Event)); }
         private static void Effect(AbilitySystemComponent u,GameplayEffectDefinition d,string what,int n)
         {

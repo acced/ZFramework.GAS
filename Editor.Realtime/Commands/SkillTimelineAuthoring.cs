@@ -1,5 +1,6 @@
 using System;
 using UnityEditor;
+using UnityEngine;
 using ZFramework.GAS.Unity;
 
 namespace ZFramework.GAS.Editor
@@ -18,14 +19,13 @@ namespace ZFramework.GAS.Editor
             if (recordUndo) so.ApplyModifiedProperties(); else so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        public void Clip(string state, float duration, float frameRate = 30, float blendIn = .12f, float blendOut = .18f)
+        public void Clip(AnimationClip clip, float duration, float frameRate = 30, float blendIn = .12f, float blendOut = .18f)
         {
-            if (string.IsNullOrWhiteSpace(state)) throw new ArgumentException("缺少片段或状态名。", nameof(state));
             if (!float.IsFinite(duration) || duration <= 0) throw new ArgumentOutOfRangeException(nameof(duration));
             if (!float.IsFinite(frameRate) || frameRate <= 0) throw new ArgumentOutOfRangeException(nameof(frameRate));
             if (!float.IsFinite(blendIn) || blendIn < 0 || blendIn > duration) throw new ArgumentOutOfRangeException(nameof(blendIn));
             if (!float.IsFinite(blendOut) || blendOut < 0) throw new ArgumentOutOfRangeException(nameof(blendOut));
-            _asset.FindProperty("clipName").stringValue = state;
+            _asset.FindProperty("clip").objectReferenceValue = clip;
             _asset.FindProperty("duration").floatValue = duration;
             _asset.FindProperty("frameRate").floatValue = frameRate;
             _asset.FindProperty("blendIn").floatValue = blendIn;

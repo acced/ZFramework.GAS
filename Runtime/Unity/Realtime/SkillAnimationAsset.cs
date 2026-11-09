@@ -35,18 +35,7 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private float end = -1f;
         [SerializeField] private GameplayTag cueTag;
 
-        /// <summary>在加载边界解析 Cue 标签；空或未注册的标签跳过并告警。</summary>
-        public AnimationCueRegion? Build(SkillAnimationAsset owner)
-        {
-            GameplayTag tag = cueTag.Resolve();
-            if (!tag.IsValid)
-            {
-                Debug.LogWarning($"[{owner.name}] A cue region has an empty or unregistered cue tag '{cueTag.Name}'; it was skipped.", owner);
-                return null;
-            }
-
-            return new AnimationCueRegion(start, end, tag);
-        }
+        public AnimationCueRegion Build() => new(start, end, cueTag.Resolve());
     }
 
     /// <summary>
@@ -59,31 +48,19 @@ namespace ZFramework.GAS.Unity
     [CreateAssetMenu(menuName = "ZFramework GAS/Skill Animation", fileName = "NewSkillAnimation")]
     public sealed class SkillAnimationAsset : ScriptableObject, IDefinitionAsset
     {
-        public AnimationSection[] sections = Array.Empty<AnimationSection>();
         public SkillHitWindow[] hitWindows = Array.Empty<SkillHitWindow>();
         [SerializeReference] public SkillRuntimeTrack[] runtimeTracks = Array.Empty<SkillRuntimeTrack>();
         [Header("片段")]
-        [Tooltip("交给驱动的片段名：旧版 Animation 的片段名 / Animator 的状态名 / 序列帧的序列名")]
-        [SerializeField] private string clipName;
+        [Tooltip("可留空，仅执行技能时间轴。播放时直接使用此 AnimationClip。")]
+        [SerializeField] private AnimationClip clip;
         [Tooltip("授权时长（秒），也是时间轴的长度")]
         [SerializeField] private float duration = 1f;
         [SerializeField] private bool loop;
 
-        [Tooltip("从施放前的动画过渡进来的秒数（时间轴时间，随攻速缩放）；0 为硬切")]
+        [Tooltip("从当前姿势线性过渡到技能动画的秒数；0 为硬切")]
         [Min(0)] [SerializeField] private float blendIn = .12f;
-        [Tooltip("结束或被打断后过渡回施放前动画的秒数；0 表示驱动不切换状态，交给 Animator 自己的转换")]
+        [Tooltip("结束或被打断后过渡回施放前动画的秒数；0 为立即移除技能动画叠加")]
         [Min(0)] [SerializeField] private float blendOut = .18f;
-
-        [SerializeField,BlendPreset(nameof(blendInCustom))] private SkillBlendCurve blendInCurve;
-        [SerializeField,BlendPreset(nameof(blendOutCustom))] private SkillBlendCurve blendOutCurve;
-        [SerializeField] private SkillBlendMode blendInMode, blendOutMode;
-        [SerializeField,HideInInspector] private AnimationCurve blendInCustom = AnimationCurve.Linear(0,0,1,1), blendOutCustom = AnimationCurve.Linear(0,0,1,1);
-        public AvatarMask mask;
-        public BoneWeightMask boneWeights;
-        public bool additive;
-        [Range(0, 1)] public float layerWeight = 1;
-        public SkillBlend BlendInSpec => new SkillBlend(blendIn, blendInCurve, blendInMode, blendInCustom);
-        public SkillBlend BlendOutSpec => new SkillBlend(blendOut, blendOutCurve, blendOutMode, blendOutCustom);
 
         [Tooltip("仅供时间轴把秒显示成帧，不参与任何运行期计算")]
         [SerializeField] private float frameRate = 30f;
@@ -101,7 +78,7 @@ namespace ZFramework.GAS.Unity
         /// <summary>时间轴显示用的帧率；运行期不使用。</summary>
         public float FrameRate => frameRate;
         public System.Collections.Generic.IReadOnlyList<AnimationMarkerAsset> Markers => markers;
-        public string ClipName => clipName;
+        public AnimationClip Clip => clip;
         public bool Loop => loop;
         public float BlendIn => blendIn;
         public float BlendOut => blendOut;
@@ -118,23 +95,16 @@ namespace ZFramework.GAS.Unity
                 builtMarkers[i] = markers[i].Build(this,actions);
             }
 
-            var builtRegions = new List<AnimationCueRegion>(cueRegions.Length);
-            for (int i = 0; i < cueRegions.Length; i++)
-            {
-                AnimationCueRegion? region = cueRegions[i].Build(this);
-                if (region.HasValue)
-                    builtRegions.Add(region.Value);
-            }
+            var builtRegions = new AnimationCueRegion[cueRegions.Length];
+            for (int i = 0; i < cueRegions.Length; i++) builtRegions[i] = cueRegions[i].Build();
 
             var builtWindows = new AnimationTagWindow[tagWindows.Length];
             for (int i = 0; i < tagWindows.Length; i++) builtWindows[i] = tagWindows[i].Build();
-            DefinitionSource.DependsOn(this,boneWeights);
             var tracks = new RuntimeTrackDefinition[runtimeTracks.Length + hitWindows.Length];
             for (int i = 0; i < runtimeTracks.Length; i++) tracks[i] = runtimeTracks[i].Build();
             for (int i = 0; i < hitWindows.Length; i++) tracks[runtimeTracks.Length + i] = hitWindows[i].Build(actions);
-            var definition = new SkillAnimationDefinition(clipName, duration, loop, builtMarkers, builtRegions.ToArray(), builtWindows,
-                blendIn, blendOut, Array.ConvertAll(sections, section => section.Build()),
-                tracks, BlendInSpec, BlendOutSpec, mask, additive, layerWeight, boneWeights?.Build());
+            var definition = new SkillAnimationDefinition(clip, duration, loop, builtMarkers, builtRegions, builtWindows,
+                blendIn, blendOut, tracks);
             DefinitionSource.Register(definition, this);
             return definition;
         }

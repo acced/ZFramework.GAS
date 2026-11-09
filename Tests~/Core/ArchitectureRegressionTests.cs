@@ -17,6 +17,7 @@ internal static class ArchitectureRegressionTests
         CommitReentry();
         CommitCallbacksCanEndCast();
         PeriodicExpiration();
+        MagnitudeBasedTimers();
         ImmutableEffects();
         RemovalDuringPublication();
         ReplaceWithoutSelfRemoval();
@@ -38,7 +39,7 @@ internal static class ArchitectureRegressionTests
         var resource = owner.Attributes.Add(Resource, 100);
         var spec = owner.GrantAbility(new GameplayAbilityDefinition(cost: Cost(), cooldown: Cooldown(),
             activationOwnedTags: new GameplayTagSet("Ability.Attack.Melee")));
-        Check(owner.TryActivateAbility(spec, autoCommit: false) == AbilityActivationResult.Activated, "Aiming activates.");
+        Check(owner.TryActivateAbility(spec, autoCommit: false).Result == AbilityActivationResult.Activated, "Aiming activates.");
         Check(spec.IsActive && !spec.IsCommitted && resource.BaseValue == 100 && !spec.IsOnCooldown,
             "Activation must not charge cost or start cooldown before commit.");
         owner.EndAbility(spec);
@@ -47,23 +48,25 @@ internal static class ArchitectureRegressionTests
         owner.TryActivateAbility(spec, autoCommit: false);
         int version = spec.ActivationVersion;
         resource.BaseValue = 5;
-        Check(owner.CheckCommit(spec).Result == AbilityActivationResult.CannotAfford &&
-            owner.CommitAbility(spec, version) == AbilityActivationResult.CannotAfford,
-            "Commit must recheck resources changed since activation.");
+        var preflight = owner.CheckCommit(spec);
+        var commit = owner.CommitAbility(spec, version);
+        Check(preflight.Result == AbilityActivationResult.CannotAfford && commit.Result == preflight.Result &&
+            commit.Amount == 5 && commit.Attribute == Resource,
+            "Commit must return the resource failure and missing amount directly.");
         Check(resource.BaseValue == 5 && !spec.IsCommitted && !spec.IsOnCooldown, "Rejected commit has no side effects.");
         resource.BaseValue = 100;
-        Check(owner.CommitAbility(spec, version) == AbilityActivationResult.Activated && spec.IsCommitted,
+        Check(owner.CommitAbility(spec, version).Result == AbilityActivationResult.Activated && spec.IsCommitted,
             "The active cast can commit once resources permit.");
         owner.Tick(2);
-        Check(owner.CommitAbility(spec, version) == AbilityActivationResult.Activated && resource.BaseValue == 90 &&
+        Check(owner.CommitAbility(spec, version).Result == AbilityActivationResult.Activated && resource.BaseValue == 90 &&
             spec.CooldownRemaining == 3, "Repeated commit must neither charge twice nor refresh cooldown.");
         owner.EndAbility(spec);
         owner.Tick(3);
         owner.TryActivateAbility(spec, autoCommit: false);
-        Check(owner.CommitAbility(spec, version) == AbilityActivationResult.Inactive && !spec.IsCommitted,
+        Check(owner.CommitAbility(spec, version).Result == AbilityActivationResult.Inactive && !spec.IsCommitted,
             "A callback from an old activation must not commit the new activation.");
         owner.EndAbility(spec);
-        Check(owner.CommitAbility(spec) == AbilityActivationResult.Inactive, "Ended abilities cannot commit.");
+        Check(owner.CommitAbility(spec, spec.ActivationVersion).Result == AbilityActivationResult.Inactive, "Ended abilities cannot commit.");
         Console.WriteLine("PASS ManualCommitCancellationRecheckIdempotenceAndVersion");
     }
 
@@ -75,7 +78,7 @@ internal static class ArchitectureRegressionTests
         var spec = owner.GrantAbility(new GameplayAbilityDefinition(cost: Cost(), cooldown: cooldown));
         owner.TryActivateAbility(spec, autoCommit: false);
         owner.Effects.Apply(new GameplayEffectSpec(cooldown));
-        Check(owner.CommitAbility(spec) == AbilityActivationResult.OnCooldown && resource.BaseValue == 100,
+        Check(owner.CommitAbility(spec, spec.ActivationVersion).Result == AbilityActivationResult.OnCooldown && resource.BaseValue == 100,
             "A shared cooldown started during aiming blocks commit without charging.");
         owner.Clear();
 
@@ -84,10 +87,10 @@ internal static class ArchitectureRegressionTests
         spec = owner.GrantAbility(new GameplayAbilityDefinition(cost: gatedCost));
         owner.TryActivateAbility(spec, autoCommit: false);
         owner.OwnedTags.AddTag("Debuff.Poison");
-        Check(owner.CommitAbility(spec) == AbilityActivationResult.Blocked && resource.BaseValue == 100,
+        Check(owner.CommitAbility(spec, spec.ActivationVersion).Result == AbilityActivationResult.Blocked && resource.BaseValue == 100,
             "A blocked cost effect cannot silently grant a free cast.");
         owner.EndAbility(spec);
-        Check(owner.TryActivateAbility(spec) == AbilityActivationResult.Blocked && !spec.IsActive,
+        Check(owner.TryActivateAbility(spec).Result == AbilityActivationResult.Blocked && !spec.IsActive,
             "Automatic commit uses the same payment gates.");
         Console.WriteLine("PASS CommitRechecksSharedCooldownAndEffectRequirements");
     }
@@ -101,17 +104,17 @@ internal static class ArchitectureRegressionTests
         resource.OnCurrentValueChanged += (_, _, _) =>
         {
             callbacks++;
-            Check(owner.CommitAbility(spec) == AbilityActivationResult.Activated, "An in-progress committed cost is idempotent.");
+            Check(owner.CommitAbility(spec, spec.ActivationVersion).Result == AbilityActivationResult.Activated, "An in-progress committed cost is idempotent.");
         };
         owner.TryActivateAbility(spec, autoCommit: false);
-        owner.CommitAbility(spec);
+        owner.CommitAbility(spec, spec.ActivationVersion);
         Check(callbacks == 1 && resource.BaseValue == 90, "Commit callbacks must not recursively pay again.");
 
         var cancelled = owner.GrantAbility(new GameplayAbilityDefinition(
             activationOwnedTags: new GameplayTagSet("Buff.Rage", "Debuff.Poison")));
         owner.OwnedTags.RegisterTagEventCallback("Buff.Rage", GameplayTagEventType.NewOrRemoved,
             (_, count) => { if (count != 0) owner.EndAbility(cancelled); });
-        Check(owner.TryActivateAbility(cancelled, autoCommit: false) == AbilityActivationResult.Inactive &&
+        Check(owner.TryActivateAbility(cancelled, autoCommit: false).Result == AbilityActivationResult.Inactive &&
             !owner.OwnedTags.HasTag("Buff.Rage") && !owner.OwnedTags.HasTag("Debuff.Poison"),
             "Cancellation during tag publication must not remove unowned tags or publish later tags.");
         Console.WriteLine("PASS CommitAndActivationCallbackReentry");
@@ -158,16 +161,39 @@ internal static class ArchitectureRegressionTests
                     if (stage == 0) owner.EndAbility(spec);
                     else owner.RemoveAbility(spec);
                 };
-            Check(owner.TryActivateAbility(spec) == AbilityActivationResult.Inactive && !spec.IsActive,
-                "Payment callbacks ending or revoking the cast must not report a live activation.");
-            Check(spec.LastActivationCheck.Result == AbilityActivationResult.Inactive &&
-                spec.LastCommitCheck.Result == AbilityActivationResult.Inactive,
-                "Debug decisions must agree with an activation interrupted during payment.");
+            var result = owner.TryActivateAbility(spec);
+            Check(result.Result == AbilityActivationResult.Inactive && !spec.IsActive && !result.Succeeded,
+                "Payment callbacks ending or revoking the cast must return the final unsuccessful decision.");
             Check(resource.BaseValue == 90 && owner.Effects.Count == 1 && spec.IsCommitted &&
                 !owner.OwnedTags.HasTag("Ability.Attack.Melee"),
                 "Already committed cost/cooldown remain after interruption; activation tags are released.");
         }
         Console.WriteLine("PASS PaymentCallbacksEndActivationWithoutSuccessOrRefund");
+    }
+
+    private static void MagnitudeBasedTimers()
+    {
+        var owner = new AbilitySystemComponent();
+        var resource = owner.Attributes.Add(Resource, 100);
+        var duration = owner.Attributes.Add(new AttributeId(2), 2);
+        var period = owner.Attributes.Add(new AttributeId(3), .5f);
+        var effect = new GameplayEffectDefinition(EffectDurationPolicy.Duration, duration: 10, period: 10,
+            modifiers: Cost(-1).Modifiers,
+            durationMagnitude: EffectMagnitude.FromAttribute(duration.Id, 1, MagnitudeCapture.Source),
+            periodMagnitude: EffectMagnitude.FromAttribute(period.Id, 1, MagnitudeCapture.Source));
+        owner.Effects.Apply(new GameplayEffectSpec(effect, owner.Attributes), out var handle);
+        Check(owner.Effects.TryGetInfo(handle, out var info) && info.Duration == 2 && info.Period == .5f,
+            "Attribute-based timers use the same magnitude representation as modifier values.");
+        duration.BaseValue = 99; period.BaseValue = 99;
+        owner.Tick(3);
+        Check(resource.BaseValue == 96 && owner.Effects.Count == 0, "Applied timer values remain frozen after source attributes change.");
+        duration.BaseValue = 0; period.BaseValue = .5f;
+        owner.Effects.Apply(new GameplayEffectSpec(effect, owner.Attributes), out handle);
+        Check(owner.Effects.TryGetInfo(handle, out info) && info.Duration == 0,
+            "A resolved zero duration must not silently fall back to the fixed duration.");
+        owner.Tick(1);
+        Check(resource.BaseValue == 96 && owner.Effects.Count == 0, "Zero-duration effects expire without later periodic execution.");
+        Console.WriteLine("PASS TimersUseOneMagnitudePathWithoutFallback");
     }
 
     private static void ImmutableEffects()

@@ -25,9 +25,8 @@ namespace ZFramework.GAS.Editor
         {
             public readonly GameplayAbilityAsset Asset;
             public readonly string Id, State;
-            public readonly bool Independent;
-            internal ActionState(ISkillTaskState task, bool independent)
-            { Asset = task.Execution.Asset; Id = task.ActionId; State = task.State; Independent = independent; }
+            internal ActionState(ISkillTaskState task)
+            { Asset = task.Execution.Asset; Id = task.ActionId; State = task.State; }
         }
 
         public sealed class Ability
@@ -37,7 +36,7 @@ namespace ZFramework.GAS.Editor
             public readonly bool Active, OnCooldown, TagGatePassed;
             public readonly float CooldownRemaining, CooldownDuration;
             public readonly int Level;
-            public readonly AbilityActivationCheck Failure;
+            public readonly AbilityActivationCheck ActivationCheck;
             public readonly IReadOnlyList<KeyValuePair<string, SkillParameterValue>> Parameters;
             internal Ability(GameplayAbilitySpec spec, int index)
             {
@@ -46,7 +45,7 @@ namespace ZFramework.GAS.Editor
                 Active = spec.IsActive; OnCooldown = spec.IsOnCooldown;
                 TagGatePassed = spec.Definition.ActivationRequirements.Matches(spec.Owner.OwnedTags);
                 Level = spec.IsActive ? spec.EvaluationContext?.Level ?? spec.Level : spec.Level; CooldownRemaining = spec.CooldownRemaining;
-                Failure = spec.LastActivationCheck;
+                ActivationCheck = spec.Owner.CheckActivation(spec);
                 var parameters = new List<KeyValuePair<string, SkillParameterValue>>();
                 spec.EvaluationContext?.Parameters.CopyTo(parameters); Parameters = parameters.AsReadOnly();
                 CooldownDuration = spec.CooldownDuration;
@@ -61,8 +60,7 @@ namespace ZFramework.GAS.Editor
             public string ClipName { get; protected set; }
             public float Duration { get; protected set; }
             public float NormalizedTime { get; protected set; }
-            public float AuthoredDuration { get; protected set; }
-            public float AuthoredTime => NormalizedTime * AuthoredDuration;
+            public float Time => NormalizedTime * Duration;
             public bool Loop { get; protected set; }
             public abstract void BindStrip(VisualElement host);
         }
@@ -129,10 +127,7 @@ namespace ZFramework.GAS.Editor
             Tasks = tasks.AsReadOnly();
             var actions = new List<ActionState>();
             for (int i = 0; i < owner.ActiveTaskCount; i++)
-                if (owner.GetActiveTask(i) is ISkillTaskState state && owner.GetActiveTask(i).IsActive) actions.Add(new ActionState(state, false));
-            var detached = new List<GameplayAbilityTask>(); SceneSkillTaskHost.CopyTasks(detached);
-            foreach (var task in detached)
-                if (task.IsActive && task is ISkillTaskState state && ReferenceEquals(state.Execution.Ability.Owner, owner)) actions.Add(new ActionState(state, true));
+                if (owner.GetActiveTask(i) is ISkillTaskState state && owner.GetActiveTask(i).IsActive) actions.Add(new ActionState(state));
             Actions = actions.AsReadOnly();
             var tags = new List<Tag>();
             var oldTags = new Dictionary<GameplayTag, Tag>();

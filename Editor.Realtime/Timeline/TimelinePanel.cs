@@ -153,7 +153,7 @@ namespace ZFramework.GAS.Editor
                     }
                     if (!regroup)
                     {
-                        if (_clipCaption != null) _clipCaption.text = _animation.ClipName + $" · {_animation.Duration:0.##}s";
+                        if (_clipCaption != null) _clipCaption.text = (_animation.Clip != null ? _animation.Clip.name : "时间轴") + $" · {_animation.Duration:0.##}s";
                         _ramps?.MarkDirtyRepaint(); UpdateFrameData(_tracks.Q<Label>("frame-data")); PackRows(); PositionElements(); DrawRuler(); SelectionChanged(); PlaybackChanged(); return;
                     }
                 }
@@ -178,7 +178,7 @@ namespace ZFramework.GAS.Editor
             clip.RegisterCallback<PointerDownEvent>(_ => { _doc.Selection.Select(animation); Focus(); });
             _ramps = new BlendRamps(this, animation); clipLane.Add(_ramps);
             // 文字放在斜坡绘制层上方，保持可读；忽略拾取以免遮住混入、混出手柄。
-            _clipCaption = new Label(animation.ClipName + $"  ·  {animation.Duration:0.##}s") { pickingMode = PickingMode.Ignore };
+            _clipCaption = new Label((animation.Clip != null ? animation.Clip.name : "时间轴") + $"  ·  {animation.Duration:0.##}s") { pickingMode = PickingMode.Ignore };
             _clipCaption.AddToClassList("animation-clip-caption"); clipLane.Add(_clipCaption);
             _tail=new Label("后续 · 独立任务"){pickingMode=PickingMode.Ignore};_tail.AddToClassList("preview-tail");clipLane.Add(_tail);
             clip.tooltip = _clipCaption.text;
@@ -296,57 +296,32 @@ namespace ZFramework.GAS.Editor
         }
         private void UpdateFrameData(Label label)
         {
-            if(label==null || _animation==null)return;
-            var a=_doc.Serialized(_animation);var markers=a.FindProperty("markers");float first=float.PositiveInfinity,last=0;
-            for(int i=0;i<markers.arraySize;i++)
-            {var m=markers.GetArrayElementAtIndex(i);if(m.FindPropertyRelative("actions").arraySize==0)continue;
-             float at=m.FindPropertyRelative("time").floatValue;first=Mathf.Min(first,at);last=Mathf.Max(last,at);}
-            int Frame(float t)=>Mathf.RoundToInt(t*Fps/Mathf.Max(.001f,_doc.Playback.Speed));
+            if (label == null || _animation == null) return;
+            var markers = _doc.Serialized(_animation).FindProperty("markers");
+            float first = float.PositiveInfinity, last = 0;
+            for (int i = 0; i < markers.arraySize; i++)
+            {
+                float time = markers.GetArrayElementAtIndex(i).FindPropertyRelative("time").floatValue;
+                first = Mathf.Min(first, time); last = Mathf.Max(last, time);
+            }
             foreach (var hit in _animation.hitWindows)
             { first = Mathf.Min(first, hit.start); last = Mathf.Max(last, hit.end); }
-            var ranges=new List<string>();
-            foreach(var s in _animation.sections??Array.Empty<AnimationSection>())if(s!=null && s.inputBufferEnd>s.inputBufferStart)
-                ranges.Add("输入 "+Frame(s.inputBufferStart)+"–"+Frame(s.inputBufferEnd)+"f");
-            var windows=a.FindProperty("tagWindows");
-            for(int i=0;i<windows.arraySize;i++)
-            {
-                var w=windows.GetArrayElementAtIndex(i);var tags=w.FindPropertyRelative("tags");
-                for(int j=0;j<tags.arraySize;j++)
-                {
-                    string name=tags.GetArrayElementAtIndex(j).FindPropertyRelative("m_Name").stringValue;
-                    if(name!="Window.Combo" && !name.StartsWith("Window.Combo.",StringComparison.Ordinal))continue;
-                    float end=w.FindPropertyRelative("end").floatValue;
-                    ranges.Add("连招 "+Frame(w.FindPropertyRelative("start").floatValue)+"–"+Frame(end<0?Duration:end)+"f");break;
-                }
-            }
-            label.text=(float.IsPositiveInfinity(first)?"无命中标记":$"前摇 {Frame(first)}f · 命中跨度 {Frame(last)-Frame(first)}f · 后摇 {Frame(Duration)-Frame(last)}f")+
-                (ranges.Count>0?" · "+string.Join("、",ranges):"")+(_doc.PreviewEnd>Duration?$" · 后续至 {_doc.PreviewEnd:0.##}s":"");
+            int Frame(float time) => Mathf.RoundToInt(time * Fps);
+            label.text = float.IsPositiveInfinity(first) ? "无事件" :
+                $"首事件 {Frame(first)}f · 事件跨度 {Frame(last) - Frame(first)}f · 结束 {Frame(Duration)}f";
         }
         private void BuildClipPicker(SkillAnimationAsset animation)
         {
-            var adapter = AnimationAdapterRegistry.Resolve(_doc.PreviewPrefab);
-            var clips = _doc.PreviewPrefab != null ? adapter.EnumerateClips(_doc.PreviewPrefab) : Array.Empty<ClipInfo>();
-            _clipRow.Add(new Label("动画片段"));
-            if (clips.Count > 0)
-            {
-                var choices = clips.Select(c => c.Name + $"  ({c.Length:0.##}s)").ToList();
-                int selected = clips.ToList().FindIndex(c => c.Name == animation.ClipName);
-                if (selected < 0) { choices.Insert(0, animation.ClipName + " · 未匹配"); selected = 0; }
-                bool unmatched = choices.Count > clips.Count;
-                var picker = new PopupField<string>(choices, selected); picker.style.flexGrow = 1;
-                picker.RegisterValueChangedCallback(e =>
-                { int index = choices.IndexOf(e.newValue) - (unmatched ? 1 : 0); if (index >= 0) SetClip(clips[index], animation); });
-                _clipRow.Add(picker);
-                _clipRow.Add(new Button(() => { var match = clips.FirstOrDefault(c => c.Name == animation.ClipName); if (match.Length > 0) SetClip(match, animation); }) { text = "同步时长" });
-            }
-            else
-            {
-                var name = new TextField { value = animation.ClipName, isDelayed = true, style = { flexGrow = 1 } };
-                name.RegisterValueChangedCallback(e => EditCommand.Run(_doc, "修改动画片段", animation, so => so.FindProperty("clipName").stringValue = e.newValue));
-                _clipRow.Add(name);
-            }
-            BlendField(animation, "混入", "blendIn", "从施放前的动画过渡进来的秒数，随攻速缩放；0 为硬切", animation.BlendIn);
-            BlendField(animation, "混出", "blendOut", "结束或被打断后过渡回施放前动画的秒数；0 表示交给 Animator 自己的转换", animation.BlendOut);
+            var picker = new UnityEditor.UIElements.ObjectField("动画片段") {
+                objectType = typeof(AnimationClip), allowSceneObjects = false, value = animation.Clip,
+                style = { flexGrow = 1 }, tooltip = "留空可创建仅包含事件、Cue 和音效的时间轴。"
+            };
+            picker.RegisterValueChangedCallback(e => SetClip(e.newValue as AnimationClip, animation));
+            _clipRow.Add(picker);
+            var sync = new Button(() => SetClip(animation.Clip, animation)) { text = "同步时长" };
+            sync.SetEnabled(animation.Clip != null); _clipRow.Add(sync);
+            BlendField(animation, "混入", "blendIn", "从当前姿势线性过渡到技能动画的秒数；0 为硬切。", animation.BlendIn);
+            BlendField(animation, "混出", "blendOut", "结束或被打断后线性退出技能动画的秒数；0 为硬切。", animation.BlendOut);
             var fps = new FloatField { value = animation.FrameRate, isDelayed = true, tooltip = "帧率 / 吸附单位", style = { width = 50 } };
             fps.RegisterValueChangedCallback(e => EditCommand.Run(_doc, "修改吸附帧率", animation, so => so.FindProperty("frameRate").floatValue = Mathf.Max(1, e.newValue)));
             _clipRow.Add(fps); _clipRow.Add(new Label("fps"));
@@ -361,7 +336,7 @@ namespace ZFramework.GAS.Editor
 
         private void SetBlend(SkillAnimationAsset animation, string property, float value)
         {
-            // 混入不能超过动画时长（运行期定义会拒绝）；混出发生在动画之后，只要求非负。
+            // 混入在时间轴内完成；混出发生在时间轴之后。
             float max = property == "blendIn" ? animation.Duration : float.MaxValue;
             EditCommand.Run(_doc, property == "blendIn" ? "调整混入时长" : "调整混出时长", animation,
                 so => so.FindProperty(property).floatValue = Mathf.Clamp(value, 0, max));
@@ -435,41 +410,43 @@ namespace ZFramework.GAS.Editor
                 float zoom = _owner._zoom, end = _owner.Duration * zoom, blendIn = _blendIn * zoom, blendOut = _blendOut * zoom;
                 var painter = context.painter2D;
                 painter.lineWidth = 1.5f;
-                DrawCurve(0, blendIn, _animation.BlendInSpec, false);
-                DrawCurve(end, blendOut, _animation.BlendOutSpec, true);
-                if (_animation.sections != null) foreach (var section in _animation.sections)
-                    if (section != null) DrawCurve(section.start * zoom, section.transition.duration * zoom, section.transition, false);
-                void DrawCurve(float x, float width, SkillBlend spec, bool fadeOut)
+                DrawRamp(0, blendIn, false);
+                DrawRamp(end, blendOut, true);
+                void DrawRamp(float x, float width, bool fadeOut)
                 {
                     if (width < .5f) return;
-                    var tint = spec.mode == SkillBlendMode.Freeze ? SkillColors.Cue : SkillColors.Animation;
+                    var tint = SkillColors.Animation;
                     painter.strokeColor = Color.Lerp(tint, Color.white, .45f);
                     painter.fillColor = new Color(tint.r, tint.g, tint.b, .3f);
-                    Vector2 At(int i) { float u = i / 24f, w = spec.Evaluate(u); return new Vector2(x + width*u, Height * (fadeOut ? w : 1-w)); }
-                    painter.BeginPath(); painter.MoveTo(At(0)); for (int i=1; i<=24; i++) painter.LineTo(At(i)); painter.Stroke();
-                    painter.LineTo(new Vector2(x+width,Height)); painter.LineTo(new Vector2(x,Height)); painter.ClosePath(); painter.Fill();
+                    painter.BeginPath(); painter.MoveTo(new Vector2(x, fadeOut ? 0 : Height));
+                    painter.LineTo(new Vector2(x + width, fadeOut ? Height : 0)); painter.Stroke();
+                    painter.LineTo(new Vector2(x + width, Height)); painter.LineTo(new Vector2(x, Height));
+                    painter.ClosePath(); painter.Fill();
                 }
             }
-
         }
 
-        private void SetClip(ClipInfo clip, SkillAnimationAsset animation)
+        private void SetClip(AnimationClip clip, SkillAnimationAsset animation)
         {
-            EditCommand.Run(_doc, "选择动画并同步时长", animation, so =>
+            EditCommand.Run(_doc, "选择动画片段", animation, so =>
             {
-                float ratio = clip.Length / Mathf.Max(.001f, animation.Duration);
+                so.FindProperty("clip").objectReferenceValue = clip;
+                if (clip == null) return;
+                float duration = Mathf.Max(.001f, clip.length);
+                float ratio = duration / Mathf.Max(.001f, animation.Duration);
                 foreach (var track in TrackTypeRegistry.Types)
                 {
                     var list = so.FindProperty(track.PropertyPath); if (list == null) continue;
                     for (int i = 0; i < list.arraySize; i++)
                     { var element = list.GetArrayElementAtIndex(i); var span = track.ReadSpan(element); track.WriteSpan(element, span.start * ratio, span.end < 0 ? -1 : span.end * ratio); }
                 }
-                so.FindProperty("clipName").stringValue = clip.Name; so.FindProperty("duration").floatValue = Mathf.Max(.001f, clip.Length);
-                so.FindProperty("frameRate").floatValue = Mathf.Max(1, clip.FrameRate); so.FindProperty("loop").boolValue = clip.Loop;
+                so.FindProperty("blendIn").floatValue *= ratio;
+                so.FindProperty("duration").floatValue = duration;
+                so.FindProperty("frameRate").floatValue = Mathf.Max(1, clip.frameRate);
             }, true);
-            if (!string.IsNullOrEmpty(clip.Warning)) _doc.Report(clip.Warning);
             Seek(Mathf.Min(_doc.Playback.Time, Duration)); Fit();
         }
+
         private void BindDrag(ElementView element)
         {
             if(element.Track.PropertyPath=="markers") element.View.AddManipulator(new ContextualMenuManipulator(e=>e.menu.AppendAction("切换标记断点",_=>SkillActionDebugger.Toggle(element.Id))));

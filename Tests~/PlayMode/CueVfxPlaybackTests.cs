@@ -5,25 +5,19 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 using ZFramework.GAS.Unity;
-using ZFramework.GAS.Samples.BasicCombat;
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
 using Object = UnityEngine.Object;
 
 namespace ZFramework.GAS.Tests
 {
     public sealed class CueVfxPlaybackTests
     {
-        private static void Tags() => GameplayTagManager.Initialize(SampleTags.All
-            .Select(name => new GameplayTagRegistration(name)).ToArray());
+        private const string CueTag = "Test.VFX.Ground";
+        private static void Tags() => GameplayTagManager.Initialize(new[] { new GameplayTagRegistration(CueTag) });
         [UnityTest]
         public IEnumerator ParticleCueFollowsPolicyAndAutomaticallyReclaimsItsTail()
         {
             Tags();
-            // A generated registry may already have initialized the domain before this test runs.
-            // Use its existing sample tag; per-owner routers keep this fixture isolated.
-            var tag = GameplayTagManager.RequestTag(SampleTags.CueGroundTest);
+            var tag = GameplayTagManager.RequestTag(CueTag);
             Assert.IsTrue(tag.IsValid);
             var prefab = new GameObject("Particle template"); prefab.SetActive(false);
             var particles = prefab.AddComponent<ParticleSystem>();
@@ -54,48 +48,5 @@ namespace ZFramework.GAS.Tests
             finally { Object.Destroy(hero); Object.Destroy(prefab); Object.Destroy(library); }
         }
 
-        [UnityTest]
-        public IEnumerator GeneratedKnightCastsAssetsAndCleansGroundOnCancellation()
-        {
-#if UNITY_EDITOR
-            const string folder = "Assets/GAS Samples/BasicCombat";
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(folder + "/Prefabs/Knight.prefab");
-            if (prefab == null) Assert.Ignore("先运行 CueVfxSampleTests 或创建 BasicCombat 示例。");
-            Tags();
-            var knight = Object.Instantiate(prefab);
-            var hero = knight.AddComponent<CombatUnit>(); hero.Initialize(new GameplayCueRouter());
-            var dummyGo = new GameObject("Test target"); var dummy = dummyGo.AddComponent<CombatUnit>(); dummy.Initialize(new GameplayCueRouter());
-            var slash = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(folder + "/Skills/斩击.asset");
-            var warcry = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(folder + "/Skills/战吼.asset");
-            try
-            {
-                yield return null;
-                hero.SkillRunner.Grant(slash); hero.SkillRunner.Grant(warcry);
-                Assert.AreEqual(AbilityActivationResult.Activated, hero.SkillRunner.TryCast(slash, dummy.AbilitySystem,
-                    new SkillExecutionServices { Origin = knight.transform, Target = dummy.transform, Scene = knight.scene, Searcher = new PhysicsTargetSearcher() }));
-                float elapsed = 0;
-                while (elapsed < .4f) { hero.AbilitySystem.Tick(Time.deltaTime); elapsed += Time.deltaTime; yield return null; }
-                var trail = knight.GetComponentInChildren<SwordTrailVisual>();
-                Assert.IsNotNull(trail); Assert.Greater(trail.GetComponent<MeshFilter>().sharedMesh.vertexCount, 4);
-                hero.SkillRunner.Cancel(slash); yield return null;
-                Assert.IsNull(knight.GetComponentInChildren<SwordTrailVisual>());
-                Assert.AreEqual(AbilityActivationResult.Activated, hero.SkillRunner.TryCast(warcry));
-                elapsed = 0;
-                while (elapsed < .4f) { hero.AbilitySystem.Tick(Time.deltaTime); elapsed += Time.deltaTime; yield return null; }
-                var root = Object.FindObjectsByType<Transform>(FindObjectsSortMode.None).Single(t => t.name == "CueVFX · " + SampleTags.CueGroundTest).gameObject;
-                var position = root.transform.position;
-                Assert.IsTrue(root.GetComponentsInChildren<ParticleSystem>().Any(ps => ps.particleCount > 0));
-                knight.transform.position += Vector3.right * 3; yield return null;
-                Assert.AreEqual(position, root.transform.position);
-                hero.SkillRunner.Cancel(warcry);
-                Assert.IsTrue(root.GetComponentsInChildren<ParticleSystem>().All(ps => !ps.isEmitting));
-                yield return new WaitForSeconds(1.7f);
-                Assert.IsTrue(root == null);
-            }
-            finally { Object.Destroy(knight); Object.Destroy(dummyGo); }
-#else
-            yield break;
-#endif
-        }
     }
 }

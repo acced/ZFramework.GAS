@@ -35,25 +35,13 @@ namespace ZFramework.GAS.Editor
                 menu.value=names[1+System.Array.FindIndex(all,p=>p.Id==pid)];e.StopPropagation();});
             Refresh(); return root;
         }
-        internal static SkillParameter[] LocalScope(SerializedProperty property)
-        {
-            string path=property.propertyPath; int offset=path.Length;
-            while(offset>0 && (offset=path.LastIndexOf(".actions.Array.data[",offset-1,System.StringComparison.Ordinal))>=0)
-            {
-                var parent=property.serializedObject.FindProperty(path.Substring(0,offset));
-                if(parent?.propertyType==SerializedPropertyType.ManagedReference && parent.managedReferenceValue is InlineParameterScopeAction local)
-                    return local.parameters??System.Array.Empty<SkillParameter>();
-            }
-            return null;
-        }
         internal static IEnumerable<SkillParameter> Parameters(SerializedProperty property)
-            => LocalScope(property) ?? Parameters(property.serializedObject.targetObject);
+            => Parameters(property.serializedObject.targetObject);
         public static IEnumerable<SkillParameter> Parameters(Object asset)
         {
-            if (asset is SkillActionModuleAsset module) return module.parameters != null ? module.parameters.parameters : System.Array.Empty<SkillParameter>();
             var root = asset as GameplayAbilityAsset ?? AssetDatabase.LoadMainAssetAtPath(AssetDatabase.GetAssetPath(asset)) as GameplayAbilityAsset;
             if (root == null) return System.Array.Empty<SkillParameter>();
-            return (root.parameterSet != null ? root.parameterSet.parameters : System.Array.Empty<SkillParameter>()).Concat(root.parameters);
+            return root.parameters;
         }
     }
     [CustomPropertyDrawer(typeof(SkillParameterReferenceAttribute))]
@@ -74,20 +62,6 @@ namespace ZFramework.GAS.Editor
                 property.stringValue = selected == 0 ? "" : all[selected - 1].Id; property.serializedObject.ApplyModifiedProperties(); popup.tooltip = property.stringValue;
             });
             return popup;
-        }
-    }
-    [CustomPropertyDrawer(typeof(ModuleParameterBinding))]
-    public sealed class ModuleParameterBindingDrawer : PropertyDrawer
-    {
-        public override VisualElement CreatePropertyGUI(SerializedProperty property)
-        {
-            var root = new VisualElement(); string path = property.propertyPath;
-            int start = path.LastIndexOf(".bindings", System.StringComparison.Ordinal);
-            var action = start >= 0 ? property.serializedObject.FindProperty(path.Substring(0, start)).managedReferenceValue as ParameterScopeAction : null;
-            var parameters = action is InlineParameterScopeAction local ? local.parameters : (action as CallModuleAction)?.module?.parameters?.parameters ?? System.Array.Empty<SkillParameter>();
-            root.Add(SkillParameterReferenceDrawer.Picker(property.FindPropertyRelative("moduleParameterId"), parameters, "模块参数"));
-            root.Add(SkillParameterReferenceDrawer.Picker(property.FindPropertyRelative("callerParameterId"), SkillNumberDrawer.Parameters(property), "使用技能参数"));
-            return root;
         }
     }
 }

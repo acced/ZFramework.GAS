@@ -16,7 +16,7 @@ namespace ZFramework.GAS.Unity
         public override TargetQueryBuffer CreateBuffer(int capacity = 256) => new Buffer(capacity);
 
         protected override void Collect(TargetQueryDefinition query, SkillExecutionContext context,
-            TargetQueryBuffer buffer, Vector3? centerOverride, Vector3 forward, bool captureAim)
+            TargetQueryBuffer buffer, Vector3? centerOverride, Vector3 forward)
         {
             var contacts = ((Buffer)buffer).Contacts;
             var scene = context.Services.Scene;
@@ -54,7 +54,7 @@ namespace ZFramework.GAS.Unity
                     var aim = provider is Component component ? component.transform : collider.transform;
                     var delta = aim.position - center;
                     if (shape.IncludesDirection(facing, delta))
-                        results.AddNearest(provider.AbilitySystem, aim, captureAim ? collider.bounds.center : (Vector3?)null, delta.sqrMagnitude);
+                        results.AddNearest(provider.AbilitySystem, aim, aim.position, delta.sqrMagnitude);
                 }
             }
             finally { Array.Clear(contacts, 0, count); }

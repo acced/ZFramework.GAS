@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using UnityEditor;
 using UnityEditor.UIElements;
 using UnityEngine;
@@ -18,21 +17,6 @@ namespace ZFramework.GAS.Editor
             .Where(a => a != null).SelectMany(a => a.entries).Where(e => e != null).GroupBy(e => e.id).Select(g => g.First()).OrderBy(e => e.category).ThenBy(e => e.id).ToArray();
         public static void Invalidate() => _entries = null;
         public static string Name(int id) => id < 0 ? "未使用" : Entries.FirstOrDefault(e => e.id == id)?.displayName ?? "属性 #" + id;
-        [MenuItem("Tools/ZFramework GAS/从代码常量生成属性词表")]
-        public static void Generate()
-        {
-            string path = EditorUtility.SaveFilePanelInProject("保存属性词表", "AttributeCatalog", "asset", "选择词表位置"); if (string.IsNullOrEmpty(path)) return;
-            var entries = new List<AttributeCatalogEntry>();
-            foreach (var type in TypeCache.GetTypesWithAttribute<AttributeCatalogSourceAttribute>())
-                foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public))
-                {
-                    object value = field.GetValue(null);
-                    if (value is AttributeId id) entries.Add(new AttributeCatalogEntry { id = id.Value, displayName = field.Name, category = type.Name });
-                    else if (field.IsLiteral && value is int number) entries.Add(new AttributeCatalogEntry { id = number, displayName = field.Name, category = type.Name });
-                }
-            var catalog = ScriptableObject.CreateInstance<AttributeCatalogAsset>(); catalog.entries = entries.ToArray();
-            AssetDatabase.CreateAsset(catalog, path); AssetDatabase.SaveAssets(); Invalidate(); Selection.activeObject = catalog;
-        }
     }
     [CustomPropertyDrawer(typeof(AttributeIdFieldAttribute))]
     public sealed class AttributeIdDrawer : PropertyDrawer
@@ -50,42 +34,26 @@ namespace ZFramework.GAS.Editor
             if (EditorGUI.EndChangeCheck()) property.intValue = ids[selected]; EditorGUI.EndProperty();
         }
     }
-    [CustomPropertyDrawer(typeof(CallerKeyAttribute))]
-    public sealed class CallerKeyDrawer : PropertyDrawer
-    {
-        public override void OnGUI(Rect rect, SerializedProperty property, GUIContent label)
-        {
-            var text = rect; text.width -= 25;
-            EditorGUI.PropertyField(text, property, label);
-            var button = new Rect(rect.xMax - 23, rect.y, 23, rect.height);
-            if (GUI.Button(button, "▾"))
-            {
-                var menu = new GenericMenu();
-                foreach (string key in SkillIndex.CallerKeys)
-                {
-                    string selected = key; var target = property.serializedObject.targetObject; string path = property.propertyPath;
-                    menu.AddItem(new GUIContent(selected), property.stringValue == selected, () =>
-                    { using var so = new SerializedObject(target); so.FindProperty(path).stringValue = selected; so.ApplyModifiedProperties(); });
-                }
-                if (SkillIndex.CallerKeys.Count == 0) menu.AddDisabledItem(new GUIContent("暂无已声明参数，可直接输入"));
-                menu.DropDown(button);
-            }
-        }
-    }
     [CustomPropertyDrawer(typeof(MagnitudeAsset))]
     public sealed class MagnitudeDrawer : PropertyDrawer
     {
         public static string Summary(SerializedProperty p)
         {
             if (p == null) return "";
-            int kind = p.FindPropertyRelative("kind").enumValueIndex;
+            var kind = (MagnitudeKind)p.FindPropertyRelative("kind").intValue;
             float constant = p.FindPropertyRelative("constant").floatValue;
-            if (kind == 3) return "参数 · " + p.FindPropertyRelative("parameterId").stringValue;
-            if (kind == 4) return "等级表";
-            if (kind == 5) return "伤害公式（来源 × 系数 − 目标，限幅）";
-            return kind == 0 ? constant.ToString("0.##") : kind == 2 ? "调用方 · " + p.FindPropertyRelative("callerKey").stringValue :
-                (p.FindPropertyRelative("captureFrom").enumValueIndex == 0 ? "来源 · " : "目标 · ") + AttributeCatalog.Name(p.FindPropertyRelative("captureAttributeId").intValue) +
-                " × " + p.FindPropertyRelative("coefficient").floatValue.ToString("0.##") + (constant != 0 ? " + " + constant.ToString("0.##") : "");
+            return kind switch
+            {
+                MagnitudeKind.Fixed => constant.ToString("0.##"),
+                MagnitudeKind.Parameter => "参数 · " + p.FindPropertyRelative("parameterId").stringValue,
+                MagnitudeKind.LevelTable => "等级表",
+                MagnitudeKind.Calculation => "自定义数值计算",
+                MagnitudeKind.AttributeScaled =>
+                    ((MagnitudeCapture)p.FindPropertyRelative("captureFrom").intValue == MagnitudeCapture.Source ? "来源 · " : "目标 · ") +
+                    AttributeCatalog.Name(p.FindPropertyRelative("captureAttributeId").intValue) + " × " +
+                    p.FindPropertyRelative("coefficient").floatValue.ToString("0.##") + (constant != 0 ? " + " + constant.ToString("0.##") : ""),
+                _ => kind.ToString()
+            };
         }
         public override VisualElement CreatePropertyGUI(SerializedProperty property)
         {
@@ -95,27 +63,29 @@ namespace ZFramework.GAS.Editor
             {
                 fold.Clear(); fold.text = "数值：" + Summary(property);
                 var kind = property.FindPropertyRelative("kind"); var type = new PropertyField(kind, "来源类型"); fold.Add(type); type.BindProperty(kind);
-                int index = kind.enumValueIndex;
-                string[] paths = Fields(index);
+                string[] paths = Fields((MagnitudeKind)kind.intValue);
                 foreach (var path in paths) { var field = new PropertyField(property.FindPropertyRelative(path)); fold.Add(field); field.BindProperty(property.FindPropertyRelative(path)); }
                 type.RegisterCallback<SerializedPropertyChangeEvent>(_ => root.schedule.Execute(Build));
             }
             Build(); return root;
         }
-        private static string[] Fields(int kind) => kind switch
+        private static string[] Fields(MagnitudeKind kind) => kind switch
         {
-            0 => new[] { "constant" }, 2 => new[] { "callerKey" }, 3 => new[] { "parameterId", "coefficient", "constant" },
-            4 => new[] { "levels" }, 5 => new[] { "captureAttributeId", "targetAttributeId", "parameterId", "coefficient", "targetCoefficient", "constant", "minimum", "maximum", "resultScale", "multiplierParameterId" },
-            _ => new[] { "captureFrom", "captureAttributeId", "coefficient", "constant" }
+            MagnitudeKind.Fixed => new[] { "constant" },
+            MagnitudeKind.Parameter => new[] { "parameterId", "coefficient", "constant" },
+            MagnitudeKind.LevelTable => new[] { "levels" },
+            MagnitudeKind.Calculation => new[] { "calculation" },
+            MagnitudeKind.AttributeScaled => new[] { "captureFrom", "captureAttributeId", "coefficient", "constant" },
+            _ => Array.Empty<string>()
         };
         public override float GetPropertyHeight(SerializedProperty p, GUIContent label)
-            => (EditorGUIUtility.singleLineHeight + 2) * 2 + Fields(p.FindPropertyRelative("kind").enumValueIndex).Sum(path => EditorGUI.GetPropertyHeight(p.FindPropertyRelative(path), true) + 2);
+            => (EditorGUIUtility.singleLineHeight + 2) * 2 + Fields((MagnitudeKind)p.FindPropertyRelative("kind").intValue).Sum(path => EditorGUI.GetPropertyHeight(p.FindPropertyRelative(path), true) + 2);
         public override void OnGUI(Rect rect, SerializedProperty p, GUIContent label)
         {
             float h = EditorGUIUtility.singleLineHeight; rect.height = h;
             EditorGUI.LabelField(rect, "数值：" + Summary(p)); rect.y += h + 2;
             EditorGUI.PropertyField(rect, p.FindPropertyRelative("kind"), new GUIContent("来源")); rect.y += h + 2;
-            int kind = p.FindPropertyRelative("kind").enumValueIndex;
+            var kind = (MagnitudeKind)p.FindPropertyRelative("kind").intValue;
             foreach (var path in Fields(kind))
             { var child = p.FindPropertyRelative(path); rect.height = EditorGUI.GetPropertyHeight(child, true); EditorGUI.PropertyField(rect, child, true); rect.y += rect.height + 2; }
         }
@@ -165,7 +135,6 @@ namespace ZFramework.GAS.Editor
                     tools.Add(new Button(() => Change(a =>
                     {
                         try{SkillActionClipboard.Duplicate(a,itemIndex+1,property.managedReferenceValue as SkillAction);}
-                        catch(OperationCanceledException){}
                         catch(InvalidOperationException error){root.Q<HelpBox>("action-error")?.RemoveFromHierarchy();
                             root.Add(new HelpBox(error.Message,HelpBoxMessageType.Error){name="action-error"});}
                     })) { text = "创建副本", tooltip="在下方添加相同动作，保留剪贴板内容" });

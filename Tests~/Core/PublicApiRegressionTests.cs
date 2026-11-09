@@ -39,7 +39,7 @@ internal static class PublicApiRegressionTests
         void Cast(int i)
         {
             attack.BaseValue = 10 + i % 2;
-            Check(owner.TryActivateAbility(spec) == AbilityActivationResult.Activated, "Real-cost test must actually activate.");
+            Check(owner.TryActivateAbility(spec).Result == AbilityActivationResult.Activated, "Real-cost test must actually activate.");
             Check(mana.BaseValue == 1000 - attack.BaseValue, "Cost must use this iteration's attack.");
             attack.BaseValue += 5;
             owner.Effects.Apply(new GameplayEffectSpec(dot, context: spec.EvaluationContext));

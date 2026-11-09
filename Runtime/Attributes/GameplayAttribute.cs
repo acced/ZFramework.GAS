@@ -32,25 +32,6 @@ namespace ZFramework.GAS
     }
 
     /// <summary>
-    /// 属性修改器。<see cref="Magnitude"/> 必须是**已解析的最终数值**——
-    /// 公式求值、MMC 捕获等一律由上层在应用时完成，聚合过程只做纯算术，
-    /// 因此不持有计算上下文，也不会在热路径上分配。
-    /// </summary>
-    public readonly struct AttributeModifier
-    {
-        public readonly AttributeId Target;
-        public readonly ModifierOperation Operation;
-        public readonly float Magnitude;
-
-        public AttributeModifier(AttributeId target, ModifierOperation operation, float magnitude)
-        {
-            Target = target;
-            Operation = operation;
-            Magnitude = magnitude;
-        }
-    }
-
-    /// <summary>
     /// 单个属性：权威值 <see cref="BaseValue"/> 与派生值 <see cref="CurrentValue"/>。
     ///
     /// 聚合公式：<c>Current = (Base + ΣAdd) * ΠMultiply / ΠDivide</c>，存在 Override 时直接取其值。
@@ -62,7 +43,8 @@ namespace ZFramework.GAS
     {
         private struct ActiveModifier
         {
-            public AttributeModifier Modifier;
+            public ModifierOperation Operation;
+            public float Magnitude;
             public object Source;
             public int StackCount;
         }
@@ -102,39 +84,21 @@ namespace ZFramework.GAS
         /// <summary>派生值，只读。外部无法直接写入，避免与修改器聚合结果产生第二个权威。</summary>
         public float CurrentValue => _currentValue;
 
-        public void AddModifier(in AttributeModifier modifier, object source, int stackCount = 1)
+        internal void AddModifier(ModifierOperation operation, float magnitude, object source)
         {
-            if (modifier.Target != Id)
-            {
-                throw new ArgumentException(
-                    $"Modifier targets attribute {modifier.Target} but was added to {Id}.", nameof(modifier));
-            }
-
-            // 来源是移除修改器的唯一凭据（RemoveModifiersFromSource 按引用比对）。
-            // 允许 null 就等于允许加入一个永远摘不掉的修改器。
-            if (source == null)
-            {
-                throw new ArgumentNullException(
-                    nameof(source), "Modifier source is required; a modifier without a source could never be removed.");
-            }
-
             _modifiers.Add(new ActiveModifier
             {
-                Modifier = modifier,
+                Operation = operation,
+                Magnitude = magnitude,
                 Source = source,
-                StackCount = stackCount,
+                StackCount = 1,
             });
             Recalculate();
         }
 
         /// <summary>移除某来源施加的全部修改器；来源按引用比对。</summary>
-        public int RemoveModifiersFromSource(object source)
+        internal void RemoveModifiersFromSource(object source)
         {
-            if (source == null)
-            {
-                return 0;
-            }
-
             int removed = 0;
             for (int i = _modifiers.Count - 1; i >= 0; i--)
             {
@@ -152,17 +116,11 @@ namespace ZFramework.GAS
                 Recalculate();
             }
 
-            return removed;
         }
 
         /// <summary>效果堆叠层数变化时由持有方推送，避免聚合过程反向查询来源。</summary>
-        public bool SetSourceStackCount(object source, int stackCount)
+        internal void SetSourceStackCount(object source, int stackCount)
         {
-            if (source == null || stackCount < 0)
-            {
-                return false;
-            }
-
             bool changed = false;
             for (int i = 0; i < _modifiers.Count; i++)
             {
@@ -182,7 +140,6 @@ namespace ZFramework.GAS
                 Recalculate();
             }
 
-            return changed;
         }
 
         private void Recalculate()
@@ -196,10 +153,10 @@ namespace ZFramework.GAS
             for (int i = 0; i < _modifiers.Count; i++)
             {
                 ActiveModifier active = _modifiers[i];
-                float magnitude = active.Modifier.Magnitude;
+                float magnitude = active.Magnitude;
                 int stacks = active.StackCount;
 
-                switch (active.Modifier.Operation)
+                switch (active.Operation)
                 {
                     case ModifierOperation.Add:
                         additive += magnitude * stacks;

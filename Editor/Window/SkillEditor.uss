@@ -73,9 +73,6 @@
 .node-field { margin: 2px 0; height: 22px; min-height: 22px; align-items: center; }
 .node-field > .unity-base-field__label { width: 62px; min-width: 62px; max-width: 62px; font-size: 11px; color: #aebbc9; padding-left: 0; margin-right: 4px; }
 .node-field > .unity-base-field__input { min-width: 0; flex-grow: 1; }
-.skill-minimap-overlay { position: absolute; right: 10px; bottom: 10px; width: 150px; height: 92px; overflow: hidden; border-radius: 5px; }
-.gas-editor .skill-minimap { position: absolute; left: 0; top: 0; width: 150px; height: 92px; padding: 0; margin: 0; background-color: rgba(22, 28, 36, 0.85); border-width: 1px; border-color: #475567; border-radius: 5px; }
-.skill-minimap > Label { display: none; }
 .node-badge { color: white; font-size: 10px; -unity-text-align: middle-center; padding-left: 6px; padding-right: 6px; }
 .document-selected { border-color: var(--gas-accent); border-width: 2px; }
 .external-node { border-color: #718094; }

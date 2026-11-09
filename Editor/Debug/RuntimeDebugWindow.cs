@@ -120,11 +120,11 @@ namespace ZFramework.GAS.Editor
                 if (e.Kind == TraceKind.标记 && SkillEditorExtensions.Asset(e.Skill) is { } presentation)
                 {
                     var editor = SkillEditorExtensions.Timeline;
-                    w.Document.Selection.Select(presentation, editor.EntryTrack, e.RawId);
+                    w.Document.Selection.Select(presentation, editor.EntryTrack, e.ActionId);
                     foreach (var entry in editor.Entries(w.Document.Serialized(presentation)))
-                        if (entry.Id == e.RawId && !w.Document.Playback.Live) { w.Document.Playback.Seek(entry.Time, editor.Duration(presentation)); break; }
+                        if (entry.Id == e.ActionId && !w.Document.Playback.Live) { w.Document.Playback.Seek(entry.Time, editor.Duration(presentation)); break; }
                 }
-                else if(SkillActionNavigation.Select(w.Document,e.NavigationId ?? e.RawId) || (e.NavigationId != e.RawId && SkillActionNavigation.Select(w.Document,e.RawId)))w.Document.OpenFlow();
+                else if(SkillActionNavigation.Select(w.Document,e.ActionId))w.Document.OpenFlow();
             }};
             _traceFilter.RegisterValueChangedCallback(_=>{_lastSequence=-1; RefreshTrace(RuntimeDebugSession.Current);});
             _watch=new Label{style={whiteSpace=WhiteSpace.Normal}}; Section("断点监视","debug-watch").Add(_watch);
@@ -201,9 +201,9 @@ namespace ZFramework.GAS.Editor
                 if (value.Active && value.OnCooldown) status += " · 冷却中";
                 if ((value.Active || value.OnCooldown) && !value.TagGatePassed) status += " · 标签门禁未通过";
                 row.ActionId = null;
-                if (!value.Failure.Succeeded)
-                    status += "\n最近失败：" + value.Failure.Message + (value.Failure.Tag.IsValid ? " · " + value.Failure.Tag.Name : "") +
-                        (value.Failure.Amount > 0 ? " · " + value.Failure.Amount.ToString("0.###") : "");
+                if (!value.ActivationCheck.Succeeded)
+                    status += "\n当前激活检查：" + value.ActivationCheck.Message + (value.ActivationCheck.Tag.IsValid ? " · " + value.ActivationCheck.Tag.Name : "") +
+                        (value.ActivationCheck.Amount > 0 ? " · " + value.ActivationCheck.Amount.ToString("0.###") : "");
                 foreach (var parameter in value.Parameters)
                 {
                     string label = parameter.Key;
@@ -220,14 +220,14 @@ namespace ZFramework.GAS.Editor
             for (int i = 0; i < _actions.Count; i++)
             {
                 var state = snapshot.Actions[i]; var row = _actions[i]; row.Asset = state.Asset; row.ActionId = state.Id;
-                row.Fill((state.Asset != null ? state.Asset.DisplayName : "技能") + (state.Independent ? " · 场景任务" : " · 技能任务"), state.State, SkillColors.Task);
+                row.Fill((state.Asset != null ? state.Asset.DisplayName : "技能") + " · 技能任务", state.State, SkillColors.Task);
             }
             if (_taskHost != null) Resize(_tasks, _taskHost, snapshot.Tasks.Count, task: true);
             for (int i = 0; i < _tasks.Count; i++)
             {
                 var task = snapshot.Tasks[i];
                 _tasks[i].Fill(task.AbilityName + " · " + task.ClipName,
-                    $"实际 {task.NormalizedTime * task.Duration:0.00} / {task.Duration:0.00}s  ·  授权 {task.AuthoredTime:0.00} / {task.AuthoredDuration:0.00}s" + (task.Loop ? "  · 循环" : ""), SkillColors.Animation);
+                    $"{task.Time:0.00} / {task.Duration:0.00}s" + (task.Loop ? "  · 循环" : ""), SkillColors.Animation);
                 task.BindStrip(_tasks[i].Strip);
             }
             Resize(_tags, _tagHost, snapshot.Tags.Count);

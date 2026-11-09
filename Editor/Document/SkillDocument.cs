@@ -143,7 +143,6 @@ namespace ZFramework.GAS.Editor
         public void Notify(ChangeSet change) => Notify(change, false);
         private void Notify(ChangeSet change, bool restoreSubassets)
         {
-            SkillContentIndex.Invalidate(change.Asset);
             bool structure = change.Structure || change.Paths.Length == 0;
             if (!structure && change.Asset != null)
                 foreach (string path in change.Paths)
@@ -238,7 +237,7 @@ namespace ZFramework.GAS.Editor
         private void Visit(ScriptableObject asset, HashSet<ScriptableObject> visited, bool restoreSubassets = false)
         {
             if (asset == null || !visited.Add(asset)) return;
-            if (!(asset is GameplayAbilityAsset || asset is GameplayEffectAsset || SkillEditorExtensions.Supports(asset) || asset is SkillActionModuleAsset || asset is SkillParameterSetAsset)) return;
+            if (!(asset is GameplayAbilityAsset || asset is GameplayEffectAsset || SkillEditorExtensions.Supports(asset))) return;
             _assets.Add(asset);
             foreach (var child in AssetReferences.Children(asset))
             {
@@ -273,7 +272,7 @@ namespace ZFramework.GAS.Editor
             var p = so.GetIterator();
             while (p.Next(true))
                 if (p.propertyType == SerializedPropertyType.ObjectReference && p.objectReferenceValue is ScriptableObject child &&
-                    (child is GameplayEffectAsset || SkillEditorExtensions.Supports(child) || child is SkillActionModuleAsset || child is SkillParameterSetAsset)) yield return child;
+                    (child is GameplayEffectAsset || SkillEditorExtensions.Supports(child))) yield return child;
         }
         public static void Replace(SerializedObject so, Object from, Object to)
         {

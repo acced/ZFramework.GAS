@@ -55,14 +55,15 @@ namespace ZFramework.GAS.Unity
                         if (TargetQuery.IsVolume(query.Kind))
                         {
                             var frame = c.Services.Origin != null ? c.Services.Origin.rotation : Quaternion.LookRotation(c.Forward);
-                            c.Services.Searcher.QueryAt(query, c, buffer, query.Center(c) + frame * _window._offset, frame * _window._rotation * Vector3.forward);
+                            c.Services.Searcher.Query(query, c, buffer, query.Center(c) + frame * _window._offset, frame * _window._rotation * Vector3.forward);
                         }
                         else c.Services.Searcher.Query(query, c, buffer);
                         GasAssert.That(!buffer.Saturated, "命中窗口的目标缓冲区已满。");
                         for (int i = 0; i < buffer.Count && pass == _pass && c.CanContinue; i++)
                         {
                             var unit = buffer.Units[i];
-                            if (buffer.IsCurrent(i) && c.Allows(query, unit) && _hit.Add(unit.SourceIdentity))
+                            if (buffer.IsCurrent(i) && c.Allows(query, unit) && buffer.IsCurrent(i) &&
+                                pass == _pass && c.CanContinue && _hit.Add(unit.SourceIdentity))
                                 unit.Effects.Apply(c.Effect(_window._effect));
                         }
                     }

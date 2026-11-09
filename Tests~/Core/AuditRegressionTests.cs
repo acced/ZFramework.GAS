@@ -27,22 +27,52 @@ internal static class AuditRegressionTests
         owner.Effects.Apply(new GameplayEffectSpec(outer)); health.OnCurrentValueChanged -= reenter;
         Check(second.BaseValue == 88, "A reentrant instant effect must not overwrite the outer prepared magnitudes."); health.BaseValue = 100;
 
-        var values = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase) { ["DAMAGE"] = -1 };
-        var damage = Effect(EffectMagnitude.FromCaller("damage"));
+        var expectedChild = Effect(EffectMagnitude.Fixed(-2));
+        var replacementChild = Effect(EffectMagnitude.Fixed(-50));
+        var expectedParent = new GameplayEffectDefinition(EffectDurationPolicy.Instant,
+            modifiers: new[] { new EffectModifier(id, ModifierOperation.Add, EffectMagnitude.Fixed(-1)) },
+            conditionalEffects: new[] { new ConditionalEffect(expectedChild, EffectTrigger.Applied) });
+        var replacementParent = new GameplayEffectDefinition(EffectDurationPolicy.Instant,
+            conditionalEffects: new[] { new ConditionalEffect(replacementChild, EffectTrigger.Applied) });
+        var request = new GameplayEffectSpec(expectedParent);
+        Action<GameplayAttribute, float, float> replaceRequest = (_, _, _) => request = new GameplayEffectSpec(replacementParent);
+        health.OnCurrentValueChanged += replaceRequest;
+        owner.Effects.Apply(in request); health.OnCurrentValueChanged -= replaceRequest;
+        Check(health.BaseValue == 97, "Replacing the caller's spec during a modifier callback must not replace the current application's children.");
+        health.BaseValue = 100;
+
+        var values = new Dictionary<string, SkillParameterValue> { ["damage"] = new SkillParameterValue(-1f) };
+        var context = new EffectEvaluationContext(1, new SkillParameterValues(values));
+        var damage = Effect(EffectMagnitude.FromParameter("damage"));
         var periodic = new GameplayEffectDefinition(EffectDurationPolicy.Duration, 2, period: 1,
             conditionalEffects: new[] { new ConditionalEffect(damage, EffectTrigger.Periodic) });
-        owner.Effects.Apply(new GameplayEffectSpec(periodic, setByCallerValues: values)); values["damage"] = -999;
-        owner.Tick(1); Check(health.BaseValue == 99, "Snapshot must preserve comparer and original values."); owner.Effects.Clear();
-        values["damage"] = 0;
-        var hit = new GameplayEffectSpec(damage, setByCallerValues: values); owner.Effects.Apply(hit);
+        values["damage"] = new SkillParameterValue(-999f);
+        owner.Effects.Apply(new GameplayEffectSpec(periodic, context: context));
+        owner.Tick(1); Check(health.BaseValue == 99, "Typed parameters must be frozen at construction, before an effect is applied."); owner.Effects.Clear();
+
+        values["damage"] = new SkillParameterValue(-2f);
+        context = new EffectEvaluationContext(1, new SkillParameterValues(values));
+        var parent = new GameplayEffectDefinition(EffectDurationPolicy.Instant,
+            modifiers: new[] { new EffectModifier(id, ModifierOperation.Add, EffectMagnitude.Fixed(-1)) },
+            conditionalEffects: new[] { new ConditionalEffect(damage, EffectTrigger.Applied) });
+        health.BaseValue = 100;
+        Action<GameplayAttribute, float, float> mutateInput = (_, _, _) => values["damage"] = new SkillParameterValue(-999f);
+        health.OnCurrentValueChanged += mutateInput;
+        owner.Effects.Apply(new GameplayEffectSpec(parent, context: context));
+        health.OnCurrentValueChanged -= mutateInput;
+        Check(health.BaseValue == 97, "An applied child must inherit immutable parameters across parent callbacks.");
+
+        values["damage"] = new SkillParameterValue(0f);
+        context = new EffectEvaluationContext(1, new SkillParameterValues(values));
+        var hit = new GameplayEffectSpec(damage, context: context); owner.Effects.Apply(hit);
         long bytes = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 10000; i++) owner.Effects.Apply(hit);
-        Check(GC.GetAllocatedBytesForCurrentThread() == bytes, "Instant caller values must retain the warmed zero-allocation path.");
+        Check(GC.GetAllocatedBytesForCurrentThread() == bytes, "Instant typed parameters must retain the warmed zero-allocation path.");
         var blocked = new GameplayEffectSpec(new GameplayEffectDefinition(EffectDurationPolicy.Duration, 2,
-            tags: new EffectTags(applicationRequired: new GameplayTagSet("Buff.Rage"))), setByCallerValues: values);
+            tags: new EffectTags(applicationRequired: new GameplayTagSet("Buff.Rage"))), context: context);
         owner.Effects.Apply(blocked); bytes = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 10000; i++) owner.Effects.Apply(blocked);
-        Check(GC.GetAllocatedBytesForCurrentThread() == bytes, "Blocked persistent effects must not allocate a caller snapshot.");
+        Check(GC.GetAllocatedBytesForCurrentThread() == bytes, "Blocked persistent effects must not allocate a parameter copy.");
 
         var ability = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(ability); ability.Level = 3;
         Check(ability.EvaluationContext?.Level == 1, "Level one must be frozen for the entire activation.");

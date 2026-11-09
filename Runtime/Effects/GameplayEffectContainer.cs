@@ -114,7 +114,6 @@ namespace ZFramework.GAS
 
             if (definition.DurationPolicy == EffectDurationPolicy.Instant)
             {
-                if (definition.ConditionalEffects.Length != 0) spec = spec.Snapshot();
                 if (resolved) ApplyMagnitudes(definition.Modifiers, magnitudes, 1);
                 else ApplyInstant(spec, stackCount: 1);
                 GasDebugHooks.Apply(_owner, definition, spec.Source, 1);
@@ -124,7 +123,7 @@ namespace ZFramework.GAS
                 return EffectApplicationResult.Completed;
             }
 
-            if (!resolved) { period = ResolvePeriod(spec); duration = ResolveDuration(spec); }
+            if (!resolved) { period = spec.ResolvePeriod(_attributes); duration = spec.ResolveDuration(_attributes); }
             ActiveGameplayEffect existing = FindStackable(spec);
             if (existing != null)
             {
@@ -151,8 +150,6 @@ namespace ZFramework.GAS
                 return EffectApplicationResult.Stacked;
             }
 
-            // Reapplications use the retained spec. Copy caller values only when publishing a new effect.
-            spec = spec.Snapshot();
             ActiveGameplayEffect active = RentEffect(
                 definition, spec.Source, period, duration);
             active.Spec = spec;
@@ -173,7 +170,7 @@ namespace ZFramework.GAS
                 PrepareModifierAttributes(active, modifiers);
                 for (int i = 0; i < modifiers.Length && !active.PendingRemove; i++)
                     active.ModifierAttributes[i]?.AddModifier(
-                        new AttributeModifier(modifiers[i].Target, modifiers[i].Operation, active.ResolvedMagnitudes[i]), active);
+                        modifiers[i].Operation, active.ResolvedMagnitudes[i], active);
             }
 
             for (int i = 0; i < tags.Granted.Count && !active.PendingRemove; i++)
@@ -289,18 +286,6 @@ namespace ZFramework.GAS
             }
 
             info = CreateInfo(effect);
-            return true;
-        }
-
-        public bool TryGetRemainingTime(ActiveGameplayEffectHandle handle, out float remainingTime)
-        {
-            if (!TryGetInfo(handle, out ActiveGameplayEffectInfo info))
-            {
-                remainingTime = 0f;
-                return false;
-            }
-
-            remainingTime = info.RemainingTime;
             return true;
         }
 
@@ -605,9 +590,6 @@ namespace ZFramework.GAS
             effect.ElapsedTime = 0f;
             effect.PeriodTimer = 0f;
         }
-
-        private float ResolvePeriod(in GameplayEffectSpec spec) => spec.ResolvePeriod(_attributes);
-        private float ResolveDuration(in GameplayEffectSpec spec) => spec.ResolveDuration(_attributes);
 
         private void PrepareModifierAttributes(ActiveGameplayEffect effect, ReadOnlySpan<EffectModifier> modifiers)
         {

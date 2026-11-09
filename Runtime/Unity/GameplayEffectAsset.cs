@@ -1,6 +1,5 @@
 using GameplayTags;
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace ZFramework.GAS.Unity
@@ -17,26 +16,18 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private float coefficient = 1f;
         [SerializeField, AttributeIdField] private int captureAttributeId;
         [SerializeField] private MagnitudeCapture captureFrom = MagnitudeCapture.Source;
-        [SerializeField, CallerKey] private string callerKey;
         [SerializeField, SkillParameterReference] private string parameterId;
         [SerializeField] private float[] levels = new[] { 0f };
-        [SerializeField, AttributeIdField] private int targetAttributeId;
-        [SerializeField] private float targetCoefficient = 1;
-        [SerializeField] private float minimum;
-        [SerializeField] private float maximum = float.MaxValue;
-        [SerializeField, SkillParameterReference] private string multiplierParameterId;
-        [SerializeField] private float resultScale = -1;
+        [SerializeReference] private IEffectCalculation calculation;
 
         public EffectMagnitude Build() => kind switch
         {
             MagnitudeKind.Fixed => EffectMagnitude.Fixed(constant),
             MagnitudeKind.AttributeScaled => EffectMagnitude.FromAttribute(
                 new AttributeId(captureAttributeId), coefficient, captureFrom, constant),
-            MagnitudeKind.SetByCaller => EffectMagnitude.FromCaller(callerKey),
             MagnitudeKind.Parameter => EffectMagnitude.FromParameter(parameterId, coefficient, constant),
             MagnitudeKind.LevelTable => EffectMagnitude.ByLevel(levels),
-            MagnitudeKind.Calculation => EffectMagnitude.FromCalculation(new AttributeFormula(new AttributeId(captureAttributeId),
-                new AttributeId(targetAttributeId), coefficient, targetCoefficient, constant, parameterId, minimum, maximum, resultScale,multiplierParameterId)),
+            MagnitudeKind.Calculation => EffectMagnitude.FromCalculation(calculation),
             _ => throw new InvalidOperationException($"Unhandled magnitude kind {kind}."),
         };
     }
@@ -85,15 +76,11 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private float duration;
         [SerializeField] private bool useDurationMagnitude;
         [SerializeField] private MagnitudeAsset durationMagnitude = new();
-        [Tooltip("大于 0 时改从来源的该属性读取时长，覆盖上面的固定值")]
-        [SerializeField, AttributeIdField] private int durationAttributeId = -1;
 
         [Header("周期")]
         [SerializeField] private float period;
         [SerializeField] private bool usePeriodMagnitude;
         [SerializeField] private MagnitudeAsset periodMagnitude = new();
-        [Tooltip("大于等于 0 时改从来源的该属性读取周期，覆盖上面的固定值")]
-        [SerializeField, AttributeIdField] private int periodAttributeId = -1;
         [SerializeField] private bool executePeriodicOnApplication;
 
         [Header("修改器与标签")]
@@ -131,15 +118,8 @@ namespace ZFramework.GAS.Unity
                 builtModifiers[i] = modifiers[i].Build();
             }
 
-            var children = new List<ConditionalEffect>(conditionalEffects.Length);
-            for (int i = 0; i < conditionalEffects.Length; i++)
-            {
-                ConditionalEffect? child = conditionalEffects[i].Build(this);
-                if (child.HasValue)
-                {
-                    children.Add(child.Value);
-                }
-            }
+            var children = new ConditionalEffect[conditionalEffects.Length];
+            for (int i = 0; i < children.Length; i++) children[i] = conditionalEffects[i].Build(this);
 
             var definition = new GameplayEffectDefinition(
                 durationPolicy,
@@ -148,11 +128,9 @@ namespace ZFramework.GAS.Unity
                 tags.Build(),
                 new EffectStackingRule(stackingMode, stackLimit, overflowPolicy),
                 period,
-                periodAttributeId >= 0 ? new AttributeId(periodAttributeId) : null,
                 executePeriodicOnApplication,
                 TagAssetUtility.ToSet(cueTags),
-                durationAttributeId >= 0 ? new AttributeId(durationAttributeId) : null,
-                children.Count == 0 ? null : children.ToArray(),
+                children,
                 useDurationMagnitude ? durationMagnitude.Build() : null,
                 usePeriodMagnitude ? periodMagnitude.Build() : null);
             DefinitionSource.Register(definition, this);
@@ -170,21 +148,8 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private GameplayEffectAsset effect;
         [SerializeField] private EffectTrigger trigger = EffectTrigger.Applied;
 
-        /// <summary>未配置子效果资产时返回 null 并告警——静默丢弃会让配置错误难以察觉。</summary>
-        public ConditionalEffect? Build(GameplayEffectAsset owner)
+        public ConditionalEffect Build(GameplayEffectAsset owner)
         {
-            if (effect == null)
-            {
-                Debug.LogWarning($"[{owner.name}] A conditional effect entry has no effect asset assigned; it was skipped.", owner);
-                return null;
-            }
-
-            if (effect == owner)
-            {
-                Debug.LogError($"[{owner.name}] A conditional effect references its own asset, which would recurse; it was skipped.", owner);
-                return null;
-            }
-
             DefinitionSource.DependsOn(owner, effect);
             return new ConditionalEffect(effect.Definition, trigger);
         }

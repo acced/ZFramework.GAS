@@ -18,7 +18,8 @@ namespace ZFramework.GAS.Editor.Tests
             var owner = new AbilitySystemComponent(1);
             try
             {
-                var skill = SkillTemplateRegistry.Create(path);
+                var skill = ScriptableObject.CreateInstance<GameplayAbilityAsset>();
+                AssetDatabase.CreateAsset(skill, path);
                 Assert.IsNull(skill.Presentation);
                 Assert.IsNull(skill.Definition.Cost);
                 Assert.IsNull(skill.Definition.Cooldown);

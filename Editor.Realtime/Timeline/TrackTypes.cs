@@ -85,23 +85,6 @@ namespace ZFramework.GAS.Editor
         public override void InitializeNew(SerializedProperty e, float time, Object dropped)
         { base.InitializeNew(e, time, dropped); e.FindPropertyRelative("tags").ClearArray(); }
     }
-    public sealed class SectionTrack : TrackType
-    {
-        public override string DisplayName => "动画段";
-        public override Color Color => SkillColors.Animation;
-        public override string PropertyPath => "sections";
-        public override TrackElementShape Shape => TrackElementShape.Range;
-        public override string Label(SerializedProperty e) => e.FindPropertyRelative("displayName").stringValue;
-        public override void InitializeNew(SerializedProperty e, float time, Object dropped)
-        {
-            base.InitializeNew(e, time, dropped);
-            e.FindPropertyRelative("displayName").stringValue = "新动画段";
-            e.FindPropertyRelative("end").floatValue = time + .5f;
-            e.FindPropertyRelative("nextSectionId").stringValue = "";
-            e.FindPropertyRelative("inputBufferStart").floatValue = time;
-            e.FindPropertyRelative("inputBufferEnd").floatValue = time + .5f;
-        }
-    }
     public sealed class HitWindowTrack : TrackType
     {
         public override string DisplayName => "命中窗口";
@@ -126,15 +109,14 @@ namespace ZFramework.GAS.Editor
     }
     public sealed class RuntimeTrack : TrackType
     {
-        public override string DisplayName => "曲线 / 扩展轨道";
+        public override string DisplayName => "音效 / 扩展轨道";
         public override Color Color => SkillColors.Task;
         public override string PropertyPath => "runtimeTracks";
         public override TrackElementShape Shape => TrackElementShape.Range;
         public override string Label(SerializedProperty element) => element.managedReferenceValue switch {
-            CurveSkillTrack curve=>string.IsNullOrEmpty(curve.channelId)?"曲线":curve.channelId, CameraShakeTrack=>"震屏",
-            HitStopTrack=>"顿帧",TimeScaleTrack=>"全局变速",LookAtTrack=>"瞄准",null=>"未配置",var track=>track.GetType().Name };
+            AudioSkillTrack audio => audio.clip != null ? audio.clip.name : "音效", null => "未配置", var track => track.GetType().Name };
         public override void InitializeNew(SerializedProperty element, float time, Object dropped)
-        { element.managedReferenceValue = new CurveSkillTrack { start = time, end = time + .25f }; base.InitializeNew(element, time, dropped); element.FindPropertyRelative("end").floatValue = time + .25f; }
+        { element.managedReferenceValue = new AudioSkillTrack { start = time, end = time + .25f }; base.InitializeNew(element, time, dropped); element.FindPropertyRelative("end").floatValue = time + .25f; }
     }
     public static class TrackTypeRegistry
     {

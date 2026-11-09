@@ -42,21 +42,7 @@ namespace ZFramework.GAS.Editor.Tests
             var toggle = fold.Q<Toggle>(); var point = toggle.worldBound.center;
             Pointer(toggle, EventType.MouseDown, point); Pointer(toggle, EventType.MouseUp, point);
         }
-        [Test] public void ParameterUsesCountBindingsButDeclarationsAndDescriptionsRemainSearchable()
-        {
-            string used = _skill.parameters[0].Id, unused = _skill.parameters[1].Id;
-            _skill.parameters[1].description = used;
-            _skill.activationActions = new SkillAction[] {
-                new SpawnPrefabAction { count = new SkillNumber(1) { parameterId = used } }
-            };
-            var counts = new Dictionary<string, int>();
-            SkillContentIndex.CountParameterUses(_skill, counts);
-            Assert.AreEqual(1, counts[used]);
-            Assert.IsFalse(counts.ContainsKey(unused));
-            var hits = new List<SkillContentIndex.Hit>();
-            SkillContentIndex.Search(unused, hits);
-            Assert.IsTrue(hits.Any(h => h.Asset == _skill && h.Path == "parameters.Array.data[1].id"));
-        }
+
         [UnityTest] public IEnumerator ParameterFoldoutClickSurvivesFocusAndDoesNotEditAsset()
         {
             var window = SkillEditorWindow.Open(); window.position = new Rect(10, 10, 1280, 900); window.Show(_skill); window.ShowAbilitySettings();
@@ -99,48 +85,7 @@ namespace ZFramework.GAS.Editor.Tests
             external.FindProperty("description").stringValue = "外部编辑"; external.ApplyModifiedProperties();
             doc.RefreshIfChanged(); Assert.AreEqual(2, changes, "Focus must still detect external changes.");
         }
-        [UnityTest] public IEnumerator SharedParameterNestedFoldoutAndEditSupportRebindAndUndo()
-        {
-            var shared = ScriptableObject.CreateInstance<SkillParameterSetAsset>();
-            shared.parameters = new[] { new SkillParameter { displayName = "共享伤害系数", defaultValue = 1, levels = new[] { 1f, 2f } } };
-            AssetDatabase.CreateAsset(shared, Folder + "/Shared.asset"); _skill.parameterSet = shared;
-            var window = SkillEditorWindow.Open(); window.position = new Rect(10, 10, 1280, 900); window.Show(_skill);
-            window.Document.Selection.Select(shared);
-            var details = window.rootVisualElement.Q<DetailsPanel>();
-            for (int frame = 0; frame < 5; frame++) yield return null;
-            details.Query<Foldout>().ToList().First(f => f.bindingPath == "parameters").value = true;
-            for (int frame = 0; frame < 10; frame++) yield return null;
-            Foldout SharedParameter() => details.Query<Foldout>().ToList().First(f => f.bindingPath == "parameters.Array.data[0]");
-            var parent = SharedParameter(); parent.value = true;
-            for (int frame = 0; frame < 5; frame++) yield return null;
-            int changes = 0; window.Document.Changed += _ => changes++;
-            var levels = parent.Query<Foldout>().ToList().First(f => f.bindingPath.EndsWith(".levels"));
-            for (int i = 0; i < 4; i++)
-            {
-                bool expected = !levels.value; Click(levels);
-                for (int frame = 0; frame < 4; frame++) yield return null;
-                Assert.AreEqual(expected, levels.value); Assert.IsTrue(parent.value);
-                Assert.AreSame(parent, SharedParameter(), "Nested expansion must not replace the parent control.");
-            }
-            Assert.AreEqual(0, changes);
-            var field = parent.Query<FloatField>().ToList().First(f => f.bindingPath.EndsWith(".defaultValue"));
-            Undo.IncrementCurrentGroup(); field.value = 3.5f;
-            for (int frame = 0; frame < 10; frame++) yield return null;
-            Assert.AreEqual(3.5f, shared.parameters[0].defaultValue); Assert.Greater(changes, 0);
-            Undo.FlushUndoRecordObjects(); Undo.PerformUndo();
-            for (int frame = 0; frame < 5; frame++) yield return null;
-            Assert.AreEqual(1f, shared.parameters[0].defaultValue);
-            Undo.PerformRedo();
-            for (int frame = 0; frame < 5; frame++) yield return null;
-            Assert.AreEqual(3.5f, shared.parameters[0].defaultValue); Assert.IsTrue(SharedParameter().value);
-            string id = shared.parameters[0].Id;
-            SharedParameter().Query<TextField>().ToList().First(f => f.bindingPath.EndsWith(".displayName")).value = "新的显示名";
-            for (int frame = 0; frame < 10; frame++) yield return null;
-            Assert.AreEqual("新的显示名", SharedParameter().text); Assert.AreEqual(id, shared.parameters[0].Id);
-            window.Document.Notify(new ChangeSet(shared, true));
-            for (int frame = 0; frame < 10; frame++) yield return null;
-            Assert.IsTrue(SharedParameter().value, "Explicit data refresh must retain expansion.");
-        }
+
         [UnityTest] public IEnumerator OpeningAnotherDocumentDropsOldPendingBindingNotifications()
         {
             using var doc = new SkillDocument(); doc.Open(_skill);

@@ -64,8 +64,7 @@ namespace ZFramework.GAS.Editor
                     actionDepth = cursor.propertyType == SerializedPropertyType.ManagedReference && cursor.managedReferenceValue is SkillAction
                         ? cursor.depth : int.MaxValue;
                 if (cursor.propertyType == SerializedPropertyType.ObjectReference && cursor.objectReferenceValue is ScriptableObject child &&
-                    (child is SkillActionModuleAsset || child is SkillParameterSetAsset ||
-                        cursor.depth > actionDepth && (child is GameplayEffectAsset || SkillEditorExtensions.Supports(child))))
+                    cursor.depth > actionDepth && (child is GameplayEffectAsset || SkillEditorExtensions.Supports(child)))
                     yield return new AssetLink(asset, new PortId(PortKind.ActionReference, cursor.propertyPath), child);
             }
         }

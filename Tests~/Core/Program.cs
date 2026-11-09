@@ -71,13 +71,13 @@ internal static class Program
         Check(authored[0].Name == "" && authored[1].Name == "Buff.Rage" && !authored[1].IsValid && authored[3].Name == "Old.Removed", "Building must not mutate serialized tag fields");
         var asc = new AbilitySystemComponent();
         var spec = asc.GrantAbility(definition);
-        Check(asc.TryActivateAbility(spec) == AbilityActivationResult.Blocked, "Nonempty required conditions still apply");
+        Check(asc.TryActivateAbility(spec).Result == AbilityActivationResult.Blocked, "Nonempty required conditions still apply");
         asc.Effects.Apply(new GameplayEffectSpec(new GameplayEffectDefinition(EffectDurationPolicy.Infinite,
             tags: new EffectTags(granted: resolved))));
         Check(!asc.OwnedTags.HasTag(GameplayTag.None) && asc.OwnedTags.GetExplicitTagCount("Buff.Rage") == 1, "Granted tags must exclude invalid rows");
-        Check(asc.TryActivateAbility(spec) == AbilityActivationResult.Activated, "Valid required rows permit activation");
+        Check(asc.TryActivateAbility(spec).Result == AbilityActivationResult.Activated, "Valid required rows permit activation");
         var empty = TagAssetUtility.ToSet(new[] { default(GameplayTag), new GameplayTag { m_Name = "" } });
-        Check(empty.IsEmpty && asc.TryActivateAbility(asc.GrantAbility(new GameplayAbilityDefinition(activationRequiredTags: empty))) == AbilityActivationResult.Activated, "All-blank required rows mean no requirements");
+        Check(empty.IsEmpty && asc.TryActivateAbility(asc.GrantAbility(new GameplayAbilityDefinition(activationRequiredTags: empty))).Result == AbilityActivationResult.Activated, "All-blank required rows mean no requirements");
         Check(TagAssetUtility.ToSet(null).IsEmpty && TagAssetUtility.ToSet(Array.Empty<GameplayTag>()).IsEmpty, "Null and empty asset lists remain empty");
         authored[1] = new GameplayTag { m_Name = "Debuff.Poison" };
         Check(resolved[0] == (GameplayTag)"Buff.Rage", "Built configuration remains independent of subsequent asset edits");
@@ -100,8 +100,8 @@ internal static class Program
             activationRequiredTags: new GameplayTagSet("Ability.Attack")));
         var sibling = asc.GrantAbility(new GameplayAbilityDefinition(
             activationRequiredTags: new GameplayTagSet("Ability.AttackSpeed")));
-        Check(asc.TryActivateAbility(parent) == AbilityActivationResult.Activated, "Parent must match");
-        Check(asc.TryActivateAbility(sibling) == AbilityActivationResult.Blocked, "Sibling must not match");
+        Check(asc.TryActivateAbility(parent).Result == AbilityActivationResult.Activated, "Parent must match");
+        Check(asc.TryActivateAbility(sibling).Result == AbilityActivationResult.Blocked, "Sibling must not match");
         var blocked = new GameplayEffectDefinition(EffectDurationPolicy.Instant,
             tags: new EffectTags(applicationBlocked: new GameplayTagSet("Ability.Attack")));
         Check(asc.Effects.Apply(new GameplayEffectSpec(blocked)) == EffectApplicationResult.Blocked, "Parent forbids child");
@@ -140,7 +140,7 @@ internal static class Program
             tags: new EffectTags(applicationRequired: new GameplayTagSet("Buff.Rage"), applicationBlocked: new GameplayTagSet("Buff")));
         for (int i = 0; i < 2; i++)
         {
-            Check(asc.TryActivateAbility(spec) == AbilityActivationResult.Blocked, "Contradictory ability");
+            Check(asc.TryActivateAbility(spec).Result == AbilityActivationResult.Blocked, "Contradictory ability");
             Check(asc.Effects.Apply(new GameplayEffectSpec(effect)) == EffectApplicationResult.Blocked, "Contradictory effect");
             if (i == 0) asc.OwnedTags.AddTag("Buff.Rage");
         }
@@ -152,11 +152,11 @@ internal static class Program
         var cooldown = new GameplayEffectDefinition(EffectDurationPolicy.Duration, duration: 2,
             tags: new EffectTags(granted: new GameplayTagSet("Cooldown.Attack")));
         var spec = asc.GrantAbility(new GameplayAbilityDefinition(cooldown: cooldown));
-        Check(asc.TryActivateAbility(spec) == AbilityActivationResult.Activated, "First activation");
+        Check(asc.TryActivateAbility(spec).Result == AbilityActivationResult.Activated, "First activation");
         asc.EndAbility(spec);
-        Check(asc.TryActivateAbility(spec) == AbilityActivationResult.OnCooldown, "Cooldown blocks");
+        Check(asc.TryActivateAbility(spec).Result == AbilityActivationResult.OnCooldown, "Cooldown blocks");
         asc.Tick(2);
-        Check(asc.TryActivateAbility(spec) == AbilityActivationResult.Activated, "Cooldown expires");
+        Check(asc.TryActivateAbility(spec).Result == AbilityActivationResult.Activated, "Cooldown expires");
         asc.Clear();
         Check(asc.OwnedTags.IsEmpty && asc.Effects.Count == 0, "Clear releases cooldown");
     }
@@ -249,9 +249,9 @@ internal static class Program
         for (int i = 0; i < 10000; i++) { asc.Attributes.CopyTo(list); _ = asc.GetActiveTask(0); }
         Check(GC.GetAllocatedBytesForCurrentThread() == before, "Warm debug readback must allocate zero bytes");
         asc.EndAbility(ability); Check(asc.ActiveTaskCount == 0 && !task.IsActive, "Readback does not change task cancellation semantics");
-        asc.Attributes.Remove(attack.Id); asc.Attributes.CopyTo(list);
-        Check(list.Count == 1 && ReferenceEquals(list[0], health), "CopyTo drops removed attributes");
-        asc.Attributes.Clear(); asc.Attributes.CopyTo(list); Check(list.Count == 0, "Empty CopyTo clears the destination");
+        asc.Clear(); asc.Attributes.CopyTo(list);
+        Check(list.Count == 2 && ReferenceEquals(asc.Attributes.Get(health.Id), health), "ASC reuse retains the fixed attribute schema.");
+        new AttributeSet().CopyTo(list); Check(list.Count == 0, "Empty CopyTo clears the destination");
     }
 
     private static void CountEvents()

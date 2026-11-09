@@ -1,208 +1,59 @@
 using GameplayTags;
 using System;
+using System.Collections.Generic;
+using UnityEngine;
 
 namespace ZFramework.GAS.Unity
 {
-    /// <summary>稳定 ID 的时间轴事件；名称仅用于显示，逻辑由动作列表执行。</summary>
     public readonly struct AnimationMarker
     {
-        /// <summary>相对<b>授权时长</b>的秒数；运行期按实际时长等比缩放。</summary>
         public readonly float Time;
-
-        /// <summary>
-        /// 授权侧给这个时间点起的名字，回调据此分辨是哪一下（<c>"命中"</c> / <c>"发射"</c>…）。
-        /// 用名字而非下标：时间轴上拖动会改变先后顺序，下标不稳定。可为空。
-        /// </summary>
-        public readonly string Key;
-        public readonly string Id;
-        public readonly System.Collections.Generic.IReadOnlyList<SkillActionDefinition> Actions;
-
+        public readonly string Key, Id;
+        public readonly IReadOnlyList<SkillActionDefinition> Actions;
         public AnimationMarker(float time, string key = null, string id = null, SkillActionDefinition[] actions = null)
         {
-            if (time < 0f || float.IsNaN(time))
-            {
-                throw new ArgumentOutOfRangeException(nameof(time), time, "Marker time must be a non-negative number.");
-            }
-
-            Time = time;
-            Key = string.IsNullOrEmpty(key) ? null : key;
-            Id = id;
+            Time = time; Key = key; Id = id;
             Actions = Array.AsReadOnly(actions == null ? Array.Empty<SkillActionDefinition>() : (SkillActionDefinition[])actions.Clone());
         }
     }
 
-    /// <summary>
-    /// 时间轴上的一个区间，映射到一对 Cue 事件：开始派发
-    /// <see cref="GameplayCueEvent.OnActive"/>，结束派发 <see cref="GameplayCueEvent.Removed"/>。
-    /// 不引入新概念——持续特效、蓄力音效都是这一对时机。
-    /// </summary>
     public readonly struct AnimationCueRegion
     {
-        public readonly float Start;
-
-        /// <summary>小于 0 表示随动画结束。</summary>
-        public readonly float End;
-
+        public readonly float Start, End;
         public readonly GameplayTag CueTag;
-
         public AnimationCueRegion(float start, float end, GameplayTag cueTag)
-        {
-            if (start < 0f || float.IsNaN(start))
-            {
-                throw new ArgumentOutOfRangeException(nameof(start), start, "Region start must be a non-negative number.");
-            }
-
-            if (float.IsNaN(end) || (end >= 0f && end < start))
-            {
-                throw new ArgumentOutOfRangeException(nameof(end), end,
-                    "Region end must not precede its start; use a negative value to end with the animation.");
-            }
-
-            if (!cueTag.IsValid)
-            {
-                throw new ArgumentException("Region cue tag is not valid.", nameof(cueTag));
-            }
-
-            Start = start;
-            End = end < 0f ? -1f : end;
-            CueTag = cueTag;
-        }
+        { Start = start; End = end; CueTag = cueTag; }
     }
 
-    /// <summary>
-    /// 一段技能动画的不可变运行期定义：播哪个动画、多长、是否循环，
-    /// 以及时间轴上的标记点与 Cue 区间。
-    ///
-    /// <b>时间单位一律是秒</b>。「第几帧」只是编辑器的显示方式，
-    /// 不存在任何硬编码帧率参与运行期计算。
-    ///
-    /// <see cref="Duration"/> 是<b>授权时长</b>，也就是时间轴的长度。运行期实际时长
-    /// （驱动的自然时长，或施法时下达的覆盖值）与它的比值就是标记点的缩放系数——
-    /// 因此攻击动画被攻速拉快时，命中点仍落在同一个相对位置上。
-    /// </summary>
+    /// <summary>Shared timeline data; all per-cast state belongs to AnimationTask.</summary>
     public sealed class SkillAnimationDefinition
     {
-        private static readonly AnimationMarker[] NoMarkers = Array.Empty<AnimationMarker>();
-        private static readonly AnimationCueRegion[] NoRegions = Array.Empty<AnimationCueRegion>();
-
-        public string ClipName { get; }
-
-        /// <summary>授权时长（秒），必须为正——它同时是时间轴长度与标记点缩放的分母。</summary>
+        private readonly AnimationMarker[] _markers;
+        private readonly AnimationCueRegion[] _cues;
+        private readonly AnimationTagWindow[] _tags;
+        public AnimationClip Clip { get; }
         public float Duration { get; }
-
         public bool Loop { get; }
+        public float BlendIn { get; }
+        public float BlendOut { get; }
+        public ReadOnlySpan<AnimationMarker> Markers => _markers;
+        public ReadOnlySpan<AnimationCueRegion> CueRegions => _cues;
+        public ReadOnlySpan<AnimationTagWindow> TagWindows => _tags;
+        public IReadOnlyList<RuntimeTrackDefinition> RuntimeTracks { get; }
 
-        /// <summary>按时间升序，构造时排好；运行期只按游标前进，不再排序。</summary>
-        public AnimationMarker[] Markers { get; }
-
-        /// <summary>按开始时间升序。</summary>
-        public AnimationCueRegion[] CueRegions { get; }
-        public AnimationTagWindow[] TagWindows { get; }
-        public System.Collections.Generic.IReadOnlyList<AnimationSectionDefinition> Sections { get; }
-        public System.Collections.Generic.IReadOnlyList<RuntimeTrackDefinition> RuntimeTracks { get; }
-
-        /// <summary>
-        /// 混入时长：从施放前的动画过渡到本动画所用的秒数（时间轴时间，与标记点一样随实际时长缩放）。
-        /// 不能超过 <see cref="Duration"/>。
-        /// </summary>
-        public float BlendIn => BlendInSpec.duration;
-        public SkillBlend BlendInSpec { get; }
-        public SkillBlend BlendOutSpec { get; }
-        public UnityEngine.AvatarMask Mask { get; }
-        public bool Additive { get; }
-        public BoneWeightMask.Definition BoneWeights {get;}
-        public float LayerWeight { get; }
-
-        /// <summary>混出时长：动画结束或被打断后过渡回施放前动画所用的实际秒数。</summary>
-        public float BlendOut => BlendOutSpec.duration;
-
-        /// <summary>是否存在「作用于固定目标」的效果标记点——任务据此在构造时就要求传入目标。</summary>
-
-        public SkillAnimationDefinition(
-            string clipName,
-            float duration,
-            bool loop = false,
-            AnimationMarker[] markers = null,
-            AnimationCueRegion[] cueRegions = null,
-            AnimationTagWindow[] tagWindows = null,
-            float blendIn = 0f,
-            float blendOut = 0f, AnimationSectionDefinition[] sections = null, RuntimeTrackDefinition[] runtimeTracks = null,
-            SkillBlend? blendInSpec = null, SkillBlend? blendOutSpec = null, UnityEngine.AvatarMask mask = null, bool additive = false, float layerWeight = 1, BoneWeightMask.Definition boneWeights=null)
+        public SkillAnimationDefinition(AnimationClip clip, float duration, bool loop = false,
+            AnimationMarker[] markers = null, AnimationCueRegion[] cueRegions = null,
+            AnimationTagWindow[] tagWindows = null, float blendIn = 0, float blendOut = 0,
+            RuntimeTrackDefinition[] runtimeTracks = null)
         {
-            if (string.IsNullOrEmpty(clipName))
-            {
-                throw new ArgumentException("Clip name must not be empty.", nameof(clipName));
-            }
-
-            if (!(duration > 0f) || float.IsInfinity(duration))
-            {
-                throw new ArgumentOutOfRangeException(nameof(duration), duration, "Animation duration must be positive.");
-            }
-
-            BlendInSpec = (blendInSpec ?? new SkillBlend(blendIn)).Snapshot();
-            BlendOutSpec = (blendOutSpec ?? new SkillBlend(blendOut)).Snapshot();
-            blendIn = BlendIn; blendOut = BlendOut;
-            if (!(layerWeight >= 0 && layerWeight <= 1)) throw new ArgumentOutOfRangeException(nameof(layerWeight));
-            BoneWeights=boneWeights; Mask = mask; Additive = additive; LayerWeight = layerWeight;
-            if (!(blendIn >= 0f) || blendIn > duration)
-            {
-                throw new ArgumentOutOfRangeException(nameof(blendIn), blendIn, $"Blend-in must lie within [0, {duration}] seconds.");
-            }
-
-            if (!(blendOut >= 0f) || float.IsInfinity(blendOut))
-            {
-                throw new ArgumentOutOfRangeException(nameof(blendOut), blendOut, "Blend-out must be a non-negative number of seconds.");
-            }
-
-            ClipName = clipName;
-            Duration = duration;
-            Loop = loop;
-
-            var sectionCopy = sections == null ? Array.Empty<AnimationSectionDefinition>() : (AnimationSectionDefinition[])sections.Clone();
-            var trackCopy = runtimeTracks == null ? Array.Empty<RuntimeTrackDefinition>() : (RuntimeTrackDefinition[])runtimeTracks.Clone();
-            var ids = new System.Collections.Generic.HashSet<string>();
-            foreach (var section in sectionCopy)
-                if (section == null || string.IsNullOrEmpty(section.Id) || !ids.Add(section.Id) ||
-                    !(section.Start >= 0 && section.End > section.Start && section.End <= duration) ||
-                    section.InputStart < section.Start || section.InputEnd > section.End || section.InputEnd < section.InputStart)
-                    throw new ArgumentException("Section ID、时间范围或输入缓冲窗口无效。", nameof(sections));
-            foreach (var section in sectionCopy)
-                if (!string.IsNullOrEmpty(section.Next) && !ids.Contains(section.Next)) throw new ArgumentException("Section 下一段引用不存在: " + section.Next);
-            foreach (var track in trackCopy)
-                if (track == null || !(track.Start >= 0 && track.End > track.Start && track.End <= duration)) throw new ArgumentException("运行期轨道时间范围无效。");
-            Sections = Array.AsReadOnly(sectionCopy); RuntimeTracks = Array.AsReadOnly(trackCopy);
-
-            Markers = markers == null || markers.Length == 0 ? NoMarkers : (AnimationMarker[])markers.Clone();
-            CueRegions = cueRegions == null || cueRegions.Length == 0 ? NoRegions : (AnimationCueRegion[])cueRegions.Clone();
-            TagWindows = tagWindows == null ? Array.Empty<AnimationTagWindow>() : (AnimationTagWindow[])tagWindows.Clone();
-            foreach (var window in TagWindows)
-                if (window.Start > duration || window.End > duration) throw new ArgumentOutOfRangeException(nameof(tagWindows));
-            for (int i = 0; i < Markers.Length; i++)
-            {
-                // 落在时长之外的标记点永远不会触发，是配置错误而非「暂时禁用」——立刻暴露。
-                if (Markers[i].Time > duration)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(markers), Markers[i].Time,
-                        $"Marker at {Markers[i].Time}s lies beyond the animation duration {duration}s.");
-                }
-
-            }
-
-            for (int i = 0; i < CueRegions.Length; i++)
-            {
-                ref readonly AnimationCueRegion region = ref CueRegions[i];
-                if (region.Start > duration || region.End > duration)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(cueRegions), duration,
-                        $"Cue region [{region.Start}, {region.End}] lies beyond the animation duration {duration}s.");
-                }
-            }
-
-            // 授权侧不必按时间填写（时间轴上拖动只改时间、不动下标，索引才稳定）；
-            // 排序在这里做一次，运行期就只剩游标前进。
-            Array.Sort(Markers, static (a, b) => a.Time.CompareTo(b.Time));
-            Array.Sort(CueRegions, static (a, b) => a.Start.CompareTo(b.Start));
-            Array.Sort(TagWindows, static (a, b) => a.Start.CompareTo(b.Start));
+            Clip = clip; Duration = duration; Loop = loop; BlendIn = blendIn; BlendOut = blendOut;
+            _markers = markers == null ? Array.Empty<AnimationMarker>() : (AnimationMarker[])markers.Clone();
+            _cues = cueRegions == null ? Array.Empty<AnimationCueRegion>() : (AnimationCueRegion[])cueRegions.Clone();
+            _tags = tagWindows == null ? Array.Empty<AnimationTagWindow>() : (AnimationTagWindow[])tagWindows.Clone();
+            Array.Sort(_markers, static (a, b) => a.Time.CompareTo(b.Time));
+            Array.Sort(_cues, static (a, b) => a.Start.CompareTo(b.Start));
+            Array.Sort(_tags, static (a, b) => a.Start.CompareTo(b.Start));
+            RuntimeTracks = Array.AsReadOnly(runtimeTracks == null ? Array.Empty<RuntimeTrackDefinition>() : (RuntimeTrackDefinition[])runtimeTracks.Clone());
         }
     }
 }

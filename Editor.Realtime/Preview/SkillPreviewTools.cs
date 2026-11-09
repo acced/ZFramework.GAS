@@ -14,9 +14,6 @@ namespace ZFramework.GAS.Editor
         private readonly Material _material;
         private readonly List<Vector3> _vertices = new();
         private readonly List<Color> _colors = new();
-        private readonly List<Vector3> _trajectory = new();
-        private AnimationClip _trajectoryClip;
-        private bool _moves;
         private readonly SkillPreviewAudio _audio = new();
         public SkillPreviewTools()
         {
@@ -27,36 +24,22 @@ namespace ZFramework.GAS.Editor
             _material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
             _material.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off); _material.SetInt("_ZWrite", 0);
         }
-        public void Rebuild(GameObject instance, SkillDocument doc, Action<float> pose, bool ghosts, bool trajectory, Action simulation)
+        public void Rebuild(GameObject instance, SkillDocument doc, Action<float> pose, bool ghosts, Action drawRanges)
         {
             ClearGhosts(); _vertices.Clear(); _colors.Clear();
             float duration = doc.Root?.Animation()?.Duration ?? 1;
-            if (trajectory) for (int i = 1; i < _trajectory.Count; i++) Line(_trajectory[i - 1] + Vector3.up * .04f, _trajectory[i] + Vector3.up * .04f, Color.yellow);
             if (ghosts && doc.Root?.Animation() != null)
             {
                 Capture(instance, pose, Mathf.Max(0, doc.Playback.Time - 3 / Mathf.Max(1, doc.Root.Animation().FrameRate)), new Color(.25f, .65f, 1, .15f));
                 Capture(instance, pose, Mathf.Min(duration, doc.Playback.Time + 3 / Mathf.Max(1, doc.Root.Animation().FrameRate)), new Color(1, .65f, .25f, .15f));
             }
             pose(doc.Playback.Time);
-            simulation();
+            drawRanges();
             if(_vertices.Count==0)return; // Draw skips the previous line mesh when this frame has no geometry.
             _lines.Clear(); _lines.SetVertices(_vertices); _lines.SetColors(_colors);
             var indices = new int[_vertices.Count]; for (int i = 0; i < indices.Length; i++) indices[i] = i;
             _lines.SetIndices(indices, MeshTopology.Lines, 0); _lines.RecalculateBounds();
         }
-        internal bool HasTrajectory(AnimationClip clip,Transform root,float duration,Action<float> pose,float currentTime)
-        {
-            if(_trajectoryClip==clip && _trajectory.Count>0)return _moves;
-            _trajectoryClip=clip; _moves=false; _trajectory.Clear();
-            try {
-                for(int i=0;i<=60;i++){
-                    pose(duration*i/60); var position=root.position; _trajectory.Add(position);
-                    if((position-_trajectory[0]).sqrMagnitude>1e-8f)_moves=true;
-                }
-            } finally { pose(currentTime); }
-            return _moves;
-        }
-        public void Invalidate() { _trajectoryClip=null; _trajectory.Clear(); }
         private void Capture(GameObject instance, Action<float> pose, float time, Color color)
         {
             pose(time);
@@ -66,7 +49,7 @@ namespace ZFramework.GAS.Editor
                 if (renderer is SkinnedMeshRenderer skin)
                 { var mesh = new Mesh { hideFlags = HideFlags.HideAndDontSave }; skin.BakeMesh(mesh); _ghosts.Add((mesh, skin.localToWorldMatrix, color)); }
                 else if (renderer.TryGetComponent<MeshFilter>(out var filter) && filter.sharedMesh != null) {
-                    // Spine reuses its mesh when scrubbing. Freeze the sampled vertices before posing the next frame.
+                    // Freeze the ghost before sampling the next pose.
                     var mesh=UnityEngine.Object.Instantiate(filter.sharedMesh); mesh.hideFlags=HideFlags.HideAndDontSave;
                     _ghosts.Add((mesh,renderer.localToWorldMatrix,color));
                 }
@@ -125,9 +108,7 @@ namespace ZFramework.GAS.Editor
                 if (i % 8 == 0) Line(v.Center - v.Axis + At(a,x,z), v.Center + v.Axis + At(a,x,z), color);
             }
         }
-        internal void Circle(Vector3 center, float radius, Color color)
-        { for (int i = 1; i <= 32; i++) { float a = (i - 1) * Mathf.PI / 16, b = i * Mathf.PI / 16; Line(center + new Vector3(Mathf.Sin(a), 0, Mathf.Cos(a)) * radius, center + new Vector3(Mathf.Sin(b), 0, Mathf.Cos(b)) * radius, color); } }
-        internal void Line(Vector3 a, Vector3 b, Color color) { _vertices.Add(a); _vertices.Add(b); _colors.Add(color); _colors.Add(color); }
+        private void Line(Vector3 a, Vector3 b, Color color) { _vertices.Add(a); _vertices.Add(b); _colors.Add(color); _colors.Add(color); }
         public void Draw(PreviewRenderUtility preview)
         {
             if (_material == null) return;

@@ -13,7 +13,7 @@ internal static class SkillExecutionTests
         var parameters = new Dictionary<string, SkillParameterValue> { ["damage-id"] = new SkillParameterValue(2f) };
         var context = new EffectEvaluationContext(3, new SkillParameterValues(parameters), owner.Attributes);
         parameters["damage-id"] = new SkillParameterValue(999f); owner.Attributes.Get(attack).BaseValue = 999;
-        var formula = EffectMagnitude.FromCalculation(new AttributeFormula(attack, armor, parameter: "damage-id", scale: -1));
+        var formula = EffectMagnitude.FromCalculation(new TestDamage(attack, armor));
         var hit = new GameplayEffectDefinition(EffectDurationPolicy.Instant,
             modifiers: new[] { new EffectModifier(health, ModifierOperation.Add, formula) });
         target.Effects.Apply(new GameplayEffectSpec(hit, owner.Attributes, owner, context: context));
@@ -33,9 +33,9 @@ internal static class SkillExecutionTests
         var ability = owner.GrantAbility(new GameplayAbilityDefinition(cost: cost), 3);
         var check = owner.CheckActivation(ability, context);
         Check(check.Result == AbilityActivationResult.CannotAfford && check.Amount == 1, "Preflight reports the actual missing resource.");
-        Check(owner.TryActivateAbility(ability, context) == check.Result && resource.CurrentValue == 5, "Failed preflight and commit must agree without side effects.");
+        Check(owner.TryActivateAbility(ability, context).Result == check.Result && resource.CurrentValue == 5, "Failed preflight and commit must agree without side effects.");
         resource.BaseValue = 10;
-        Check(owner.TryActivateAbility(ability, context) == AbilityActivationResult.Activated && resource.CurrentValue == 4, "Commit uses the same resolved cost.");
+        Check(owner.TryActivateAbility(ability, context).Result == AbilityActivationResult.Activated && resource.CurrentValue == 4, "Commit uses the same resolved cost.");
         var host = new GameplayTaskHost(); var independent = new Timer(); var owned = new Timer();
         host.Start(ability, independent); owner.StartTask(ability, owned); owner.EndAbility(ability);
         Check(!owned.IsActive && independent.IsActive && owner.ActiveTaskCount == 0, "Detached tasks must not remain in ASC or be cancelled with their origin ability.");
@@ -49,13 +49,14 @@ internal static class SkillExecutionTests
     {
         var owner = new AbilitySystemComponent(); var health = new AttributeId(1); owner.Attributes.Add(health, 100);
         var damage = new GameplayEffectDefinition(EffectDurationPolicy.Instant,
-            modifiers: new[] { new EffectModifier(health, ModifierOperation.Add, EffectMagnitude.FromCaller("damage")) });
+            modifiers: new[] { new EffectModifier(health, ModifierOperation.Add, EffectMagnitude.FromParameter("damage")) });
         var periodic = new GameplayEffectDefinition(EffectDurationPolicy.Duration, duration: 3, period: 1,
             conditionalEffects: new[] { new ConditionalEffect(damage, EffectTrigger.Periodic), new ConditionalEffect(damage, EffectTrigger.Removed) });
-        var values = new Dictionary<string, float> { ["damage"] = -3 };
-        owner.Effects.Apply(new GameplayEffectSpec(periodic, setByCallerValues: values), out var handle); values["damage"] = -999;
+        var values = new Dictionary<string, SkillParameterValue> { ["damage"] = new SkillParameterValue(-3f) };
+        var context = new EffectEvaluationContext(1, new SkillParameterValues(values));
+        owner.Effects.Apply(new GameplayEffectSpec(periodic, context: context), out var handle); values["damage"] = new SkillParameterValue(-999f);
         owner.Tick(1); owner.Effects.Remove(handle);
-        Check(owner.Attributes.GetCurrent(health) == 94, "Caller values must be frozen for periodic/removed children.");
+        Check(owner.Attributes.GetCurrent(health) == 94, "Periodic and removed children must share immutable typed parameters.");
         var spec = owner.GrantAbility(new GameplayAbilityDefinition(), 3);
         owner.TryActivateAbility(spec); owner.EndAbility(spec);
         long allocated = GC.GetAllocatedBytesForCurrentThread();
@@ -66,6 +67,13 @@ internal static class SkillExecutionTests
         try { SkillParameterValue.FromNumber(SkillParameterKind.Bool, 2); } catch (InvalidOperationException) { badBool = true; }
         Check(badInt && badBool, "Typed values must not silently truncate.");
         Console.WriteLine("PASS SkillBoundarySnapshotsTimersHostAndAllocation");
+    }
+    private sealed class TestDamage : IEffectCalculation
+    {
+        private readonly AttributeId _attack, _armor;
+        public TestDamage(AttributeId attack, AttributeId armor) { _attack = attack; _armor = armor; }
+        public float Evaluate(in GameplayEffectSpec spec, AttributeSet target)
+            => -Math.Max(0, spec.SourceValue(_attack) * spec.Parameter("damage-id") - target.GetCurrent(_armor));
     }
     private sealed class ThrowingTimer : GameplayAbilityTask { protected override void OnTick(float deltaTime) => throw new InvalidOperationException("test"); }
     private sealed class Timer : GameplayAbilityTask
