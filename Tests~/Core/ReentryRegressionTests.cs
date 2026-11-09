@@ -28,15 +28,21 @@ internal static class ReentryRegressionTests
         long bytes = GC.GetAllocatedBytesForCurrentThread(); for (int i = 0; i < 1000; i++) owner.Tick(0);
         Check(GC.GetAllocatedBytesForCurrentThread() == bytes, "Warm ASC task scheduling must not allocate."); owner.Clear();
 
+        var health = owner.Attributes.Add(new AttributeId(1), 10000);
         var stack = new GameplayEffectDefinition(EffectDurationPolicy.Duration, 10, period: 1,
-            stacking: new EffectStackingRule(EffectStacking.AggregateBySource));
-        var values = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase) { ["DAMAGE"] = 1 };
-        var effect = new GameplayEffectSpec(stack, source: owner, setByCallerValues: values);
+            stacking: new EffectStackingRule(EffectStacking.AggregateBySource),
+            modifiers: new[] { new EffectModifier(health.Id, ModifierOperation.Add, EffectMagnitude.FromParameter("damage")) });
+        var values = new Dictionary<string, SkillParameterValue> { ["damage"] = new SkillParameterValue(-1f) };
+        var context = new EffectEvaluationContext(1, new SkillParameterValues(values));
+        var effect = new GameplayEffectSpec(stack, source: owner, context: context);
         owner.Effects.Apply(effect); var handle = owner.Effects[0].Handle;
+        values["damage"] = new SkillParameterValue(-999f);
         Check(owner.Effects.Apply(new GameplayEffectSpec(stack, source: owner.SourceIdentity)) == EffectApplicationResult.Stacked, "ASC and identity sources must share source aggregation.");
         for (int i = 0; i < 20; i++) owner.Effects.Apply(effect);
         bytes = GC.GetAllocatedBytesForCurrentThread(); for (int i = 0; i < 1000; i++) owner.Effects.Apply(effect);
-        Check(GC.GetAllocatedBytesForCurrentThread() == bytes && owner.Effects[0].Handle.Equals(handle), "Reapplying stackable caller effects must not copy discarded snapshots.");
+        Check(GC.GetAllocatedBytesForCurrentThread() == bytes && owner.Effects[0].Handle.Equals(handle), "Reapplying stackable effects must share immutable parameters without allocation.");
+        int count = owner.Effects[0].StackCount; owner.Tick(1);
+        Check(health.CurrentValue == 10000 - count, "Stacked periodic effects retain the initially resolved parameters.");
         Console.WriteLine("PASS AscReentryAndStackAllocations");
         PublicApiRegressionTests.Run();
     }

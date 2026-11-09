@@ -3,7 +3,14 @@ using UnityEngine;
 namespace ZFramework.GAS.Unity
 {
     public enum SkillTaskOwnership { [InspectorName("打断后继续（场景）")] Scene, [InspectorName("随施放取消（技能）")] Ability }
-    public enum SkillSpawnPosition { Caster, Target, TargetPoint, HitPoint, EventPosition, LaunchPoint }
+    public enum SkillOrigin { Caster, Target, TargetPoint, EventPosition = 4 }
+
+    public interface ISkillTaskState
+    {
+        SkillExecutionContext Execution { get; }
+        string ActionId { get; }
+        string State { get; }
+    }
 
     public abstract class SkillActionTask : GameplayAbilityTask, ISkillTaskState
     {

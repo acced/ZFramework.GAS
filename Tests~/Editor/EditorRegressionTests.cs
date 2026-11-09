@@ -4,13 +4,11 @@ using System.Linq;
 using GameplayTags;
 using NUnit.Framework;
 using UnityEditor;
-using UnityEditor.Animations;
 using UnityEditor.Experimental.GraphView;
 using UnityEngine;
 using UnityEngine.TestTools;
 using UnityEngine.UIElements;
 using ZFramework.GAS.Unity;
-using ZFramework.GAS.Samples.BasicCombat.Editor;
 using Object = UnityEngine.Object;
 
 namespace ZFramework.GAS.Editor.Tests
@@ -52,6 +50,16 @@ namespace ZFramework.GAS.Editor.Tests
         private static void GrantTag(Object asset)
             => Edit(asset, so => { var list = so.FindProperty("tags.granted"); list.arraySize = 1; list.GetArrayElementAtIndex(0).FindPropertyRelative("m_Name").stringValue = "Test.Cooldown"; });
         private string Snapshot(Object asset) => EditorJsonUtility.ToJson(asset);
+        private void CreateAbilityGraph()
+        {
+            var cost = Effect("Cost"); var cooldown = Effect("冷却", EffectDurationPolicy.Duration);
+            GrantTag(cooldown);
+            Edit(_ability, so => { so.FindProperty("cost").objectReferenceValue = cost; so.FindProperty("cooldown").objectReferenceValue = cooldown; });
+            var animation = Animation(); var effect = Effect("Effect");
+            SkillTimelineAuthoring.Edit(animation, timeline => timeline.Marker("trigger", .4f, "Apply", new ApplyEffectAction { effect = effect }));
+            _doc.Notify(new ChangeSet(_ability, true));
+        }
+
         [Test]
         public void CommandUndoRedoRestoresDataAndChangeSet()
         {
@@ -80,13 +88,12 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.IsFalse(PortRules.CanAttach(b, applied, a, out _)); Assert.IsFalse(PortRules.CanAttach(a, applied, b, out _));
             Assert.IsTrue(PortRules.CanAttach(a, new PortId(PortKind.Removed), b, out _));
         }
-        [TestCase("", 1f, false)]
-        [TestCase("Attack", 0f, false)]
-        [TestCase("Attack", -1f, false)]
-        [TestCase("Attack", 1f, true)]
-        public void AnimationPortValidatesClipAndLength(string name, float duration, bool accepted)
+        [TestCase(0f, false)]
+        [TestCase(-1f, false)]
+        [TestCase(1f, true)]
+        public void AnimationPortValidatesDurationWithoutRequiringAnAnimationClip(float duration, bool accepted)
         {
-            var animation = Animation(); Edit(animation, so => { so.FindProperty("clipName").stringValue = name; so.FindProperty("duration").floatValue = duration; });
+            var animation = Animation(); Edit(animation, so => so.FindProperty("duration").floatValue = duration);
             Assert.AreEqual(accepted, PortRules.CanAttach(_ability, new PortId(PortKind.Animation), animation, out _));
         }
         [Test]
@@ -101,7 +108,7 @@ namespace ZFramework.GAS.Editor.Tests
             Undo.PerformUndo(); Assert.AreSame(effect, PortRules.Links(animation).Single().Child); Assert.AreNotEqual(first, second);
         }
         [Test]
-        public void HitWindowToolbarCreatesIndependentRangesAndPreviewsTheAuthoredFacing()
+        public void HitWindowInsertionKeepsEarlierRangeConfiguration()
         {
             var animation = Animation(); var effect = Effect();
             var track = TrackTypeRegistry.Get("hitWindows");
@@ -112,35 +119,9 @@ namespace ZFramework.GAS.Editor.Tests
                 window.FindPropertyRelative("targets.kind").enumValueIndex = (int)TargetQueryKind.Line;
                 window.FindPropertyRelative("yaw").floatValue = 90;
             });
-            var points = new[] { Vector3.right, Vector3.left };
-            using var sim = new SkillPreviewSimulation();
-            void Check(float time, int hits)
-            {
-                _doc.Playback.Seek(time, 1); sim.ProjectContacts(_doc, points, Vector3.zero, 1, null, null);
-                Assert.AreEqual(hits, sim.HitCount);
-                if (hits != 0) { Assert.IsTrue(sim.WasHit(0)); Assert.IsFalse(sim.WasHit(1)); }
-            }
-            Check(.19f, 0); Check(.2f, 1); Check(.45f, 0);
             string second = TimelineCommands.Add(_doc, track, .7f);
             Assert.AreNotEqual(id, second); Assert.IsNull(animation.hitWindows[1].effect);
-        }
-        [Test]
-        public void SwitchingSourcePreviewsOnlyTheDesignatedUnitAndDoesNotGuessProjectResults()
-        {
-            var clip = Animation(); var track = TrackTypeRegistry.Get("hitWindows");
-            string id = TimelineCommands.Add(_doc, track, .2f, Effect());
-            var points = new[] { Vector3.forward, Vector3.right * 50 };
-            using var sim = new SkillPreviewSimulation { AimIndex = 2 };
-            _doc.Playback.Seek(.3f, 1);
-            sim.ProjectContacts(_doc, points, Vector3.zero, 1, null, null);
-            Assert.AreEqual(1, sim.HitCount); Assert.IsTrue(sim.WasHit(1), "The distant but selected unit is the only target.");
-            EditCommand.Run(_doc, "改为棋盘目标", clip, so => {
-                var q = TimelineCommands.Find(so, track.PropertyPath, id).FindPropertyRelative("targets");
-                q.FindPropertyRelative("kind").enumValueIndex = (int)TargetQueryKind.Project;
-                q.FindPropertyRelative("sourceKey").stringValue = "front-row";
-            });
-            sim.ProjectContacts(_doc, points, Vector3.zero, 1, null, null);
-            Assert.AreEqual(0, sim.HitCount); StringAssert.Contains("front-row", sim.SourceNote);
+            Assert.AreEqual(90, TimelineCommands.Find(_doc.Serialized(animation), track.PropertyPath, id).FindPropertyRelative("yaw").floatValue);
         }
         [UnityTest]
         public IEnumerator OpenTimelineShowsImportedHitWindowWithoutReselectingOrSaving()
@@ -205,18 +186,6 @@ namespace ZFramework.GAS.Editor.Tests
             var external = ScriptableObject.CreateInstance<GameplayEffectAsset>(); AssetDatabase.CreateAsset(external, Folder + "/Shared.asset");
             PortRules.Attach(_doc, _ability, new PortId(PortKind.Cost), external); SkillAssetFactory.DeleteNode(_doc, external);
             Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<GameplayEffectAsset>(Folder + "/Shared.asset")); Assert.IsFalse(PortRules.Links(_ability).Any());
-        }
-        [Test]
-        public void VariantCopiesOwnedGraphAndKeepsSharedReferences()
-        {
-            new MeleeTemplate().Build(_ability); var sourceAnimation = _ability.Animation();
-            var external = ScriptableObject.CreateInstance<GameplayEffectAsset>(); AssetDatabase.CreateAsset(external, Folder + "/Shared.asset");
-            Edit(_ability, so => so.FindProperty("cost").objectReferenceValue = external); AssetDatabase.SaveAssets();
-            var copy = SkillAssetFactory.Duplicate(_ability, Folder + "/Variant.asset");
-            Assert.AreNotSame(sourceAnimation, copy.Animation());
-            Assert.AreEqual(Folder + "/Variant.asset", AssetDatabase.GetAssetPath(copy.Animation()));
-            using var copied = new SerializedObject(copy); Assert.AreEqual(external, copied.FindProperty("cost").objectReferenceValue);
-            Assert.AreEqual(Folder + "/Variant.asset", AssetDatabase.GetAssetPath(PortRules.Links(copy.Animation()).Single().Child));
         }
         [Test]
         public void EmbedPreservesReferencesAndUndo()
@@ -310,7 +279,7 @@ namespace ZFramework.GAS.Editor.Tests
         [Test]
         public void ValidationDoesNotTreatAssetNamesOrUnusedCaptureIdsAsConfiguration()
         {
-            var effect = Effect("Not a tag");
+            var effect = Effect("Not a tag", EffectDurationPolicy.Duration);
             var catalog = ScriptableObject.CreateInstance<AttributeCatalogAsset>();
             catalog.entries = new[] { new AttributeCatalogEntry { id = 99, displayName = "Test" } };
             AssetDatabase.CreateAsset(catalog, Folder + "/Attributes.asset"); AttributeCatalog.Invalidate();
@@ -319,22 +288,20 @@ namespace ZFramework.GAS.Editor.Tests
                 var array = so.FindProperty("modifiers"); array.arraySize = 1;
                 array.GetArrayElementAtIndex(0).FindPropertyRelative("targetAttributeId").intValue = 99;
                 var magnitude = array.GetArrayElementAtIndex(0).FindPropertyRelative("magnitude");
-                magnitude.FindPropertyRelative("kind").enumValueIndex = 0;
+                magnitude.FindPropertyRelative("kind").intValue = (int)MagnitudeKind.Fixed;
                 magnitude.FindPropertyRelative("captureAttributeId").intValue = 9999;
-                so.FindProperty("useDurationMagnitude").boolValue = true;
-                so.FindProperty("usePeriodMagnitude").boolValue = true;
-                so.FindProperty("durationMagnitude.targetAttributeId").intValue = 9999;
-                so.FindProperty("periodMagnitude.targetAttributeId").intValue = 9999;
+                so.FindProperty("useDurationMagnitude").boolValue = false;
+                so.FindProperty("usePeriodMagnitude").boolValue = false;
+                so.FindProperty("durationMagnitude.kind").intValue = (int)MagnitudeKind.AttributeScaled;
+                so.FindProperty("periodMagnitude.kind").intValue = (int)MagnitudeKind.AttributeScaled;
+                so.FindProperty("durationMagnitude.captureAttributeId").intValue = 9999;
+                so.FindProperty("periodMagnitude.captureAttributeId").intValue = 9999;
             });
             using var validation = new ValidationService(_doc); validation.ValidateNow(true);
             Assert.IsFalse(validation.Issues.Any(i => i.Id == "GAS022" || i.Id == "GAS021"));
-            Edit(effect, so =>
-            {
-                so.FindProperty("durationMagnitude.kind").enumValueIndex = (int)MagnitudeKind.Calculation;
-                so.FindProperty("durationMagnitude.captureAttributeId").intValue = 99;
-            });
+            Edit(effect, so => so.FindProperty("useDurationMagnitude").boolValue = true);
             validation.ValidateNow(true);
-            Assert.IsTrue(validation.Issues.Any(i => i.Id == "GAS021" && i.PropertyPath == "durationMagnitude.targetAttributeId"));
+            Assert.IsTrue(validation.Issues.Any(i => i.Id == "GAS021" && i.PropertyPath == "durationMagnitude.captureAttributeId"));
         }
         [Test]
         public void ExternalizeUndoRedoRetainsExternalPath()
@@ -473,10 +440,10 @@ namespace ZFramework.GAS.Editor.Tests
             var window = SkillEditorWindow.Open(); window.Show(_ability);
             for (int i = 0; i < 5; i++) yield return null;
             var library = window.rootVisualElement.Q<LibraryPanel>();
-            Foldout ParametersOutline() => library.Query<Foldout>().ToList().Single(f => f.text == "参数 · SetByCaller");
-            var outline = ParametersOutline(); outline.value = false;
+            Foldout CueOutline() => library.Query<Foldout>().ToList().Single(f => f.text == "Cue");
+            var outline = CueOutline(); outline.value = false;
             library.Search("Third"); library.Search("");
-            Assert.AreSame(outline, ParametersOutline(), "Filtering the skill library must not rebuild the current skill's outline.");
+            Assert.AreSame(outline, CueOutline(), "Filtering the skill library must not rebuild the current skill's outline.");
             Assert.IsFalse(outline.value);
             yield return null; // The filtered asset rows need a layout pass before pointer coordinates are valid.
             void Click(Button button)
@@ -559,16 +526,6 @@ namespace ZFramework.GAS.Editor.Tests
             Undo.PerformUndo(); Assert.AreEqual(0, _doc.Serialized(animation).FindProperty("cueRegions").arraySize);
             Undo.PerformRedo(); Assert.IsNotNull(TimelineCommands.Find(_doc.Serialized(animation), "cueRegions", id));
         }
-        [Test]
-        public void CueOverlapWarningIgnoresTouchingOtherTagsAndInvalidSpans()
-        {
-            var animation = Animation();
-            SetRanges(animation, "cueRegions", ("a", "Cue.A", 0, .4f), ("b", "Cue.A", .4f, .6f),
-                ("other", "Cue.B", .1f, .9f), ("overlap", "Cue.A", .5f, -1), ("empty", "Cue.A", .2f, .2f), ("invalid", "Cue.A", .8f, .2f));
-            using var validation = new ValidationService(_doc); validation.ValidateNow(true);
-            var issue = validation.Issues.Single(i => i.Id == "GAS015");
-            Assert.AreEqual(IssueSeverity.Warning, issue.Severity); Assert.AreEqual("overlap", issue.ElementId); Assert.AreEqual("cueRegions", issue.Track);
-        }
         private static bool GraphHasOverlaps(SkillGraphView graph)
         {
             var bounds = graph.nodes.Select(n => new Rect(n.GetPosition().position, n.layout.size)).ToArray();
@@ -633,7 +590,7 @@ namespace ZFramework.GAS.Editor.Tests
         [UnityTest]
         public IEnumerator AutoArrangeWaitsForTallNodesAndExplicitlyReplacesSavedLayout()
         {
-            new MeleeTemplate().Build(_ability); _doc.Notify(new ChangeSet(_ability, true));
+            CreateAbilityGraph(); _doc.Notify(new ChangeSet(_ability, true));
             SetRanges(_ability.Animation(), "cueRegions", Enumerable.Range(0, 10).Select(i => ("c" + i, "Cue.Tall" + i, .1f, .9f)).ToArray());
             foreach (var asset in _doc.Assets) _doc.Layout.SetPosition(asset, new Vector2(40, 50)); _doc.Layout.Save();
             var window = SkillEditorWindow.Open(); window.Show(_ability);
@@ -649,8 +606,9 @@ namespace ZFramework.GAS.Editor.Tests
             var animation = SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(_ability, "Timeline");
             var hit = Effect();
             SkillAssetFactory.SetMainAnimation(_ability, animation);
+            var clip = new AnimationClip { name = "Swing" }; AssetDatabase.CreateAsset(clip, Folder + "/Swing.anim");
             SkillTimelineAuthoring.Edit(animation, t => {
-                t.Clip("Swing", 1, 24);
+                t.Clip(clip, 1, 24);
                 t.Marker("impact", .25f, "Old", new ConditionalAction(), new WaitSkillAction());
                 t.Cue("fx", 0, -1, "Test.Cue");
                 t.TagWindow("armor", 0, .5f, "Test.Window");
@@ -673,55 +631,22 @@ namespace ZFramework.GAS.Editor.Tests
             var saved = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(path).Animation();
             Assert.AreEqual(24, saved.FrameRate);
             var def = saved.Definition;
-            Assert.AreEqual("Swing", def.ClipName);
-            var marker = def.Markers.Single();
+            Assert.AreSame(clip, def.Clip);
+            Assert.AreEqual(1, def.Markers.Length);
+            var marker = def.Markers[0];
             Assert.AreEqual("impact", marker.Id); Assert.AreEqual(.5f, marker.Time); Assert.AreEqual("Renamed", marker.Key);
             Assert.AreEqual(apply.Id, marker.Actions.Single().Id);
-            Assert.AreEqual("Test.Cue", def.CueRegions.Single().CueTag.Name);
-            Assert.AreEqual(.75f, def.TagWindows.Single().End);
-            Assert.AreEqual("Test.Other", def.TagWindows.Single().Tags[0].Name);
+            Assert.AreEqual(1, def.CueRegions.Length);
+            Assert.AreEqual("Test.Cue", def.CueRegions[0].CueTag.Name);
+            Assert.AreEqual(1, def.TagWindows.Length);
+            Assert.AreEqual(.75f, def.TagWindows[0].End);
+            Assert.AreEqual("Test.Other", def.TagWindows[0].Tags[0].Name);
             Assert.IsFalse(TimelineCommands.EnsureIds(saved));
-        }
-        [Test]
-        public void BasicCombatTemplatesCreateAbilitiesWithEmbeddedTimelines()
-        {
-            SkillTemplate[] examples = { new MeleeTemplate(), new ProjectileTemplate(), new BuffTemplate(),
-                new ChannelTemplate(), new DamageOverTimeTemplate(), new SummonTemplate() };
-            foreach (var template in examples)
-            {
-                var ability = SkillTemplateRegistry.Create(Folder + "/" + template.DisplayName + ".asset", template);
-                Assert.IsNotNull(ability.Animation(), template.DisplayName);
-                Assert.IsTrue(AssetDatabase.IsSubAsset(ability.Animation()));
-            }
-        }
-        private sealed class TemplateClock : IAnimationDriver
-        {
-            public float Play(string clip, float duration, bool loop) => 0; // Use the authored timeline duration.
-            public void Advance(float dt) { }
-            public void Stop() { }
-        }
-        [TestCase(true)]
-        [TestCase(false)]
-        public void InterruptingGeneratedTemplateOnlyStopsChanneledDamage(bool channel)
-        {
-            SkillTemplate template = channel ? new ChannelTemplate() : new DamageOverTimeTemplate();
-            template.Build(_ability);
-            var caster = new AbilitySystemComponent(); var target = new AbilitySystemComponent();
-            var hp = target.Attributes.Add(new AttributeId(1), 100);
-            var runner = new SkillRunner(caster); new SkillTimelinePlayer(runner, () => new TemplateClock());
-            runner.Grant(_ability);
-            Assert.AreEqual(AbilityActivationResult.Activated, runner.TryCast(_ability, new SkillCastTarget(target)));
-            caster.Tick(_ability.Animation().Definition.Markers.Single().Time + .01f);
-            caster.Tick(.5f); target.Tick(.5f);
-            Assert.AreEqual(95, hp.CurrentValue, "两种模板在打断前都应已结算一次。");
-            Assert.IsTrue(runner.Cancel(_ability));
-            caster.Tick(1); target.Tick(1);
-            Assert.AreEqual(channel ? 95 : 85, hp.CurrentValue);
         }
         [UnityTest]
         public IEnumerator WindowLoadsGraphAndRetainsNodeAcrossFieldEdit()
         {
-            new MeleeTemplate().Build(_ability); var window = SkillEditorWindow.Open(); window.Show(_ability);
+            CreateAbilityGraph(); var window = SkillEditorWindow.Open(); window.Show(_ability);
             yield return null; yield return null; Assert.AreEqual(5, window.NodeCount);
             var graph = window.rootVisualElement.Q<SkillGraphView>(); var before = graph.nodes.ToList();
             EditCommand.Run(window.Document, "修改时长", _ability.Animation(), so => so.FindProperty("duration").floatValue = 1.5f);
@@ -744,40 +669,17 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.AreEqual(1, node.Q<FloatField>("node-duration").value);
             node.Q<EnumField>("node-durationPolicy").value = EffectDurationPolicy.Infinite;
             var animationNode = graph.nodes.First(n => n.title == animation.name);
-            animationNode.Q<TextField>("node-clipName").value = "Slash";
+            var clip = new AnimationClip { name = "Slash" }; AssetDatabase.CreateAsset(clip, Folder + "/Slash.anim");
+            animationNode.Q<UnityEditor.UIElements.ObjectField>("node-clip").value = clip;
             animationNode.Q<Toggle>("node-loop").value = true;
             yield return WaitForGraph(window, () => window.Document.Serialized(effect).FindProperty("durationPolicy").intValue == (int)EffectDurationPolicy.Infinite &&
-                animation.ClipName == "Slash" && window.Document.Serialized(animation).FindProperty("loop").boolValue);
+                animation.Clip == clip && window.Document.Serialized(animation).FindProperty("loop").boolValue);
             Assert.AreEqual(0, graph.Query<UnityEditor.UIElements.PropertyField>().ToList().Count);
-        }
-        [UnityTest]
-        public IEnumerator MiniMapRemainsInCornerAfterResizeAndCanBeHidden()
-        {
-            var window = SkillEditorWindow.Open(); window.Show(_ability); yield return null; yield return null;
-            var graph = window.rootVisualElement.Q<SkillGraphView>(); var host = graph.Q("minimap-overlay");
-            var map = graph.Q<MiniMap>(); bool previous = graph.MiniMapVisible;
-            try
-            {
-                graph.MiniMapVisible = true;
-                foreach (var width in new[] { 1080f, 1280f })
-                {
-                    window.position = new Rect(window.position.position, new Vector2(width, 800));
-                    yield return null; yield return null; yield return null;
-                    Assert.AreEqual(10, graph.worldBound.xMax - host.worldBound.xMax, 1);
-                    Assert.AreEqual(10, graph.worldBound.yMax - host.worldBound.yMax, 1);
-                    Assert.Less(Vector2.Distance(host.worldBound.position, map.worldBound.position), 1);
-                    Assert.AreEqual(DisplayStyle.None, map.Q<Label>().resolvedStyle.display);
-                }
-                var toggle = window.rootVisualElement.Q<UnityEditor.UIElements.ToolbarToggle>("show-minimap");
-                toggle.value = false; Assert.IsFalse(graph.MiniMapVisible);
-                toggle.value = true; Assert.IsTrue(graph.MiniMapVisible);
-            }
-            finally { EditorPrefs.SetBool("ZFramework.GAS.ShowMiniMap", previous); }
         }
         [UnityTest]
         public IEnumerator DeletingNodeAndUnrelatedEdgeTogetherAppliesBothInOneUndo()
         {
-            new MeleeTemplate().Build(_ability); var window = SkillEditorWindow.Open(); window.Show(_ability);
+            CreateAbilityGraph(); var window = SkillEditorWindow.Open(); window.Show(_ability);
             yield return null; yield return null;
             var graph = window.rootVisualElement.Q<SkillGraphView>();
             var cooldown = graph.nodes.First(n => n.title == "冷却");
@@ -792,30 +694,6 @@ namespace ZFramework.GAS.Editor.Tests
             Undo.PerformUndo(); so.Update();
             Assert.IsNotNull(so.FindProperty("cooldown").objectReferenceValue); Assert.IsNotNull(so.FindProperty("cost").objectReferenceValue);
             window.Close();
-        }
-        [Test]
-        public void AnimatorEnumeratesNestedStatesAndStateSpeed()
-        {
-            var clip = new AnimationClip { frameRate = 30 }; clip.SetCurve("", typeof(Transform), "m_LocalPosition.x", AnimationCurve.Linear(0, 0, .8f, 1));
-            AssetDatabase.CreateAsset(clip, Folder + "/Attack.anim");
-            var controller = AnimatorController.CreateAnimatorControllerAtPath(Folder + "/Character.controller");
-            var nested = controller.layers[0].stateMachine.AddStateMachine("Combat"); var state = nested.AddState("Attack"); state.motion = clip; state.speed = 2;
-            var go = new GameObject("Character"); go.AddComponent<Animator>().runtimeAnimatorController = controller;
-            try { var info = new AnimatorEditorAdapter().EnumerateClips(go).Single(); Assert.AreEqual("Base Layer.Combat.Attack", info.Name); Assert.AreEqual(.4f, info.Length, .001); }
-            finally { Object.DestroyImmediate(go); }
-        }
-        [Test]
-        public void LegacyAdapterSamplesAndRestoresPose()
-        {
-            var clip = new AnimationClip { legacy = true, frameRate = 30 }; clip.SetCurve("", typeof(Transform), "m_LocalPosition.x", AnimationCurve.Linear(0, 0, 1, 2));
-            var go = new GameObject("Legacy"); go.AddComponent<UnityEngine.Animation>().AddClip(clip, "Attack"); go.transform.localPosition = new Vector3(3, 0, 0);
-            try
-            {
-                var adapter = new LegacyAnimationEditorAdapter(); Assert.AreEqual(1, adapter.EnumerateClips(go).Count);
-                using (var sampler = adapter.BeginPreview(go)) { sampler.Sample("Attack", .5f); Assert.AreEqual(1, go.transform.localPosition.x, .01f); }
-                Assert.AreEqual(3, go.transform.localPosition.x, .01f);
-            }
-            finally { Object.DestroyImmediate(go); Object.DestroyImmediate(clip); }
         }
         [Test]
         public void ValidationFindsAndFixesErrorsWithoutBuildingCyclicDefinitions()
@@ -859,11 +737,10 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.IsFalse(issues.Any(i => i.PropertyPath.EndsWith(".booleanParameterId")));
         }
         [Test]
-        public void TimelineNumbersValidateTheCallingSkillsEffectiveOverride()
+        public void TimelineNumbersValidateTheCallingSkillsParameterDefault()
         {
-            var parameter = new SkillParameter { defaultValue = 1 };
+            var parameter = new SkillParameter { defaultValue = -1 };
             _ability.parameters = new[] { parameter };
-            _ability.parameterOverrides = new[] { new SkillParameterOverride { parameterId = parameter.Id, value = -1 } };
             var animation = Animation();
             Edit(animation, so =>
             {
@@ -879,38 +756,6 @@ namespace ZFramework.GAS.Editor.Tests
                 i.PropertyPath == "markers.Array.data[0].actions.Array.data[0]"));
         }
         [Test]
-        public void MecanimWarnsForRecastAndOnlyForAJumpThatCanOccurDuringEntryBlend()
-        {
-            var animation=Animation();var host=new GameObject("Mecanim preview");host.AddComponent<Animator>();host.AddComponent<SkillAnimator>();
-            try{
-                _doc.PreviewPrefab=host;Edit(animation,so=>so.FindProperty("blendIn").floatValue=.3f);
-                var first=new AnimationSection{start=0,end=.5f,inputBufferEnd=.2f};
-                var second=new AnimationSection{start=.6f,end=1,transition=new SkillBlend(.1f)};
-                animation.sections=new[]{first,second};
-                var issues=new System.Collections.Generic.List<Issue>();var rule=new BlendRule();
-                void Check()=>rule.Validate(new ValidationContext(_doc),animation,issues);
-                Check();Assert.IsTrue(issues.Any(i=>i.Message.Contains("重放同一技能")));
-                Assert.IsFalse(issues.Any(i=>i.Message.Contains("输入连招")),"Early buffered input waits until the late section end.");
-                first.end=.2f;issues.Clear();Check();Assert.IsTrue(issues.Any(i=>i.PropertyPath.Contains("[1]") && i.Message.Contains("输入连招")));
-                second.start=.2f;issues.Clear();Check();Assert.IsFalse(issues.Any(i=>i.PropertyPath.Contains("[1]") && i.Message.Contains("输入连招")));
-                second.start=.6f;second.transition=default;issues.Clear();Check();
-                Assert.IsTrue(issues.Any(i=>i.PropertyPath.Contains("[1]") && i.Message.Contains("输入连招")),"zero-duration entry still cuts");
-                first.start=.15f;first.end=.21f;first.inputBufferStart=first.inputBufferEnd=0;
-                second.start=first.end;second.end=.30f;second.inputBufferStart=second.inputBufferEnd=0;
-                var last=new AnimationSection{start=.7f,end=1};first.nextSectionId=second.Id;second.nextSectionId=last.Id;
-                animation.sections=new[]{first,second,last};issues.Clear();Check();
-                Assert.IsTrue(issues.Any(i=>i.PropertyPath.Contains("[2]") && i.Message.Contains("输入连招")),"adjacent sections can carry the entry blend to a later jump");
-                // A later jump starts its own blend, independent of the original entry.
-                second.start=.6f;
-                Edit(animation,so=>so.FindProperty("blendIn").floatValue=0);
-                first.inputBufferStart=first.inputBufferEnd=0;first.nextSectionId=second.Id;
-                second.end=.68f;second.transition=new SkillBlend(.12f);
-                var third=new AnimationSection{start=.8f,end=1};second.nextSectionId=third.Id;second.inputBufferStart=second.inputBufferEnd=0;
-                animation.sections=new[]{first,second,third};issues.Clear();Check();
-                Assert.IsTrue(issues.Any(i=>i.PropertyPath.Contains("[2]") && i.Message.Contains("输入连招")),"later section transitions must be inspected too");
-            }finally{_doc.PreviewPrefab=null;Object.DestroyImmediate(host);}
-        }
-        [Test]
         public void BlendLongerThanAnimationIsReportedAndFixed()
         {
             var animation = Animation();
@@ -918,28 +763,24 @@ namespace ZFramework.GAS.Editor.Tests
             _doc.Notify(new ChangeSet(animation, true)); using var validation = new ValidationService(_doc); validation.ValidateNow(true);
             var issue = validation.Issues.Single(i => i.Id == "GAS014");
             Assert.AreEqual(IssueSeverity.Error, issue.Severity);
-            Assert.Throws<ArgumentOutOfRangeException>(() => _ = animation.Definition);
             issue.FixAction(); validation.ValidateNow(true);
             Assert.IsFalse(validation.Issues.Any(i => i.Id == "GAS014")); Assert.AreEqual(.5f, animation.BlendIn, 1e-6f);
             animation.InvalidateDefinition(); Assert.AreEqual(.5f, animation.Definition.BlendIn, 1e-6f);
         }
         [Test]
-        public void ValidationFindsTimelineBoundsKeysCallerAndUnknownTags()
+        public void ValidationFindsTimelineBoundsAndUnknownTags()
         {
             var animation = Animation(); var effect = Effect();
             TimelineCommands.Add(_doc, new EventTrack(), .2f, effect); TimelineCommands.Add(_doc, new EventTrack(), .4f);
             Edit(animation, so =>
             {
-                var markers = so.FindProperty("markers"); for (int i = 0; i < 2; i++) markers.GetArrayElementAtIndex(i).FindPropertyRelative("key").stringValue = "Hit";
-                markers.GetArrayElementAtIndex(1).FindPropertyRelative("time").floatValue = 2;
+                so.FindProperty("markers").GetArrayElementAtIndex(1).FindPropertyRelative("time").floatValue = 2;
                 var cues = so.FindProperty("cueRegions"); cues.arraySize = 1; cues.GetArrayElementAtIndex(0).FindPropertyRelative("cueTag.m_Name").stringValue = "Missing.Cue";
-                so.FindProperty("clipName").stringValue = "";
             });
-            Edit(effect, so => { var m = so.FindProperty("modifiers"); m.arraySize = 1; var p = m.GetArrayElementAtIndex(0).FindPropertyRelative("magnitude"); p.FindPropertyRelative("kind").enumValueIndex = 2; p.FindPropertyRelative("callerKey").stringValue = "Damage.Scale"; });
             _doc.Notify(new ChangeSet(_ability, true)); using var validation = new ValidationService(_doc); validation.ValidateNow(true);
-            foreach (var id in new[] { "GAS010", "GAS011", "GAS012", "GAS020", "GAS022" }) Assert.IsTrue(validation.Issues.Any(i => i.Id == id), id);
+            foreach (var id in new[] { "GAS011", "GAS022" }) Assert.IsTrue(validation.Issues.Any(i => i.Id == id), id);
             foreach (var issue in validation.Issues.Where(i => i.FixAction != null).ToArray()) issue.FixAction();
-            validation.ValidateNow(true); foreach (var id in new[] { "GAS011", "GAS012", "GAS020" }) Assert.IsFalse(validation.Issues.Any(i => i.Id == id), id);
+            validation.ValidateNow(true); Assert.IsFalse(validation.Issues.Any(i => i.Id == "GAS011"));
         }
     }
 }

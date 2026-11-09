@@ -20,21 +20,20 @@ namespace ZFramework.GAS.Unity
         public Sprite icon;
         public string DisplayName => string.IsNullOrEmpty(displayName) ? name : displayName;
         [Header("参数")]
-        public SkillParameterSetAsset parameterSet;
         public SkillParameter[] parameters = Array.Empty<SkillParameter>();
-        public SkillParameterOverride[] parameterOverrides = Array.Empty<SkillParameterOverride>();
         [Header("激活动作（按顺序执行）")]
         [SerializeReference] public SkillAction[] activationActions = Array.Empty<SkillAction>();
-        public SkillParameterValues ResolveParameters(int level, SkillParameterOverride[] castOverrides = null)
-            => ResolveParameters(level, null, castOverrides);
-        internal SkillParameterValues ResolveParameters(int level, SkillParameterOverride[] grant, SkillParameterOverride[] cast)
+        public SkillParameterValues ResolveParameters(int level, SkillParameterOverride[] overrides = null)
         {
-            var values = new Dictionary<string, SkillParameterValue>();
-            if (parameterSet != null) SkillParameterSetAsset.AddTo(values, parameterSet.parameters, level);
-            SkillParameterSetAsset.AddTo(values, parameters, level);
-            SkillParameterSetAsset.Apply(values, parameterOverrides, level);
-            SkillParameterSetAsset.Apply(values, grant, level);
-            SkillParameterSetAsset.Apply(values, cast, level);
+            var values = new Dictionary<string, SkillParameterValue>(parameters.Length);
+            foreach (var parameter in parameters) values.Add(parameter.Id, parameter.Resolve(level));
+            if (overrides != null)
+                foreach (var entry in overrides)
+                {
+                    var value = entry.Resolve(level);
+                    if (values[entry.parameterId].Kind != value.Kind) throw new InvalidOperationException("参数类型不匹配: " + entry.parameterId);
+                    values[entry.parameterId] = value;
+                }
             return values.Count == 0 ? SkillParameterValues.Empty : new SkillParameterValues(values);
         }
         [NonSerialized] private SkillActionDefinition[] _actions;
@@ -56,17 +55,9 @@ namespace ZFramework.GAS.Unity
         [Tooltip("必须至少授予一个标签——那个标签就是「在冷却中」的标志")]
         [SerializeField] private GameplayEffectAsset cooldown;
 
-        [Header("调用方参数（声明，不自动注入运行期）")]
-        [SerializeField] private CallerParameter[] callerParameters = Array.Empty<CallerParameter>();
-
-        // 表现槽：基础层只保存引用，由表现扩展解释（Realtime 扩展放技能动画与片段替换表，
-        // 回合制或其他品类可以放自己的表现资产）。字段名沿用拆分前的 animation / clipOverrides，
-        // 已有资产里的引用因此不会丢失。
         [Header("表现（由扩展解释）")]
         [SerializeField] private ScriptableObject animation;
-        [SerializeField] private ScriptableObject clipOverrides;
         public ScriptableObject Presentation { get => animation; set => animation = value; }
-        public ScriptableObject PresentationVariant { get => clipOverrides; set => clipOverrides = value; }
 
         [NonSerialized] private GameplayAbilityDefinition _definition;
 
@@ -75,7 +66,7 @@ namespace ZFramework.GAS.Unity
 
         private GameplayAbilityDefinition Build()
         {
-            DefinitionSource.DependsOn(this, cost); DefinitionSource.DependsOn(this, cooldown); DefinitionSource.DependsOn(this, parameterSet);
+            DefinitionSource.DependsOn(this, cost); DefinitionSource.DependsOn(this, cooldown);
             var definition = new GameplayAbilityDefinition(
                 TagAssetUtility.ToSet(abilityTags),
                 TagAssetUtility.ToSet(activationRequiredTags),

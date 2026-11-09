@@ -111,11 +111,9 @@ namespace ZFramework.GAS
             }
         }
         public EffectEvaluationContext EvaluationContext { get; internal set; }
-        public AbilityActivationCheck LastActivationCheck { get; internal set; }
 
         public bool IsActive { get; internal set; }
         public bool IsCommitted { get; internal set; }
-        public AbilityActivationCheck LastCommitCheck { get; internal set; }
         internal int OwnedTagCount;
         internal bool Committing;
         public bool IsGranted { get; internal set; } = true;
@@ -150,8 +148,8 @@ namespace ZFramework.GAS
                 }
 
                 ActiveGameplayEffectHandle handle = Owner.Effects.Find(CommittedCooldown ?? cooldown);
-                return Owner.Effects.TryGetRemainingTime(handle, out float remaining)
-                    ? Math.Max(0f, remaining)
+                return Owner.Effects.TryGetInfo(handle, out var info)
+                    ? Math.Max(0f, info.RemainingTime)
                     : 0f;
             }
         }

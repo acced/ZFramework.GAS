@@ -30,7 +30,7 @@ namespace ZFramework.GAS.Editor
             var so = _doc.Serialized(asset);
             string track = _doc.Selection.Track;
             var element = track == "@field" ? so.FindProperty(_doc.Selection.ElementId) : track != null ? SkillElementLookup.Find(so, track, _doc.Selection.ElementId) : null;
-            if (asset is GameplayAbilityAsset || asset is SkillActionModuleAsset || (SkillEditorExtensions.Supports(asset) && (track == SkillEditorExtensions.Timeline.EntryTrack || track == "@field")))
+            if (asset is GameplayAbilityAsset || (SkillEditorExtensions.Supports(asset) && (track == SkillEditorExtensions.Timeline.EntryTrack || track == "@field")))
                 _body.Add(new Button(_doc.OpenFlow) { text = "在流程中打开" });
             if (element != null)
             {
@@ -92,13 +92,13 @@ namespace ZFramework.GAS.Editor
         {
             this.Unbind(); Clear(); if (_doc.Root == null) return;
             var so = _doc.Serialized(_doc.Root);
-            foreach (string path in new[] { "displayName", "description", "icon", "parameterSet", "parameters", "parameterOverrides", "autoCommit", "activationActions" })
+            foreach (string path in new[] { "displayName", "description", "icon", "parameters", "autoCommit", "activationActions" })
             {
                 var field = new PropertyField(so.FindProperty(path), path == "autoCommit" ? "激活时提交消耗与冷却" : null);
                 Add(field); field.BindProperty(so.FindProperty(path));
                 field.RegisterCallback<SerializedPropertyChangeEvent>(e => _doc.NotifySerializedChange(so.targetObject, e.changedProperty.propertyPath));
             }
-            foreach (var pair in new[] { ("abilityTags", "能力标识"), ("activationRequiredTags", "激活需要"), ("activationBlockedTags", "激活阻断"), ("activationOwnedTags", "激活期间授予"), ("cancelAbilitiesWithTags", "激活时取消"), ("callerParameters", "调用方参数声明") })
+            foreach (var pair in new[] { ("abilityTags", "能力标识"), ("activationRequiredTags", "激活需要"), ("activationBlockedTags", "激活阻断"), ("activationOwnedTags", "激活期间授予"), ("cancelAbilitiesWithTags", "激活时取消") })
             {
                 var field = new PropertyField(so.FindProperty(pair.Item1), pair.Item2); Add(field); field.BindProperty(so.FindProperty(pair.Item1));
                 field.RegisterCallback<SerializedPropertyChangeEvent>(e => _doc.NotifySerializedChange(so.targetObject, e.changedProperty.propertyPath));

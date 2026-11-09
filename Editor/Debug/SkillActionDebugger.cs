@@ -19,15 +19,15 @@ namespace ZFramework.GAS.Editor
     {
         public sealed class PausedFrame
         {
-            public readonly string RawId, NavigationId, Summary;
+            public readonly string ActionId, Summary;
             public readonly GameplayAbilityAsset Asset;
             public readonly AbilitySystemComponent Owner;
             internal PausedFrame(SkillExecutionContext c, string id, string label)
             {
-                Asset=c.Asset; Owner=c.Source; RawId=id; NavigationId=c.EditorCallSiteId ?? id;
+                Asset=c.Asset; Owner=c.Source; ActionId=id;
                 var parameters=new List<KeyValuePair<string,SkillParameterValue>>(); c.Values.Parameters.CopyTo(parameters);
                 Summary=$"{(Asset!=null?Asset.name:"技能")} › {label}  ·  Lv.{c.Values.Level}\n目标：{(c.Services.Target != null ? c.Services.Target.name : "无")}  点：{(c.Services.HasTargetPosition?c.Services.TargetPosition.ToString():"无")}\n参数："+string.Join("，",parameters.Select(p=>p.Key+"="+p.Value))+
-                    "\n最近选敌："+(LastTargets.TryGetValue(c,out var targets)?string.Join("，",targets.Names):"无")+"\n通道："+string.Join("，",c.Channels.Select(p=>p.Key+"="+p.Value))+(c.Event.HasValue?"\n事件："+c.Event.Value.Tag+"  "+c.Event.Value.Payload:"");
+                    "\n最近选敌："+(LastTargets.TryGetValue(c,out var targets)?string.Join("，",targets.Names):"无")+(c.Event.HasValue?"\n事件："+c.Event.Value.Tag+"  "+c.Event.Value.Payload:"");
             }
         }
         public static PausedFrame Frame { get; private set; }
@@ -62,7 +62,7 @@ namespace ZFramework.GAS.Editor
         private static void Pause(SkillExecutionContext context,string id,string label)
         {
             if (!EditorApplication.isPlaying || EditorApplication.isPaused) return;
-            if (!PauseNext && !Has(id) && (context.EditorCallSiteId == null || !Has(context.EditorCallSiteId))) return;
+            if (!PauseNext && !Has(id)) return;
             Frame=new PausedFrame(context,id,label);
             PauseNext = false; PausedActionId = id;
             EditorApplication.isPaused = true;

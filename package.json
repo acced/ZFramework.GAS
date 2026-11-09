@@ -16,9 +16,9 @@
   "license": "MIT",
   "samples": [
     {
-      "displayName": "Basic Combat",
-      "description": "Optional action combat sandbox, game rules and example skill templates.",
-      "path": "Samples~/BasicCombat"
+      "displayName": "Minimal Ability",
+      "description": "One actor showing explicit grants, ticking, target input and optional Playables presentation.",
+      "path": "Samples~/Minimal"
     }
   ]
 }

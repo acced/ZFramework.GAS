@@ -102,20 +102,15 @@ namespace ZFramework.GAS.Editor.Tests
             _player.Bind(_owner); Assert.AreEqual(2, _router.HandlerCount);
         }
 
-        private sealed class Driver : IAnimationDriver
-        {
-            public float Play(string name, float duration, bool loop) => 1;
-            public void Advance(float t) { }
-            public void Stop() { }
-        }
         [TestCase(true)]
         [TestCase(false)]
         public void AnimationTaskOpensRegionAndEndsVfx(bool cancel)
         {
             var spec = _owner.GrantAbility(new GameplayAbilityDefinition());
             _owner.TryActivateAbility(spec);
-            var definition = new SkillAnimationDefinition("Test", 1, false, cueRegions: new[] { new AnimationCueRegion(.2f, .8f, _tag) });
-            _owner.StartTask(spec, new AnimationTask(definition, new Driver()));
+            var definition = new SkillAnimationDefinition(null, 1, false, cueRegions: new[] { new AnimationCueRegion(.2f, .8f, _tag) });
+            var execution = new SkillExecutionContext(null, spec, default, new EffectEvaluationContext(1), null);
+            _owner.StartTask(spec, new AnimationTask(definition, null, execution));
             _owner.Tick(.19f); Assert.IsEmpty(Instances());
             _owner.Tick(.03f); Assert.AreEqual(1, Instances().Length);
             if (cancel) _owner.EndAbility(spec); else _owner.Tick(.6f);

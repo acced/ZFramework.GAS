@@ -17,10 +17,6 @@ namespace ZFramework.GAS.Editor
         private readonly SkillDocument _doc;
         private readonly Dictionary<ScriptableObject, SkillNode> _nodes = new();
         private readonly Dictionary<string, Edge> _edges = new();
-        private readonly Dictionary<string, SkillRerouteNode> _reroutes = new();
-        private readonly Dictionary<string, Edge> _tails = new();
-        private bool _hideUnused;
-        internal bool HideUnused => _hideUnused;
         private readonly HashSet<ScriptableObject> _pendingPlacement = new();
         private readonly Dictionary<ScriptableObject, Vector2> _preferredPositions = new();
         private readonly Dictionary<ScriptableObject, Vector2> _measuredSizes = new();
@@ -28,17 +24,10 @@ namespace ZFramework.GAS.Editor
         private IVisualElementScheduledItem _layoutWork;
         private bool _arrangeRequested, _frameRequested, _framing, _disposed;
         private readonly HashSet<ScriptableObject> _liveAssets = new();
-        private readonly VisualElement _miniMapHost;
-        public bool MiniMapVisible
-        {
-            get => _miniMapHost.style.display.value != DisplayStyle.None;
-            set => _miniMapHost.style.display = value ? DisplayStyle.Flex : DisplayStyle.None;
-        }
         private bool _syncing;
         internal bool IsSyncing => _syncing;
         private GameplayAbilityAsset _root;
         private Vector2 _mouse;
-        private readonly List<Group> _groups = new();
         private ScriptableObject[] _clipboard = Array.Empty<ScriptableObject>();
         public int NodeCount => _nodes.Count;
         private int _layoutPassCount, _queueCount;
@@ -49,12 +38,6 @@ namespace ZFramework.GAS.Editor
             SetupZoom(.2f, 1.8f);
             var grid = new GridBackground(); Insert(0, grid); grid.StretchToParentSize();
             this.AddManipulator(new ContentDragger()); this.AddManipulator(new SelectionDragger()); this.AddManipulator(new RectangleSelector());
-            _miniMapHost = new VisualElement { name = "minimap-overlay" }; _miniMapHost.AddToClassList("skill-minimap-overlay");
-            // MiniMap.Resize 会重写自身的 left/top。外层固定角落，内层原点保持为零，隔离它的自动定位。
-            var surface = new VisualElement { style = { flexGrow = 1 } }; _miniMapHost.Add(surface);
-            var minimap = new MiniMap { anchored = true, maxWidth = 150, maxHeight = 92 };
-            minimap.AddToClassList("skill-minimap"); minimap.Q<Label>().style.display = DisplayStyle.None;
-            surface.Add(minimap); Add(_miniMapHost);
             graphViewChanged = OnGraphChanged;
             nodeCreationRequest = ctx => Search(ctx.screenMousePosition);
             RegisterCallback<MouseMoveEvent>(e => _mouse = e.localMousePosition);
@@ -90,12 +73,6 @@ namespace ZFramework.GAS.Editor
                     _root = _doc.Root;
                     _pendingPlacement.Clear(); _preferredPositions.Clear(); _arrangeRequested = false;
                     foreach (var node in _nodes.Values) RemoveElement(node); _nodes.Clear();
-                    ClearReroutes();
-                    foreach (var group in _groups) RemoveElement(group); _groups.Clear();
-                    foreach (var comment in _doc.Layout.Comments)
-                    {
-                        var group = new Group { title = comment.title }; group.SetPosition(comment.rect); AddElement(group); _groups.Add(group);
-                    }
                 }
                 var live = new HashSet<ScriptableObject>(_doc.Assets);
                 foreach (var pair in _nodes.ToArray())
@@ -117,30 +94,15 @@ namespace ZFramework.GAS.Editor
                 foreach (var pair in _edges.ToArray())
                 {
                     if (!keys.Contains(pair.Key) || pair.Value.output?.panel == null || pair.Value.input?.panel == null)
-                    { pair.Value.output?.Disconnect(pair.Value); pair.Value.input?.Disconnect(pair.Value); RemoveElement(pair.Value); _edges.Remove(pair.Key); RemoveRerouteVisual(pair.Key); }
+                    { pair.Value.output?.Disconnect(pair.Value); pair.Value.input?.Disconnect(pair.Value); RemoveElement(pair.Value); _edges.Remove(pair.Key); }
                 }
                 foreach (var link in links)
                 {
                     if (_edges.ContainsKey(link.Key) || !_nodes.TryGetValue(link.Parent, out var from) || !_nodes.TryGetValue(link.Child, out var to)) continue;
                     var port = from.Output(link.Port); if (port == null) continue;
-                    var saved = _doc.Layout.Reroutes.Find(r => r.link == link.Key);
-                    Edge edge;
-                    if (saved != null)
-                    {
-                        var reroute = new SkillRerouteNode(link.Key); reroute.SetPosition(new Rect(saved.position, new Vector2(36, 24))); AddElement(reroute); _reroutes[link.Key] = reroute;
-                        edge = port.ConnectTo(reroute.Input);
-                        var tail = reroute.Output.ConnectTo(to.Input); tail.userData = link; AddElement(tail); _tails[link.Key] = tail;
-                    }
-                    else edge = port.ConnectTo(to.Input);
+                    var edge = port.ConnectTo(to.Input);
                     edge.userData = link; AddElement(edge); _edges[link.Key] = edge;
-                    var captured = link;
-                    edge.RegisterCallback<MouseDownEvent>(e =>
-                    {
-                        if (e.clickCount != 2) return;
-                        AddReroute(captured.Key, contentViewContainer.WorldToLocal(e.mousePosition)); e.StopPropagation();
-                    });
                 }
-                foreach (var key in _reroutes.Keys.ToArray()) if (!keys.Contains(key)) RemoveRerouteVisual(key);
                 foreach (var node in _nodes.Values) node.UpdatePortVisibility();
                 _pendingPlacement.IntersectWith(live);
                 _frameRequested |= rootChanged;
@@ -158,9 +120,7 @@ namespace ZFramework.GAS.Editor
                 foreach (var element in change.movedElements)
                     if (element is SkillNode node)
                     { _pendingPlacement.Remove(node.Asset); _doc.Layout.SetPosition(node.Asset, node.GetPosition().position); }
-                    else if (element is SkillRerouteNode reroute)
-                    { var saved = _doc.Layout.Reroutes.Find(r => r.link == reroute.Link); if (saved != null) { saved.position = reroute.GetPosition().position; _doc.Layout.MarkDirty(); } }
-                SaveComments(); _doc.Layout.Save();
+                _doc.Layout.Save();
             }
             if (change.elementsToRemove != null)
             {
@@ -168,13 +128,10 @@ namespace ZFramework.GAS.Editor
                 schedule.Execute(() =>
                 {
                     var deletedNodes = removed.OfType<SkillNode>().ToArray();
-                    var deletedReroutes = new HashSet<string>(removed.OfType<SkillRerouteNode>().Select(r => r.Link));
                     var deletedAssets = new HashSet<ScriptableObject>(deletedNodes.Select(n => n.Asset));
                     // 节点删除会清理自己的进出引用；只断开两端都保留的连线，混选时也不丢弃用户选中的连线。
                     var links = removed.OfType<Edge>().Select(e => e.userData).OfType<AssetLink>()
-                        .Where(l => l.Parent != null && !deletedAssets.Contains(l.Parent) && !deletedAssets.Contains(l.Child) && !deletedReroutes.Contains(l.Key)).ToArray();
-                    foreach (string key in deletedReroutes)
-                    { _doc.Layout.Reroutes.RemoveAll(r => r.link == key); RemoveRerouteVisual(key); RemoveLinkVisual(key); }
+                        .Where(l => l.Parent != null && !deletedAssets.Contains(l.Parent) && !deletedAssets.Contains(l.Child)).ToArray();
                     if (deletedNodes.Length > 0 || links.Length > 0)
                         EditCommand.Transaction(_doc, deletedNodes.Length > 0 ? "删除选中节点" : "断开连线", _doc.Root, () =>
                         {
@@ -182,8 +139,6 @@ namespace ZFramework.GAS.Editor
                             { using var so = new SerializedObject(link.Parent); PortRules.Write(so, link.Port, link.Child, true); so.ApplyModifiedProperties(); }
                             foreach (var node in deletedNodes) SkillAssetFactory.DeleteNode(_doc, node.Asset);
                         });
-                    foreach (var group in removed.OfType<Group>()) { _groups.Remove(group); RemoveElement(group); } SaveComments();
-                    if (deletedReroutes.Count > 0) { _doc.Layout.MarkDirty(); _doc.Layout.Save(); Sync(new ChangeSet(_doc.Root, true)); }
                 });
             }
             return change;
@@ -246,51 +201,6 @@ namespace ZFramework.GAS.Editor
         }
         public void AutoArrange()
         { _arrangeRequested = true; _frameRequested = true; QueueLayout(); }
-        public void SetHideUnusedPorts(bool value) { _hideUnused = value; foreach (var node in _nodes.Values) node.UpdatePortVisibility(); }
-        public void SearchNodes(string query)
-        {
-            foreach (var node in _nodes.Values)
-            { bool match = string.IsNullOrWhiteSpace(query) || node.title.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0; node.style.opacity = match ? 1 : .25f; node.EnableInClassList("graph-search-match", match && !string.IsNullOrWhiteSpace(query)); }
-        }
-        public void AlignSelection(bool horizontal, bool distribute = false)
-        {
-            var selected = selection.OfType<SkillNode>().OrderBy(n => horizontal ? n.GetPosition().x : n.GetPosition().y).ToArray(); if (selected.Length < 2) return;
-            float start = horizontal ? selected[0].GetPosition().x : selected[0].GetPosition().y;
-            float end = horizontal ? selected[selected.Length - 1].GetPosition().x : selected[selected.Length - 1].GetPosition().y;
-            for (int i = 0; i < selected.Length; i++)
-            {
-                var rect = selected[i].GetPosition(); float position = distribute ? Mathf.Lerp(start, end, i / (float)(selected.Length - 1)) : start;
-                if (horizontal) rect.x = position; else rect.y = position;
-                selected[i].SetPosition(rect); _pendingPlacement.Remove(selected[i].Asset); _doc.Layout.SetPosition(selected[i].Asset, rect.position);
-            }
-            _doc.Layout.Save();
-        }
-        public void CollapseSelection(bool collapsed)
-        {
-            foreach (var node in selection.OfType<SkillNode>()) { node.expanded = !collapsed; _doc.Layout.SetCollapsed(node.Asset, collapsed); }
-            _doc.Layout.Save();
-        }
-        public void AddBookmark()
-        {
-            _doc.Layout.Bookmarks.Add(new LayoutStore.Bookmark { name = "书签 " + (_doc.Layout.Bookmarks.Count + 1), position = contentViewContainer.resolvedStyle.translate, scale = contentViewContainer.resolvedStyle.scale.value });
-            _doc.Layout.MarkDirty(); _doc.Layout.Save();
-        }
-        public void RestoreBookmark(LayoutStore.Bookmark bookmark) => UpdateViewTransform(bookmark.position, bookmark.scale);
-        public void AddReroute(string link, Vector2 position)
-        {
-            if (_doc.Layout.Reroutes.Exists(r => r.link == link)) return;
-            _doc.Layout.Reroutes.Add(new LayoutStore.Reroute { link = link, position = position }); _doc.Layout.MarkDirty(); _doc.Layout.Save();
-            RemoveLinkVisual(link); Sync(new ChangeSet(_doc.Root, true));
-        }
-        private void RemoveLinkVisual(string key)
-        { if (_edges.TryGetValue(key, out var edge)) { edge.output?.Disconnect(edge); edge.input?.Disconnect(edge); RemoveElement(edge); _edges.Remove(key); } }
-        private void RemoveRerouteVisual(string key)
-        {
-            if (_tails.TryGetValue(key, out var tail)) { tail.output?.Disconnect(tail); tail.input?.Disconnect(tail); RemoveElement(tail); _tails.Remove(key); }
-            if (_reroutes.TryGetValue(key, out var node)) { RemoveElement(node); _reroutes.Remove(key); }
-        }
-        private void ClearReroutes() { foreach (string key in _reroutes.Keys.ToArray()) RemoveRerouteVisual(key); }
-
         // 搜索菜单提供初始位置；已经摆好的节点只保留原位。
         internal void SuggestPosition(ScriptableObject asset, Vector2 point)
         {
@@ -391,25 +301,11 @@ namespace ZFramework.GAS.Editor
                 x += column.Max(a => _measuredSizes[a].x) + 60;
             }
         }
-        private void SaveComments()
-        {
-            _doc.Layout.Comments.Clear();
-            foreach (var group in _groups) _doc.Layout.Comments.Add(new LayoutStore.CommentLayout { title = group.title, rect = group.GetPosition() });
-            _doc.Layout.MarkDirty();
-        }
-        internal void AddComment()
-        {
-            var group = new Group { title = "注释" }; group.SetPosition(new Rect(contentViewContainer.WorldToLocal(_mouse), new Vector2(300, 200)));
-            AddElement(group); _groups.Add(group);
-            foreach (var node in selection.OfType<SkillNode>().ToArray()) group.AddElement(node);
-            SaveComments(); _doc.Layout.Save();
-        }
         private void OnKey(KeyDownEvent e)
         {
             if (e.target is TextField || e.target is TextElement) return;
             if (e.keyCode == KeyCode.Space) { Search(GUIUtility.GUIToScreenPoint(_mouse)); e.StopPropagation(); }
             else if (e.keyCode == KeyCode.A && !e.ctrlKey) { FrameAll(); e.StopPropagation(); }
-            else if (e.keyCode == KeyCode.C && !e.ctrlKey) { AddComment(); e.StopPropagation(); }
             else if (e.ctrlKey && e.keyCode == KeyCode.C) { _clipboard = selection.OfType<SkillNode>().Select(n => n.Asset).Where(a => a != _doc.Root).ToArray(); e.StopPropagation(); }
             else if (e.ctrlKey && e.keyCode == KeyCode.V)
             {
@@ -430,7 +326,6 @@ namespace ZFramework.GAS.Editor
             e.menu.AppendAction("添加节点  Space", _ => Search(GUIUtility.GUIToScreenPoint(e.localMousePosition)));
             e.menu.AppendAction("自动整理", _ => AutoArrange());
             e.menu.AppendAction("显示全部  A", _ => FrameAll());
-            e.menu.AppendAction("添加注释  C", _ => AddComment());
             if (e.target is VisualElement target)
             {
                 var node = target.GetFirstAncestorOfType<SkillNode>();
@@ -481,10 +376,7 @@ namespace ZFramework.GAS.Editor
                 extensionContainer.Add(button);
             }
             _cues = new VisualElement(); _cues.AddToClassList("node-cues"); extensionContainer.Add(_cues);
-            RegisterCallback<MouseDownEvent>(e => { if (e.clickCount == 2) { if (asset is SkillActionModuleAsset module) SkillModuleWindow.Show(module); else EditorGUIUtility.PingObject(asset); } });
-            expanded = !doc.Layout.IsCollapsed(asset); RefreshExpandedState();
-            RegisterCallback<ClickEvent>(_ => schedule.Execute(() =>
-            { if (Asset != null && doc.Layout.IsCollapsed(Asset) == expanded) { doc.Layout.SetCollapsed(Asset, !expanded); doc.Layout.Save(); } }));
+            RegisterCallback<MouseDownEvent>(e => { if (e.clickCount == 2) EditorGUIUtility.PingObject(asset); });
         }
         public void Field<T>(SerializedObject so, string path, BaseField<T> field)
         {
@@ -494,6 +386,7 @@ namespace ZFramework.GAS.Editor
                 SerializedPropertyType.Float => property.floatValue,
                 SerializedPropertyType.String => property.stringValue,
                 SerializedPropertyType.Boolean => property.boolValue,
+                SerializedPropertyType.ObjectReference => property.objectReferenceValue,
                 SerializedPropertyType.Enum => Enum.ToObject(field.value.GetType(), property.intValue),
                 _ => field.value
             };
@@ -585,7 +478,7 @@ namespace ZFramework.GAS.Editor
                 _summary.text = SkillEditorExtensions.Timeline.DisplayName + "  /  " +
                     (windows == 0 ? events + " 个事件" : (events > 0 ? events + " 个事件 · " : "") + windows + " 个命中窗口");
             }
-            else { color = SkillColors.Task; _summary.text = Asset is SkillActionModuleAsset ? "MODULE  /  共享动作模块" : "PARAMETERS  /  共享参数"; }
+            else { color = SkillColors.Task; _summary.text = ""; }
             int actionCount = 0;
             var cursor = so.GetIterator();
             while (cursor.Next(true)) if (cursor.propertyType == SerializedPropertyType.ManagedReference && cursor.managedReferenceValue is SkillAction) actionCount++;
@@ -624,9 +517,8 @@ namespace ZFramework.GAS.Editor
         }
         public void UpdatePortVisibility()
         {
-            inputContainer.style.display = Asset == _doc.Root || _graph.HideUnused && !Input.connected ? DisplayStyle.None : DisplayStyle.Flex;
-            foreach (var port in _outputs.Values) port.style.display = _graph.HideUnused && !port.connected ? DisplayStyle.None : DisplayStyle.Flex;
-            outputContainer.style.display = _outputs.Count == 0 || _graph.HideUnused && !_outputs.Values.Any(p => p.connected) ? DisplayStyle.None : DisplayStyle.Flex;
+            inputContainer.style.display = Asset == _doc.Root ? DisplayStyle.None : DisplayStyle.Flex;
+            outputContainer.style.display = _outputs.Count == 0 ? DisplayStyle.None : DisplayStyle.Flex;
         }
         public void SetIssues(IReadOnlyList<Issue> issues)
         {
@@ -634,22 +526,6 @@ namespace ZFramework.GAS.Editor
             _badge.text = issues.Count == 0 ? "" : (errors > 0 ? "✕ " : "! ") + issues.Count;
             _badge.tooltip = string.Join("\n", issues.Select(i => i.Message));
             EnableInClassList("invalid-node", errors > 0);
-        }
-    }
-    internal sealed class SkillRerouteNode : Node
-    {
-        public string Link { get; }
-        public Port Input { get; }
-        public Port Output { get; }
-        public SkillRerouteNode(string link)
-        {
-            Link = link; title = ""; titleContainer.style.display = DisplayStyle.None;
-            style.width = 36; style.minWidth = 36; style.height = 24;
-            capabilities = Capabilities.Movable | Capabilities.Selectable | Capabilities.Deletable;
-            Input = InstantiatePort(Orientation.Horizontal, Direction.Input, Port.Capacity.Single, typeof(ScriptableObject));
-            Output = InstantiatePort(Orientation.Horizontal, Direction.Output, Port.Capacity.Single, typeof(ScriptableObject));
-            Input.portName = ""; Output.portName = ""; inputContainer.Add(Input); outputContainer.Add(Output); RefreshPorts();
-            tooltip = "编辑器重路由点 · 不参与运行期";
         }
     }
     internal sealed class SkillPort : Port

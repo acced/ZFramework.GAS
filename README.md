@@ -1,179 +1,141 @@
-# ZFramework GAS
+# ZFramework.GAS
 
-Unity 的 Gameplay Ability System 工具库：纯 C# 规则核心、可配置技能、动作流程、动画时间轴和运行时调试。
+Unity 技能工具库：纯 C# GAS 运行时、资产编排、技能时间轴与运行时调试。
 
-0.2 的边界是 **规则通用、执行显式、表现与 3D 战斗按程序集扩展、样例按需导入**。不内置职业、阵营、伤害公式、回合队列或网络协议。升级说明见 [0.2 重构与验证](Docs~/Refactor-0.2.md)。
+本次重构以 **一种状态只有一个所有者、同一操作只有一个入口、游戏规则留给项目** 为边界。运行时不依赖主项目，也不内置角色、投射物、连招、伤害公式或装备系统。
 
-## 功能归属
+## 功能边界
 
-| 层 / 程序集 | 职责 | 接入场景 |
-|---|---|---|
-| `ZFramework.GAS` | ASC、属性、Effect、Ability、标签条件、事件、任务生命周期、Cue 路由 | 所有游戏；也可在 .NET 独立运行 |
-| `ZFramework.GAS.Unity` | ScriptableObject 配置、参数、动作、授予/施放、目标过滤、服务注入 | Unity 通用技能创作 |
-| `ZFramework.GAS.Unity.Realtime` | 动画时间轴、Section、Playables/Animator/序列帧、表现轨道、Cue VFX | 需要实时表现的游戏 |
-| `ZFramework.GAS.Unity.Combat3D` | `PhysicsTargetSearcher`、武器碰撞、投射物、区域、Prefab 生命周期 | 使用 3D 物理与这些战斗模型的项目 |
-| `ZFramework.GAS.Editor` | 文档、结构图、动作流程、参数编辑、严格校验、调试 | 不依赖 Realtime 或 Combat3D |
-| `ZFramework.GAS.Editor.Realtime` | 时间轴编辑、动画预览、3D 几何预演 | 依赖 Realtime 与 Combat3D |
-| `Runtime.Spine` / `Editor.Spine` | Spine 后端与预览接入 | 安装兼容 Spine 包后启用 |
-| `Samples~/BasicCombat` | 训练场、阵营、伤害示例、具体技能和闪电连线 | 在 Package Manager 手动 Import |
+| 层 | 保留内容 | 依赖方向 |
+| --- | --- | --- |
+| Core | Attribute、GameplayTag、Effect、Ability、Task、Event、Cue、不可变参数 | 仅 GameplayTags；不引用 Unity |
+| Unity | 能力/效果资产、动作编排、SkillRunner、逻辑目标与项目服务 | Core |
+| Realtime | 单个 AnimationClip 时间轴、Marker、Tag/Cue 窗口、命中窗口、音效、Playables 驱动 | Unity + Core |
+| Combat3D | 3D 查询适配、碰撞体槽位与几何 | Unity + Core |
+| Editor | 一个技能编辑器、一个运行时调试窗口 | Unity + Core |
+| Editor.Realtime | 时间轴编辑、姿势/VFX/音效与查询范围预览 | Editor + Realtime + Combat3D |
+| Samples~ | 一个可选 AbilityActor 接入样例 | 仅用户导入时使用 |
 
-这些是同一个 UPM 包里的独立程序集，不是多个独立发布的包。自定义 asmdef 只引用实际使用的程序集。Core 禁止引用引擎；Unity 基础层没有 `Physics`、`Collider` 或 `Rigidbody` 实现。
+`Combat3D` 当前是程序集边界，尚未拆成单独发布的 UPM 包。阵营判断和逻辑目标来源通过项目服务注入；框架不定义阵营、角色类型或敌我规则。
 
-## 安装
+### 保留的内置动作
 
-Unity 最低版本保持 **6000.3**。在工程 `Packages/manifest.json` 中固定 GameplayTags 的来源，再安装 GAS：
+- 提交消耗与冷却：`CommitAbilityAction`。
+- 施加效果：`ApplyEffectAction`。
+- 标签、属性和 Bool 参数条件分支：`ConditionalAction`。
+- 发送玩法事件：`SendGameplayEventAction`。
+- 对查询到的每个目标执行分支：`SelectTargetsAction`。
+- 延时、等待事件或等待目标输入：`WaitSkillAction`。
 
-```json
-{
-  "dependencies": {
-    "com.acced.zframework.gameplaytags": "https://github.com/acced/ZFramework.GameplayTags.git#1.0.0",
-    "com.acced.zframework.gas": "https://github.com/acced/ZFramework.GAS.git"
-  }
-}
+项目行为通过 `SkillAction` / `GameplayAbilityTask` 扩展。修改器统一由 Effects 管理，不开放绕过效果生命周期的属性 modifier 写入口。
+
+## 安装与要求
+
+Unity 6000.3；GameplayTags 1.0.0。通过 Package Manager 的 Git URL 安装：
+
+```text
+https://github.com/acced/ZFramework.GAS.git
 ```
 
-本地开发也可使用 Package Manager 的 **Add package from disk** 选择本仓库 `package.json`。项目须先注册完整 GameplayTags 词表；热路径使用生成字段或缓存的句柄。
+当前重构工作在 `refactor/gas-library-boundaries` 分支；检查该分支时在 URL 后添加 `#refactor/gas-library-boundaries`。先配置 GameplayTags 包的来源与标签注册。样例通过 Package Manager 的 Samples 导入。
 
-Basic Combat 不再默认编译。需要示例时在 Package Manager 的 Samples 中导入，再执行示例生成菜单。测试接入见 [Tests~/README.md](Tests~/README.md)。
-
-## 纯 C# 核心
-
-属性 ID 与具体规则由项目定义。ASC 不创建 GameObject，也不接管游戏循环。
+## 一个施放入口
 
 ```csharp
-var mana = new AttributeId(1);
+using ZFramework.GAS;
+using ZFramework.GAS.Unity;
+
 var owner = new AbilitySystemComponent();
-owner.Attributes.Add(mana, 100);
+owner.Attributes.Add(new AttributeId(1), 100);
 
-var cost = new GameplayEffectDefinition(
-    EffectDurationPolicy.Instant,
-    modifiers: new[] {
-        new EffectModifier(mana, ModifierOperation.Add, EffectMagnitude.Fixed(-20))
-    });
-
-var ability = owner.GrantAbility(new GameplayAbilityDefinition(cost: cost));
-var result = owner.TryActivateAbility(ability);
-owner.EndAbility(ability);
-owner.Tick(deltaTime);
-```
-
-### 激活与提交
-
-默认 `TryActivateAbility` 在激活时提交消耗与冷却。预瞄、蓄力或等待确认可显式延迟：
-
-```csharp
-if (owner.TryActivateAbility(ability, autoCommit: false) == AbilityActivationResult.Activated)
-{
-    int version = ability.ActivationVersion;
-    // Save version with this aiming/charging operation.
-    // A later confirmation commits this exact activation:
-    var result = owner.CommitAbility(ability, version);
-    if (result == AbilityActivationResult.Activated)
-    {
-        // Execute the confirmed gameplay operation.
-    }
-    owner.EndAbility(ability);
-}
-```
-
-激活检查初始门禁；提交再次检查资源和冷却。同一次激活重复提交不会重复扣费。未提交前取消不付费。过期版本返回 `Inactive`，不能替后来一次施放付款。付款回调结束或撤销能力时，不再返回可继续启动任务的成功状态；已经支付的消耗与冷却不回滚。
-
-Unity 技能资产的 **激活时提交消耗与冷却** 对应 `autoCommit`。关闭后，在动作流程的确认位置加入 **提交消耗与冷却**。提交失败会结束当前施放并停止后续动作。脱离能力的场景分支不能提交能力。
-
-### Effect 与属性
-
-- Definition 是共享的不可变配置；Spec 保存一次施加的来源/参数；ActiveEffect 保存持续状态和句柄。
-- Definition 在构造边界复制 modifiers/conditionalEffects，公开 `ReadOnlySpan`，不会被调用方修改原数组污染。
-- Instant 和 Periodic 修改 BaseValue；无周期的持续效果通过修改器推导 CurrentValue。
-- Duration 周期效果只结算到到期时刻；大时间步不会在有效期之后补算伤害。
-- 持续效果按定义引用识别堆叠。复用资产的 `Definition`，不要每次施加重新构造。
-- 属性聚合采用本库的乘积乘除规则，不宣称逐项复刻 UE 的所有 Aggregator 语义。
-
-### 任务与 Cue
-
-能力拥有的 `GameplayAbilityTask` 在能力结束时取消。场景拥有的任务由显式 `GameplayTaskHost` 推进，可在施法者结束或回收后继续存在。两者复用同一套调度实现，以激活版本和运行版本区分复用对象。
-
-Cue 只路由表现，GameplayEffect 负责数值和状态。没有全局 Cue 单例。网络同步、客户端预测和回滚由项目实现；库不提供未实现的占位接口。
-
-## Unity 接入
-
-### 通用或回合制目标
-
-自身、指定对象、项目提供的目标名单不需要物理引擎，也不要求 Transform。
-
-```csharp
-var services = new SkillUnitServices();
-services.Set<ISkillTargetSource>(boardTargets);
-var runner = new SkillRunner(owner, services);
-runner.Grant(skill, level: 3);
-runner.TryCast(skill, new SkillCastTarget(selectedUnit));
-```
-
-`boardTargets` 实现 `ISkillTargetSource.Collect`，同步按优先级调用 `SkillTargetResults.Add`。公共查询层统一处理标签、关系过滤、身份去重、容量与数量上限。项目负责阵营、格子、射程和回合顺序。
-
-### 3D 战斗与场景任务
-
-物理查询、对象服务、场景任务由宿主显式选择。以下初始化执行一次：
-
-```csharp
-var sceneHost = gameObject.AddComponent<SceneSkillTaskHost>();
-var services = new SkillUnitServices {
+var runner = new SkillRunner(owner, new SkillUnitServices {
     Origin = transform,
-    Scene = gameObject.scene,
-    Searcher = new PhysicsTargetSearcher(),
-    Objects = myObjectPool,
-    SceneTasks = sceneHost.Tasks
-};
-var runner = new SkillRunner(owner, services);
+    Searcher = new PhysicsTargetSearcher(), // 空间查询显式接入
+    Scene = gameObject.scene
+});
+var spec = runner.Grant(skill, level: 1);
+
+var check = runner.TryCast(skill, new SkillCastTarget(targetAsc, targetTransform));
+if (!check.Succeeded)
+    UnityEngine.Debug.Log(check.Message);
+
+// 主项目决定 Update、FixedUpdate 或自己的模拟时钟。
+owner.Tick(deltaTime);
+
+// 状态与取消直接使用同一份 spec。
+bool active = spec.IsActive;
+float remaining = spec.CooldownRemaining;
+owner.EndAbility(spec);
+runner.Revoke(skill);
 ```
 
-`SceneSkillTaskHost` 是可选的 FixedUpdate 驱动组件；也可以直接创建 `GameplayTaskHost`，由项目统一 Tick。一个 host 只能由一个循环推进。`InstantiateSkillObjectService.Instance` 可用于原型，它会 Instantiate/Destroy；生产项目可注入对象池。
+纯逻辑目标可使用 `new SkillCastTarget(targetAsc)`，并省略物理 Searcher、Transform 和 Scene。调用 `Clear()` 后，旧授权失效；再次使用前显式 `Grant`。
 
-`PhysicsTargetSearcher` 使用配置场景的 `PhysicsScene`；投射物使用自身所在场景。缓冲区通过 searcher 创建：
+### 参数先解析，施放时复用
+
+参数在技能资产自身声明。需要动态数值时，在配置或输入变化时生成不可变上下文；`TryCast` 不缓存可写覆盖数组。
 
 ```csharp
-var searcher = new PhysicsTargetSearcher();
-var buffer = searcher.CreateBuffer(128);
-int count = searcher.Query(query, execution, buffer);
+var values = new EffectEvaluationContext(
+    level: 3,
+    parameters: skill.ResolveParameters(3, new[] {
+        new SkillParameterOverride { parameterId = damageParameterId, value = 12f }
+    }));
+
+// 同一份 values 可以用于后续多次施放。
+var check = runner.TryCast(skill, new SkillCastTarget(targetAsc), values);
 ```
 
-嵌套查询各自使用缓冲区。`Saturated` 表示候选空间被截断，不能把结果视为完整名单。扇形是 XZ 方向判定，属于此 3D 接入的明确规则。
+所有动态效果数值通过 `EffectMagnitude.FromParameter` 读取同一份强类型参数。`SkillParameterOverride[]` 仅是解析输入；解析后修改它不会改变已经生成的上下文。项目伤害算法通过 `IEffectCalculation` 实现。
 
-### 动画接入
+### 时间轴只有一个绑定入口
 
 ```csharp
-var timeline = new SkillTimelinePlayer(runner, () => skillAnimator.Driver);
-runner.Grant(skill);
-runner.TryCast(skill, new SkillCastTarget(target, targetTransform));
-// Dispose timeline when this runner is released.
+using var presentation = new SkillTimelinePlayer(
+    runner, new PlayableAnimationDriver(animator));
+
+// 仍然只调用 runner.TryCast。presentation 不提供另一套 Cast API。
 ```
 
-动画时钟由 ASC.Tick 驱动，动画后端负责表现。时间轴可配置动作标记、标签窗口、Cue、命中窗口和 Section。详情见 [编辑器指南](Docs~/EditorGuide.md)。
+技能表现资产直接引用 AnimationClip。时长由时间轴定义，GAS Tick 推进玩法边界；Playables 接收归一化位置。结束单位前先结束 ASC 工作并释放 presentation。项目自己的动画系统可以实现 `IAnimationDriver`；库只附带 Playables 实现。
 
-## 创作与构建
+### 显式提交
 
-打开 **Window → ZFramework GAS → 技能编辑器**。结构图描述资源关系，动作流程描述行为，时间轴描述时序；保留引用保护、Undo、共享模块、参数与运行时调试。
+`autoCommit = true` 在激活时支付消耗并进入冷却。设为 false 后，在动作列表或 Marker 中放置「提交消耗与冷却」。异步代码提交必须携带本次版本：
 
-按 **F7** 或点击 **编译检查**，会重新构建定义缓存，执行全部规则并定位错误资产/动作。Player 构建使用同一套严格规则，不受个人关闭提示的设置影响。
-
-构建校验覆盖工程内全部 GAS 资产，包含未引用草稿。未完成草稿需要修正或移到不被 Unity 导入的位置。检查包括定义参数、标签、模块循环、参数作用域、有效覆盖值和时间轴动作。
-
-**当前编译产物是内存中的 Definition/ActionDefinition 缓存。** 首次 Grant 仍会构造这些缓存；Player 的后续 Cast 使用已准备内容，Editor 可刷新资产定义。本版本没有持久化 runtime-only Program、字节码 VM 或离线二进制导出。
-
-## 性能合同与验证
-
-正常执行约定主线程、有效配置、明确宿主与生命周期。不在每次施放重做配置预检，也不自动补授予能力、创建宿主或寻找对象服务。来源身份、激活版本、重入取消判断属于正确性约束。
-
-`DefinitionSource` 的弱表与依赖失效图只在 Editor 存在。诊断通知只在 `UNITY_EDITOR`、`DEVELOPMENT_BUILD` 或显式 `GAS_DIAGNOSTICS` 下调用。
-
-.NET 8 Release 回归覆盖标签、效果、重入、任务、提交与分配。已有暖机断言覆盖激活/结束、cost+cooldown+DoT、手动提交，测得 0 B。它不代表任意 Unity 动作树、首次构造、Prefab、投射物、目标分支或参数覆盖都无分配。没有执行 Unity Mono/IL2CPP/移动端测量。
-
-```bash
-python3 Tools~/verify_architecture.py
-dotnet build Tests~/Core/Core.csproj -c Release -m:1 /nodeReuse:false -p:UseSharedCompilation=false
-dotnet .build~/tests/bin/Release/net8.0/Core.dll
+```csharp
+var check = owner.CommitAbility(spec, capturedActivationVersion);
 ```
 
-独立构建依赖相邻的 `../ZFramework.GameplayTags` 1.0.0 仓库。CI 固定其实际提交并执行上述检查。
+取消尚未提交的施放不会支付；已发生的支付不会自动退还。`TryActivateAbility`、`CommitAbility`、`TryCast` 直接返回 `AbilityActivationCheck`，不在 Spec 上重复保存历史结果。
 
-设计边界和参考资料见 [RuntimeArchitecture](Docs~/RuntimeArchitecture.md)，破坏性变更与本次验证范围见 [Refactor-0.2](Docs~/Refactor-0.2.md)。
+## 编辑器
+
+仅保留两个菜单：
+
+- `Window > ZFramework GAS > 技能编辑器`：技能库、关系图、动作分支、详情、时间轴与预览。
+- `Window > ZFramework GAS > 运行时调试`：当前 ASC 的属性、标签、效果、能力和任务。
+
+主窗口新建空白技能，用效果资产表达消耗、冷却和效果；F7 执行编译检查，问题可定位到字段或动作。构建前校验会检查全部 GAS 资产，包括未被技能引用的效果。这里的编译检查构建并校验内存定义，不输出离线字节码。
+
+## 性能与生命周期
+
+- Player 在 Grant/准备阶段构建并缓存定义与动作，施放不扫描资产或使用反射。
+- Core 的任务和效果支持取消、清空、对象池代际与回调重入。
+- 查询缓冲复用；结果携带目标 generation，项目过滤回调前后检查身份。
+- Editor 的资源反查与调试通知不进入普通发布版热路径。
+- 没有全局动画调度器、隐藏场景 TaskHost、模块解释器或可变参数父链。
+
+Core 的热身分配回归不代表所有 Unity 操作零分配：创建 Playable、分支上下文、自定义任务、VFX 实例以及冷启动参数解析应在实际项目中测量。
+
+## 验证与文档
+
+CI 验证程序集边界并构建、运行 .NET Core 回归。Unity EditMode/PlayMode 测试保留在 `Tests~`，需要真实 Unity 工程执行；当前环境没有 Unity，未宣称它们已通过。
+
+- [架构与所有权](Docs~/RuntimeArchitecture.md)
+- [编辑器使用](Docs~/EditorGuide.md)
+- [程序集边界](Docs~/EditorAssemblyBoundaries.md)
+- [删除清单与迁移](Docs~/Refactor-0.2.md)
+- [验证说明](Tests~/README.md)
+
+设计参考：[UE GAS](https://dev.epicgames.com/documentation/en-us/unreal-engine/understanding-the-unreal-engine-gameplay-ability-system)、[UniTask](https://github.com/Cysharp/UniTask)、[UniText](https://github.com/LightSideKittens/UniText)、[Luban](https://github.com/focus-creative-games/luban)。采用明确生命周期、不可变共享定义、准备阶段与热执行阶段分离等原则；这些库没有被加入运行时依赖。

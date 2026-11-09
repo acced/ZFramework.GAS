@@ -12,20 +12,12 @@ namespace ZFramework.GAS.Unity
         [InspectorName("武器 / 单位碰撞体")] Hitbox, [InspectorName("项目提供的目标")] Project
     }
     public enum TargetRelation { [InspectorName("不限")] Any, [InspectorName("友方")] Ally, [InspectorName("敌方")] Enemy }
-    // The enclosing action supplies the contacts (e.g. a projectile sweep).
-    [AttributeUsage(AttributeTargets.Field)] public sealed class TargetFiltersOnlyAttribute : Attribute { }
     /// <summary>The source is the identity of the original cast, even after its unit is recycled.</summary>
     public delegate bool SkillTargetRelationFilter(AbilitySourceIdentity source, AbilitySystemComponent target, TargetRelation relation);
     public interface ITargetFilter
     {
-        bool Allows(AbilitySystemComponent source, AbilitySystemComponent target);
+        bool Allows(AbilitySourceIdentity source, AbilitySystemComponent target);
     }
-    /// <summary>Implement for pooled casters: capture faction/team values once, without retaining mutable source state.</summary>
-    public interface ITargetFilterSnapshot : ITargetFilter
-    {
-        ITargetFilter Capture(AbilitySystemComponent source);
-    }
-
     [Serializable]
     public sealed class TargetQuery
     {
@@ -34,7 +26,7 @@ namespace ZFramework.GAS.Unity
         public static bool IsVolume(TargetQueryKind kind) => kind is TargetQueryKind.TargetPoint or TargetQueryKind.Circle or TargetQueryKind.Sector or TargetQueryKind.Line;
         [InspectorName("目标关系"), Tooltip("敌方和友方由单位接入的阵营服务判断。未接入时，只能使用「不限」。")]
         public TargetRelation relation;
-        public SkillSpawnPosition origin;
+        public SkillOrigin origin;
         public SkillNumber radius = new SkillNumber(3);
         public SkillNumber angle = new SkillNumber(90);
         public SkillNumber width = new SkillNumber(2);
@@ -56,18 +48,18 @@ namespace ZFramework.GAS.Unity
         public readonly LayerMask LayerMask;
         public readonly bool ExcludeSelf;
         public readonly int MaxTargets;
-        public readonly SkillSpawnPosition Origin;
+        public readonly SkillOrigin Origin;
         public readonly TargetRelation Relation;
         public readonly string SourceKey;
-        public SkillSpawnPosition EffectiveOrigin => Kind == TargetQueryKind.TargetPoint ? SkillSpawnPosition.TargetPoint :
-            Kind is TargetQueryKind.Hitbox or TargetQueryKind.Project ? SkillSpawnPosition.Caster : Origin;
+        public SkillOrigin EffectiveOrigin => Kind == TargetQueryKind.TargetPoint ? SkillOrigin.TargetPoint :
+            Kind is TargetQueryKind.Hitbox or TargetQueryKind.Project ? SkillOrigin.Caster : Origin;
         public Vector3 Center(SkillExecutionContext c) => c.OriginAt(EffectiveOrigin);
         private readonly GameplayTagRequirements _requirements;
         private readonly GameplayTagSet _any;
         public TargetQueryDefinition(TargetQueryKind kind, SkillNumber radius, SkillNumber angle, SkillNumber width,
             SkillNumber height, LayerMask mask, bool excludeSelf, int maxTargets,
             GameplayTagSet required = default, GameplayTagSet blocked = default,
-            SkillSpawnPosition origin = SkillSpawnPosition.Caster, GameplayTagSet any = default,
+            SkillOrigin origin = SkillOrigin.Caster, GameplayTagSet any = default,
             TargetRelation relation = TargetRelation.Any, string sourceKey = null)
         {
             _any=any; Origin=origin; Relation=relation; SourceKey=sourceKey;
@@ -82,7 +74,7 @@ namespace ZFramework.GAS.Unity
             => target != null && (!(ExcludeSelf && Kind != TargetQueryKind.Self) || source != target.SourceIdentity)
                 && MatchesTags(target.OwnedTags)
                 && (Relation == TargetRelation.Any || services.TargetRelations?.Invoke(source, target, Relation) == true)
-                && (services.TargetFilter == null || services.TargetFilter.Allows(source.Owner, target));
+                && (services.TargetFilter == null || services.TargetFilter.Allows(source, target));
     }
 
     /// <summary>Local coordinates: +Z forward. Radius is length for a line; a sector uses the unit's XZ direction.</summary>

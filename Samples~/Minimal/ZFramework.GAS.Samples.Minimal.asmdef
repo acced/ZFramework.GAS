@@ -1,0 +1,9 @@
+{
+  "name": "ZFramework.GAS.Samples.Minimal",
+  "references": [
+    "ZFramework.GAS",
+    "ZFramework.GAS.Unity",
+    "ZFramework.GAS.Unity.Realtime",
+    "ZFramework.GAS.Unity.Combat3D"
+  ]
+}

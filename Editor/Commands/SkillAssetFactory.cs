@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -58,31 +57,6 @@ namespace ZFramework.GAS.Editor
                 }
             });
             doc.Selection.Select(created); return created;
-        }
-        // Copy the entire asset file, then explicitly remap only references to owned subassets.
-        public static GameplayAbilityAsset Duplicate(GameplayAbilityAsset source, string destination)
-        {
-            string original = AssetDatabase.GetAssetPath(source);
-            if (!AssetDatabase.CopyAsset(original, destination)) throw new IOException("无法复制技能资产。");
-            var copied = AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(destination);
-            var originals = AssetDatabase.LoadAllAssetsAtPath(original);
-            var copies = AssetDatabase.LoadAllAssetsAtPath(destination);
-            var map = new Dictionary<Object, Object>();
-            foreach (var item in originals)
-            {
-                AssetDatabase.TryGetGUIDAndLocalFileIdentifier(item, out string _, out long localId);
-                var match = copies.FirstOrDefault(c => { AssetDatabase.TryGetGUIDAndLocalFileIdentifier(c, out string _, out long id); return id == localId; });
-                if (match != null) map[item] = match;
-            }
-            foreach (var item in copies.OfType<ScriptableObject>())
-            {
-                using var so = new SerializedObject(item);
-                foreach (var pair in map) AssetReferences.Replace(so, pair.Key, pair.Value);
-                so.ApplyModifiedPropertiesWithoutUndo();
-                SkillEditorExtensions.EnsureIds(item);
-            }
-            copied.name = Path.GetFileNameWithoutExtension(destination); EditorUtility.SetDirty(copied);
-            AssetDatabase.SaveAssetIfDirty(copied); return copied;
         }
         public static ScriptableObject CopyNode(SkillDocument doc, ScriptableObject source)
         {

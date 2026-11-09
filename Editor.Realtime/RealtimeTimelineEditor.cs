@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEditor;
+using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
 using ZFramework.GAS.Unity;
@@ -15,27 +16,21 @@ namespace ZFramework.GAS.Editor
         public Type AssetType => typeof(SkillAnimationAsset);
         public string DisplayName => "动画";
         public string EntryTrack => "markers";
-        public IEnumerable<Type> ManagedReferenceRoots => new[] { typeof(AnimationBackend), typeof(SkillRuntimeTrack) };
+        public IEnumerable<Type> ManagedReferenceRoots => new[] { typeof(SkillRuntimeTrack) };
         public ISkillTimelineWorkspace OpenWorkspace(SkillDocument doc) => new RealtimeWorkspace(doc);
         public RuntimeSnapshot.PresentationTask Capture(GameplayAbilityTask task) =>
             task is AnimationTask animation ? new AnimationTaskSnapshot(animation) : null;
 
-        public ScriptableObject CreateEmbedded(GameplayAbilityAsset root, string name)
-        {
-            var animation = SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(root, name);
-            using var so = new SerializedObject(animation);
-            so.FindProperty("clipName").stringValue = "Attack";
-            so.ApplyModifiedProperties();
-            return animation;
-        }
+        public ScriptableObject CreateEmbedded(GameplayAbilityAsset root, string name) =>
+            SkillAssetFactory.AddEmbedded<SkillAnimationAsset>(root, name);
         public void EnsureIds(ScriptableObject asset, bool recordUndo) => TimelineCommands.EnsureIds((SkillAnimationAsset)asset, recordUndo);
         public void BuildDefinition(ScriptableObject asset) => _ = ((SkillAnimationAsset)asset).Definition;
         public float Duration(ScriptableObject asset) => ((SkillAnimationAsset)asset).Duration;
         public string AttachmentError(ScriptableObject asset)
         {
             var animation = (SkillAnimationAsset)asset;
-            return string.IsNullOrWhiteSpace(animation.ClipName) || !(animation.Duration > 0) || !float.IsFinite(animation.Duration)
-                ? "动画需要片段名和有效的正时长" : null;
+            return !(animation.Duration > 0) || !float.IsFinite(animation.Duration)
+                ? "时间轴需要有效的正时长" : null;
         }
         public string TrackLabel(string track) => TrackTypeRegistry.Get(track)?.DisplayName;
         public IEnumerable<SkillFlowEntry> Entries(SerializedObject asset)
@@ -73,7 +68,7 @@ namespace ZFramework.GAS.Editor
         }
         public void AddNodeFields(ISkillNodeFields node, SerializedObject asset)
         {
-            node.Field(asset, "clipName", new TextField("片段") { isDelayed = true });
+            node.Field(asset, "clip", new ObjectField("片段") { objectType = typeof(AnimationClip), allowSceneObjects = false });
             node.Field(asset, "duration", new FloatField("时长 / s") { isDelayed = true });
             node.Field(asset, "loop", new Toggle("循环"));
         }

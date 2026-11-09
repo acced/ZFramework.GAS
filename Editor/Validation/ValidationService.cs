@@ -65,38 +65,21 @@ namespace ZFramework.GAS.Editor
             {
                 if (!strict && !all && !_all && !_dirty.Contains(asset) && _cache.ContainsKey(asset)) continue;
                 var issues = new List<Issue>();
-                ValidateAsset(context, asset, issues, strict);
+                ValidateAsset(context, asset, issues);
                 _cache[asset] = issues;
             }
             _dirty.Clear(); _all = false;
             Issues = _cache.Values.SelectMany(list => list).OrderByDescending(i => i.Severity).ThenBy(i => i.Id).ToArray(); Changed?.Invoke();
         }
-        internal void ValidateAsset(ValidationContext context, ScriptableObject asset, List<Issue> issues, bool strict)
+        internal void ValidateAsset(ValidationContext context, ScriptableObject asset, List<Issue> issues)
         {
             foreach (var rule in _rules)
             {
-                if (!strict && EditorPrefs.GetBool("ZFramework.GAS.Validation.Disabled." + rule.Id, false)) continue;
                 try { rule.Validate(context, asset, issues); }
                 catch (Exception ex) { context.Add(issues, rule.Id, asset, "", "校验规则执行失败：" + ex.Message); }
             }
         }
         public void Dispose() { _doc.Changed -= Schedule; EditorApplication.update -= Update; }
-    }
-    public sealed class ModuleCallersRule : ISkillValidationRule
-    {
-        public string Id => "GAS_MODULE_CALLERS";
-        public void Validate(ValidationContext context, ScriptableObject asset, List<Issue> issues)
-        {
-            if(asset is not SkillActionModuleAsset)return;
-            string path=AssetDatabase.GetAssetPath(asset);if(string.IsNullOrEmpty(path))return;
-            foreach(string guid in AssetDatabase.FindAssets("t:GameplayAbilityAsset")) {
-                string callerPath=AssetDatabase.GUIDToAssetPath(guid);
-                if(!AssetDatabase.GetDependencies(callerPath).Contains(path))continue;
-                var caller=AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>(callerPath);
-                try { caller.BuildActions(); if (SkillEditorExtensions.Asset(caller) is { } assetToBuild) SkillEditorExtensions.Timeline.BuildDefinition(assetToBuild); }
-                catch(Exception error) { context.Add(issues,Id,caller,"activationActions",callerPath+": "+error.Message); }
-            }
-        }
     }
     public sealed class CostRule : ISkillValidationRule
     {
@@ -167,25 +150,6 @@ namespace ZFramework.GAS.Editor
             }
         }
     }
-    public sealed class CallerParameterRule : ISkillValidationRule
-    {
-        public string Id => "GAS020";
-        public void Validate(ValidationContext c, ScriptableObject asset, List<Issue> issues)
-        {
-            if (asset is not GameplayEffectAsset || c.Document.Root == null) return;
-            var declared = c.Document.Serialized(c.Document.Root).FindProperty("callerParameters"); var keys = new HashSet<string>();
-            for (int i = 0; i < declared.arraySize; i++) keys.Add(declared.GetArrayElementAtIndex(i).FindPropertyRelative("key").stringValue);
-            var modifiers = c.Document.Serialized(asset).FindProperty("modifiers");
-            for (int i = 0; i < modifiers.arraySize; i++)
-            {
-                var magnitude = modifiers.GetArrayElementAtIndex(i).FindPropertyRelative("magnitude"); if (magnitude.FindPropertyRelative("kind").enumValueIndex != 2) continue;
-                string key = magnitude.FindPropertyRelative("callerKey").stringValue;
-                if (string.IsNullOrWhiteSpace(key)) c.Add(issues, Id, asset, magnitude.propertyPath, "SetByCaller 键为空");
-                else if (!keys.Contains(key)) c.Add(issues, Id, asset, magnitude.propertyPath, "能力未声明调用方参数「" + key + "」", IssueSeverity.Warning,
-                    c.Edit(c.Document.Root, "声明调用方参数", so => { var array = so.FindProperty("callerParameters"); int index = array.arraySize++; var item = array.GetArrayElementAtIndex(index); item.FindPropertyRelative("key").stringValue = key; item.FindPropertyRelative("suggestedValue").floatValue = 0; item.FindPropertyRelative("description").stringValue = "由宿主传入"; }));
-            }
-        }
-    }
     public sealed class AttributeRule : ISkillValidationRule
     {
         public string Id => "GAS021";
@@ -198,18 +162,12 @@ namespace ZFramework.GAS.Editor
                 if (p.propertyType != SerializedPropertyType.Integer || !p.name.EndsWith("AttributeId", StringComparison.Ordinal)) continue;
                 if (p.propertyPath.StartsWith("durationMagnitude.", StringComparison.Ordinal) && !p.serializedObject.FindProperty("useDurationMagnitude").boolValue ||
                     p.propertyPath.StartsWith("periodMagnitude.", StringComparison.Ordinal) && !p.serializedObject.FindProperty("usePeriodMagnitude").boolValue) continue;
-                if (p.name == "captureAttributeId" || p.name == "targetAttributeId")
+                if (p.name == "captureAttributeId")
                 {
                     string parent = p.propertyPath.Substring(0, p.propertyPath.LastIndexOf('.'));
-                    var kindProperty = p.serializedObject.FindProperty(parent + ".kind");
-                    // Modifier targets are always used; magnitude attributes depend on the selected formula.
-                    if (kindProperty != null)
-                    {
-                        var kind = (MagnitudeKind)kindProperty.enumValueIndex;
-                        if (p.name == "captureAttributeId" ? kind != MagnitudeKind.AttributeScaled && kind != MagnitudeKind.Calculation : kind != MagnitudeKind.Calculation) continue;
-                    }
+                    var kind = p.serializedObject.FindProperty(parent + ".kind");
+                    if (kind != null && (MagnitudeKind)kind.intValue != MagnitudeKind.AttributeScaled) continue;
                 }
-                if (p.name == "durationAttributeId" && p.serializedObject.FindProperty("durationPolicy").enumValueIndex != 1) continue;
                 if (p.intValue < 0 && p.name != "targetAttributeId") continue;
                 if (!AttributeCatalog.Entries.Any(e => e.id == p.intValue)) c.Add(issues, Id, asset, p.propertyPath, "属性 #" + p.intValue + " 不在词表中", IssueSeverity.Warning);
             }
@@ -247,7 +205,7 @@ namespace ZFramework.GAS.Editor
         /// <summary>Build every authored GAS definition, including assets not referenced by an ability.</summary>
         public static IReadOnlyList<Issue> CheckAll()
         {
-            string query = "t:GameplayAbilityAsset t:GameplayEffectAsset t:SkillActionModuleAsset t:SkillParameterSetAsset t:AbilitySetAsset";
+            string query = "t:GameplayAbilityAsset t:GameplayEffectAsset";
             if (SkillEditorExtensions.Timeline is { } timeline) query += " t:" + timeline.AssetType.Name;
             var assets = AssetDatabase.FindAssets(query).Select(AssetDatabase.GUIDToAssetPath).Distinct()
                 .OrderBy(path => path, StringComparer.Ordinal).SelectMany(AssetDatabase.LoadAllAssetsAtPath)
@@ -268,7 +226,7 @@ namespace ZFramework.GAS.Editor
             {
                 if (!checkedAssets.Add(asset)) continue;
                 if (asset is IDefinitionAsset definition) definition.InvalidateDefinition();
-                standaloneValidation.ValidateAsset(context, asset, issues, true);
+                standaloneValidation.ValidateAsset(context, asset, issues);
             }
             return issues;
         }
@@ -285,7 +243,6 @@ namespace ZFramework.GAS.Editor
             return errors;
         }
 
-        [MenuItem("Tools/ZFramework GAS/校验所有技能")]
         public static void Run()
         {
             var issues = CheckAll();

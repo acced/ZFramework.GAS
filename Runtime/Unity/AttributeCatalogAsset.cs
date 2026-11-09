@@ -6,12 +6,6 @@ namespace ZFramework.GAS.Unity
     [AttributeUsage(AttributeTargets.Field)]
     public sealed class AttributeIdFieldAttribute : PropertyAttribute { }
 
-    [AttributeUsage(AttributeTargets.Field)]
-    public sealed class CallerKeyAttribute : PropertyAttribute { }
-
-    [AttributeUsage(AttributeTargets.Class)]
-    public sealed class AttributeCatalogSourceAttribute : Attribute { }
-
     [Serializable]
     public sealed class AttributeCatalogEntry
     {
@@ -28,11 +22,4 @@ namespace ZFramework.GAS.Unity
         public AttributeCatalogEntry Find(int id) => Array.Find(entries, item => item != null && item.id == id);
     }
 
-    [Serializable]
-    public sealed class CallerParameter
-    {
-        [CallerKey] public string key;
-        public float suggestedValue;
-        public string description;
-    }
 }

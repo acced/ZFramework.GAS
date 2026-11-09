@@ -11,7 +11,6 @@ namespace ZFramework.GAS.Editor.Tests
 {
     public sealed class CompilationTests
     {
-        private const string DisabledRule = "ZFramework.GAS.Validation.Disabled.GAS_ACTION";
         private readonly List<ScriptableObject> _assets = new();
 
         private T Create<T>() where T : ScriptableObject
@@ -30,7 +29,7 @@ namespace ZFramework.GAS.Editor.Tests
         }
 
         [Test]
-        public void StrictCheckRebuildsCachedActionsAndIgnoresDisabledRulePreferences()
+        public void CompileCheckRebuildsCachedActionsAndKeepsErrorNavigation()
         {
             var skill = Create<GameplayAbilityAsset>();
             var wait = new WaitSkillAction();
@@ -39,26 +38,14 @@ namespace ZFramework.GAS.Editor.Tests
             wait.timeout = new SkillNumber(-1);
             using var document = new SkillDocument(); document.Open(skill, false);
             using var validation = new ValidationService(document);
-            bool existed = EditorPrefs.HasKey(DisabledRule), previous = EditorPrefs.GetBool(DisabledRule);
-            try
-            {
-                EditorPrefs.SetBool(DisabledRule, true);
-                validation.ValidateNow(true);
-                Assert.IsFalse(validation.Issues.Any(i => i.Id == "GAS_ACTION"));
-                validation.ValidateNow(strict: true);
-                var issue = validation.Issues.Single(i => i.Id == "GAS_ACTION");
-                Assert.AreEqual("activationActions.Array.data[0]", issue.PropertyPath);
-                bool opened = false; document.FlowRequested += () => opened = true;
-                SkillActionNavigation.Select(document, issue);
-                Assert.AreSame(skill, document.Selection.Asset);
-                Assert.AreEqual(issue.PropertyPath, document.Selection.ElementId);
-                Assert.IsTrue(opened);
-            }
-            finally
-            {
-                if (existed) EditorPrefs.SetBool(DisabledRule, previous);
-                else EditorPrefs.DeleteKey(DisabledRule);
-            }
+            validation.ValidateNow(strict: true);
+            var issue = validation.Issues.Single(i => i.Id == "GAS_ACTION");
+            Assert.AreEqual("activationActions.Array.data[0]", issue.PropertyPath);
+            bool opened = false; document.FlowRequested += () => opened = true;
+            SkillActionNavigation.Select(document, issue);
+            Assert.AreSame(skill, document.Selection.Asset);
+            Assert.AreEqual(issue.PropertyPath, document.Selection.ElementId);
+            Assert.IsTrue(opened);
         }
 
         [Test]
@@ -92,68 +79,28 @@ namespace ZFramework.GAS.Editor.Tests
         }
 
         [Test]
-        public void InvalidHigherLevelOverrideFailsBeforeTheSkillIsGranted()
+        public void InvalidHigherLevelValueFailsBeforeTheSkillIsGranted()
         {
             var skill = Create<GameplayAbilityAsset>();
             var parameter = new SkillParameter { kind = SkillParameterKind.Int, defaultValue = 1 };
             skill.parameters = new[] { parameter };
-            skill.parameterOverrides = new[] {
-                new SkillParameterOverride { parameterId = parameter.Id, kind = SkillParameterKind.Int, levels = new[] { 1f, 1.5f } }
-            };
+            parameter.levels = new[] { 1f, 1.5f };
             using var document = new SkillDocument(); document.Open(skill, false);
             using var validation = new ValidationService(document); validation.ValidateNow(strict: true);
             Assert.IsTrue(validation.Issues.Any(i => i.Id == "GAS_ACTION" && i.Message.Contains("Int32")));
         }
 
         [Test]
-        public void ActionConstraintsCheckEffectiveAuthoredOverrides()
+        public void ActionConstraintsCheckEveryAuthoredLevel()
         {
             var skill = Create<GameplayAbilityAsset>();
             var duration = new SkillParameter { defaultValue = 1 };
             skill.parameters = new[] { duration };
-            skill.parameterOverrides = new[] { new SkillParameterOverride { parameterId = duration.Id, value = -1 } };
+            duration.levels = new[] { 1f, -1f };
             skill.activationActions = new SkillAction[] {
                 new WaitSkillAction { timeout = new SkillNumber(1) { parameterId = duration.Id } }
             };
             Assert.Throws<SkillActionException>(() => skill.BuildActions());
-        }
-
-        [Test]
-        public void SharedParameterEditsInvalidateActionsBuiltBeforeTheAbilityDefinition()
-        {
-            var skill = Create<GameplayAbilityAsset>();
-            var set = Create<SkillParameterSetAsset>();
-            var duration = new SkillParameter { defaultValue = 1 };
-            set.parameters = new[] { duration }; skill.parameterSet = set;
-            skill.activationActions = new SkillAction[] {
-                new WaitSkillAction { timeout = new SkillNumber(1) { parameterId = duration.Id } }
-            };
-            skill.BuildActions();
-            duration.defaultValue = -1;
-            DefinitionSource.InvalidateDependents(set);
-            Assert.Throws<SkillActionException>(() => skill.BuildActions());
-        }
-
-        [Test]
-        public void EmptyModulesStillValidateTheirParameterDeclarations()
-        {
-            var module = Create<SkillActionModuleAsset>();
-            var parameters = Create<SkillParameterSetAsset>();
-            var parameter = new SkillParameter();
-            parameters.parameters = new[] { parameter, parameter }; module.parameters = parameters;
-            Assert.Throws<InvalidOperationException>(() => module.Build());
-        }
-
-        [Test]
-        public void DuplicateModuleBindingsAreRejectedAtTheCallSite()
-        {
-            var skill = Create<GameplayAbilityAsset>();
-            var caller = new SkillParameter(); skill.parameters = new[] { caller };
-            var local = new SkillParameter();
-            var binding = new ModuleParameterBinding { moduleParameterId = local.Id, callerParameterId = caller.Id };
-            var action = new InlineParameterScopeAction { parameters = new[] { local }, bindings = new[] { binding, binding } };
-            skill.activationActions = new SkillAction[] { action };
-            Assert.AreEqual(action.Id, Assert.Throws<SkillActionException>(() => skill.BuildActions()).ActionId);
         }
 
         [Test]
@@ -191,21 +138,21 @@ namespace ZFramework.GAS.Editor.Tests
             var runner = new SkillRunner(owner); runner.Grant(skill);
             try
             {
-                Assert.AreEqual(AbilityActivationResult.Activated, runner.TryCast(skill));
+                Assert.AreEqual(AbilityActivationResult.Activated, runner.TryCast(skill).Result);
                 Assert.AreEqual(10, owner.Attributes.GetCurrent(resource));
                 Assert.IsFalse(runner.GetSpec(skill).IsCommitted);
                 if (exhausted) owner.Attributes.Get(resource).BaseValue = 1;
-                if (cancel) runner.Cancel(skill);
+                if (cancel) owner.EndAbility(runner.GetSpec(skill));
                 owner.Tick(.2f);
                 Assert.AreEqual(expected, owner.Attributes.GetCurrent(resource));
                 Assert.AreEqual(!cancel && !exhausted, runner.GetSpec(skill).IsCommitted);
-                Assert.IsFalse(runner.IsActive(skill));
+                Assert.IsFalse(runner.GetSpec(skill).IsActive);
             }
             finally { owner.Clear(); }
         }
 
         [Test]
-        public void BatchCheckIncludesUnreferencedEffectsAndAbilitySets()
+        public void BatchCheckIncludesUnreferencedEffects()
         {
             string folder = "Assets/GASCompile_" + Guid.NewGuid().ToString("N");
             AssetDatabase.CreateFolder("Assets", folder.Substring("Assets/".Length));
@@ -218,12 +165,9 @@ namespace ZFramework.GAS.Editor.Tests
                     serialized.FindProperty("duration").floatValue = -1;
                     serialized.ApplyModifiedPropertiesWithoutUndo();
                 }
-                var set = Create<AbilitySetAsset>(); set.abilities = new[] { new AbilitySetAsset.Entry() };
-                AssetDatabase.CreateAsset(set, folder + "/Set.asset");
                 var issues = BatchValidate.CheckAll();
                 Assert.IsTrue(issues.Any(i => i.Asset == effect && i.Id == "GAS_DEFINITION"));
-                Assert.IsTrue(issues.Any(i => i.Asset == set && i.Id == "GAS_ACTION"));
-                _assets.Remove(effect); _assets.Remove(set);
+                _assets.Remove(effect);
             }
             finally { AssetDatabase.DeleteAsset(folder); SkillIndex.Invalidate(); }
         }

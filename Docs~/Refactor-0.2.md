@@ -1,117 +1,85 @@
-# 0.2 重构与验证
+# 0.2 精简与迁移
 
-基线：`e84db59bae134d09ac771bfe0f77d89e9a06cc88`。本次修改保留已有技能文档、动作流程、时间轴与调试工具，重点修正核心生命周期、程序集职责和发布检查。
+本轮在 `46652a7` 的第一次分层重构上继续删除功能。删除的是公开 API、数据模型、运行时实现和对应编辑器入口；不以隐藏菜单或保留兼容转发代替删除。
 
-## 实际改动
+## 删减规模
 
-| 问题 | 修改 | 结果 |
-|---|---|---|
-| 激活立即扣费，不能表达确认前免费取消 | 增加 autoCommit、CommitAbility、激活版本和 IsCommitted | 默认保持立即提交，瞄准/蓄力可延迟 |
-| 支付回调结束能力后仍报告成功 | 提交结束检查当前激活；同步 LastCheck | 不向已结束能力启动任务；已支付部分不退款 |
-| Duration DoT 使用完整大步长结算 | 周期累计时间截到剩余有效期 | 不在到期之后额外伤害 |
-| Definition 暴露调用方可修改的数组 | 构造时复制、ReadOnlySpan 访问 | 跨单位共享配置不会被原数组污染 |
-| ASC 与外部宿主重复调度代码 | 复用 GameplayTaskHost | 一套任务快照、版本、取消语义 |
-| Effects.Count 每次扫描；无删除也扫描清理 | 显式待移除计数 | Count O(1)，按需清理 |
-| modifier/tag 回调中提前移除会继续发布 | 在发布过程维护实际所有权并停止后续安装 | 不遗留标签或属性 modifier |
-| 新替代效果误匹配自身的移除规则 | 在发布新实例之前移除旧效果 | 替代效果保留 |
-| Cue 派发中 Clear/Register 破坏遍历 | 延迟压缩、保持派发边界 | 新注册项从下次派发起执行 |
-| 基础选敌直接使用 Physics/Collider | TargetSearcher 策略 + Combat3D | 基础 Unity 无物理类型依赖 |
-| 物理查询使用默认世界 | 使用指定/实例所在 PhysicsScene | 支持独立物理场景 |
-| 基础上下文默认补齐对象服务、自动创建场景 GO | 删除隐式兜底，显式注入 | 项目控制实例化、时钟与释放 |
-| 发布包每次 Cast 走配置失效路径 | Player 在 Grant 准备；热刷新仅 Editor | 正常 Cast 只使用准备结果 |
-| 发布包维护 Editor 来源弱表和依赖图 | UNITY_EDITOR 隔离 | Player 不建立作者依赖图 |
-| 诊断回调进入普通发布路径 | Conditional 宏裁剪通知 | 开发诊断可用，Release 无通知调用 |
-| 编辑器提示不能阻止错误进包 | F7/编译检查、Player 强制门禁 | 同一语义规则，不能用个人设置绕过 |
-| 样例和硬编码闪电逻辑默认进入库 | Samples~ + 样例预览注册 | 包安装不编译训练场和游戏规则 |
-| 无用窗口兼容入口 | 删除 SkillGraphWindow 和重复菜单 | 一个明确的编辑器入口 |
+基准为第一次重构提交 `46652a7`；统计 C# 物理行，包含注释与空行，生产范围排除 Tests~、Docs~、Samples~。
 
-## 最小性统计
+| 范围 | 改前 | 改后 | 净删 |
+| --- | ---: | ---: | ---: |
+| 默认生产 C# 文件 | 133 | 100 | 33 |
+| 默认生产 C# 行 | 16,592 | 11,317 | 5,275（31.8%） |
+| Core 行 | 2,756 | 2,547 | 209 |
+| Unity 基础层行 | 1,985 | 1,408 | 577 |
+| Realtime/Spine runtime 行 | 2,927 | 1,054 | 1,873 |
+| 全部 Editor 行 | 8,489 | 6,172 | 2,317 |
+| 样例 C# 行 | 3,484 | 40 | 3,444 |
+| 基础 Editor 菜单入口 | 8 | 2 | 6 |
 
-口径为 C# 文件行数，含注释与空行；它说明代码归属和规模，不证明运行速度。
+生产代码与样例合计净删 8,719 行。测试与过时报告的删除不用于放大生产代码降幅。
 
-| 范围 | 基线 | 本次 |
-|---|---:|---:|
-| 纯 C# Core | 2,777 | 2,756 |
-| Unity 基础程序集 | 2,109 | 1,985 |
-| 默认导入的生产 C#，含原来默认导入的样例 | 19,889 | 16,592 |
-| BasicCombat 样例 | 默认编译，3,429 行 | 按需导入，3,484 行 |
+## 删除范围
 
-新增提交语义、构建门禁和物理适配没有引入泛用 VM 或平行执行框架。默认导入代码减少 3,297 行，主要来自将 3,429 行原样例职责移出默认安装。
+| 删除内容 | 原因 | 项目接入方式 |
+| --- | --- | --- |
+| AbilitySetAsset、多来源 Grant 栈 | 装备/职业/背包来源归属是项目规则 | 项目保存返回的 Spec，明确 Grant / Revoke |
+| SkillActionModuleAsset、共享参数集、模块调用/提取/内联、参数父链 | 形成第二套解释器与作用域系统 | 技能自身声明参数；代码复用派生 SkillAction |
+| SetByCaller 字典与声明 UI | 与强类型参数重复 | EffectEvaluationContext + FromParameter |
+| SpawnPrefabAction、LaunchProjectileAction、CreateAreaAction、TargetSequence/NextTargetStep | 投射物/区域/弹射属于玩法 | 项目 SkillAction / GameplayAbilityTask |
+| 对象生成服务、SceneSkillTaskHost MonoBehaviour | 代替项目做了对象池和全局 Tick 决策 | 项目明确实例化、持有/推进 GameplayTaskHost |
+| AttributeFormula | 硬编码具体伤害算法 | IEffectCalculation |
+| Animator/Legacy/Sprite/Spine 多后端 | 技能库兼任动画框架 | 内置 Playables；项目可实现 IAnimationDriver |
+| SkillAnimator、SkillAnimationManager、ClipOverride、RootMotionRelay、PoseJobs、自定义 blend 系统 | 多入口与角色动画系统职责重叠 | 项目 Animator/移动系统负责 |
+| Section、Jump/Queue、输入缓冲、镜头/顿帧/LookAt/变速/曲线轨 | 连招和演出策略属于项目 | 显式动作、事件、任务或自定义轨道 |
+| 批量/差异/全局查找/引用/模块窗口、模板注册器 | 维护成本超过最小创作路径需要 | 主窗口、Inspector、版本控制 |
+| 图书签、小地图、注释组、重路由等辅助功能 | 非技能编排必要能力 | 保留连线、选择、自动布局与 Undo |
+| 旧 BasicCombat 演示及专用截图/烟测/过时性能报告 | 将角色、美术、玩法验证绑进工具库 | 一个最小 AbilityActor 接入示例 |
 
-## 迁移
+编辑器预览也删除了模拟弹射/投射物/区域的第二套战斗执行器。现在只预览姿势、VFX、音效与几何；真实玩法在 Play Mode 验证。
 
-### 1. 3D 查询
+## API 迁移
 
-引用 `ZFramework.GAS.Unity.Combat3D`，把物理场景使用的 `new TargetSearcher(...)` 改为 `new PhysicsTargetSearcher()`。通过 `searcher.CreateBuffer(capacity)` 获取缓冲区。以前构造函数的 maxCandidates 参数实际上未使用；现在容量由缓冲区明确决定。
+| 原调用 | 新调用 |
+| --- | --- |
+| Runner.TryCast(asset, ASC, taskContext, overrides) | Runner 构造时注入服务；TryCast(asset, SkillCastTarget, EffectEvaluationContext) |
+| Runner.Grant(asset, level, overrides) | Grant(asset, level)；动态值在施放前显式解析 |
+| TimelinePlayer.TryCast(...) | Runner.TryCast(...) |
+| Runner.IsActive / CooldownRemaining / CooldownDuration | runner.GetSpec(asset) 上的同名状态 |
+| Runner.Cancel(asset) | spec.Owner.EndAbility(spec) |
+| Runner.RevokeAll / AbilitySetAsset.RevokeFrom | Runner.Revoke(asset)，项目管理自己的授权来源 |
+| LastActivationCheck / LastCommitCheck / LastCastCheck | 使用本次调用返回的 AbilityActivationCheck |
+| CommitAbility(spec) | CommitAbility(spec, capturedActivationVersion) |
+| AttributeSet.Remove / Clear / Version / Has | 初始化固定属性表；查询 Get / TryGet；ASC.Clear 保留属性 |
+| 公开 AttributeModifier 安装/移除 | 通过 GameplayEffectContainer 管理 modifier 生命周期 |
+| DurationAttribute / PeriodAttribute | EffectMagnitude.FromAttribute，通过 durationMagnitude / periodMagnitude 配置 |
+| Effects.TryGetRemainingTime | Effects.TryGetInfo 返回的 RemainingTime |
+| EffectMagnitude.FromCaller / CallerKey | FromParameter / ParameterId |
+| GameplayEffectSpec 的第 4 个字典参数 | EffectEvaluationContext；只有一份不可变参数 |
+| AnimationTask 的目标、时长覆写、备用服务参数 | AnimationTask(definition, driver, execution, markerCallback) |
+| IAnimationDriver 的名字/Loop/时长参数 | Play(AnimationClip, blendIn)、Advance(normalizedTime)、Stop(blendOut)、Dispose |
+| SkillSpawnPosition、HitPoint / LaunchPoint / AimOffset | SkillOrigin，仅保留施放者、目标、目标点和事件位置 |
+| SkillCastCallback 四个重复上下文参数 | Action<SkillExecutionContext> CastStarted |
+| TargetSearcher.QueryAt / applyLimit 重载 | 一个 Query，中心和朝向为可选参数 |
+| ITargetFilterSnapshot.Capture | ITargetFilter 接收 AbilitySourceIdentity，项目明确处理原单位身份 |
 
-基础 `TargetSearcher` 继续支持 Self / FixedTarget / Project。没有注入空间实现时使用几何查询会报配置错误，不会暗中选用 3D 物理。
+`MagnitudeKind.Parameter = 3`、`LevelTable = 4`、`Calculation = 5` 保留原序列化值，旧 SetByCaller 的数值 2 不再有效。Unity 编辑器必须用 `SerializedProperty.intValue` 读写枚举底值，不能把 `enumValueIndex` 当成底值。
 
-### 2. 宿主与服务
+## 保留的正确性约束
 
-显式配置 `SkillUnitServices.Objects` 和 `SceneTasks`。库不再在缺失配置时创建隐藏宿主或选择 Instantiate。需要默认实现时主动传 `InstantiateSkillObjectService.Instance`，需要 FixedUpdate 时主动添加 `SceneSkillTaskHost` 并传入其 Tasks。
+精简后仍保留激活版本、效果所有权、标签计数、目标 generation、取消期间任务清理和构建期配置校验。这些约束直接决定旧回调是否会影响新施放、新单位；不是重复容错壳。
 
-`SceneSkillTaskHost.For(scene)` 已删除。场景宿主由创建它的场景/项目拥有。
+本轮同时修复：
 
-### 3. 授予
+- 较早 CastStarted 订阅者取消或重施放后，后续时间轴不得挂到旧上下文。
+- 过滤回调回收目标后，旧查询不得接受新 generation。
+- 切换到无 Transform 的逻辑目标时，清除上一目标坐标。
+- Runner 不再按可变覆盖数组身份缓存参数；只缓存不可变 EffectEvaluationContext。
 
-ASC.Clear 会撤销授予；后续 Cast 不自动重建 Spec。重新初始化时显式调用 `runner.Grant(skill)` 或 `abilitySet.GrantTo(runner)`。撤销来源仍只撤销对应套组/直接授予的贡献。
+## 升级前检查
 
-### 4. 命名与配置
+这是破坏性重构。旧 SerializeReference 动作、旧动画后端组件、模块/参数集/套组资产，以及旧样例场景都需要迁移；没有兼容别名或自动迁移器。先在独立工程中导入重构分支，清理已删除类型的资产引用，再运行 F7、EditMode、PlayMode 与目标平台构建。
 
-- `TimelineTaskContext` 改名为 `SkillExecutionServices`，它服务于任意动作分支，不仅动画。
-- AnimationTagWindow 相关类型移到 Realtime；基础层只持有通用服务与目标输入。
-- Effect Definition 的 Modifiers / ConditionalEffects 现在是只读 Span；需要列表持久副本时由调用方显式复制。
-- `autoCommit` 默认 true；要延迟扣费，关闭并加入提交动作。
-- `SkillGraphWindow` 已删除；使用 `SkillEditorWindow.Open()`/现有技能菜单。
-- 诊断订阅在普通发布构建不会收到通知；需要发布诊断时定义 `GAS_DIAGNOSTICS`。
+## 验证边界
 
-### 5. 样例与序列化
-
-BasicCombat 从 Samples 移到 Samples~，通过 Package Manager Import 才进入工程。ShowTargetLinkAction 归属样例程序集；依赖它的旧技能需要先导入样例，或改成项目自己的表现动作。
-
-移动的 MonoBehaviour 脚本保留原 meta GUID。跨程序集移动的 SpawnPrefabAction、LaunchProjectileAction、CreateAreaAction 和 ShowTargetLinkAction 带有 MovedFrom 元数据，供 Unity 迁移托管引用。该迁移尚未在实际 Unity 工程中验证，升级已有资产时仍须检查托管引用与引用缺失列表。
-
-### 6. 严格构建
-
-Player 构建检查工程内全部 GAS 资产，含未引用草稿；不是仅检查当前场景。编辑器的禁用规则偏好只影响日常提示，F7 和构建不能绕过。先修复配置，再构建。
-
-## 验证记录
-
-验证环境：Linux x64、.NET SDK 8.0.416 / Runtime 8.0.22、GameplayTags 1.0.0 对应提交 `8dde1a43485f33031fd73b4e6cb21304f03c19df`。
-
-### 已执行
-
-- Release 编译：0 warnings，0 errors。
-- Core：34 个测试组全部通过。
-- 10,000 次 cost / cooldown / DoT / 变化来源属性循环：暖机后 0 B。
-- 10,000 次手动激活 / 提交 / 冷却循环：暖机后 0 B。
-- 100,000 次激活 / 结束循环：暖机后 0 B；一次本机测量 64.82 ms。该时间不是跨项目性能对比。
-- 静态程序集检查：Core 无 Unity 依赖、基础 Unity 无物理类型、本地依赖无环、Player 无 Editor 依赖、默认程序集不引用可选样例、Unity meta 完整。
-- C# 9 Roslyn 语法解析：Editor+Assertions 和 Player 两组宏均无语法错误。
-- git diff --check：通过。
-
-Core 新覆盖提交幂等、免费取消、资源/冷却重检、旧施放版本、付款回调结束/撤销、到期周期、不可变配置、发布过程移除、替代效果、Cue 清空重入。
-
-### 已编写，尚未在 Unity 执行
-
-17 个有针对性的 Unity 场景，覆盖强制校验、未知标签、参数覆盖、模块绑定、时间轴参数作用域、提交动作、无物理目标、显式物理适配和独立物理场景查询。已有测试也已改为显式物理服务与显式重新授予合同。
-
-当前环境没有 Unity Editor，因此没有执行 Unity 导入/类型编译、EditMode、PlayMode、UI 操作验证、IL2CPP、Android 或 iOS 测量。Roslyn 语法检查不能替代这些结果。
-
-## 明确的实现边界
-
-- 当前 Definition / ActionDefinition 在首次 Grant 构造缓存，没有持久化 runtime-only Program。
-- 当前属性聚合、Cue 时机、堆叠模型按本库合同工作，不宣称完全复制 UE 所有 GAS 行为。
-- 没有网络复制、预测、回滚实现。
-- 预热 Core 的 0 B 不能外推成任意 Unity 动作/整套技能系统 0 GC；目标分支、首次构造、任务和对象生成仍需目标平台剖析。
-- Combat3D 是独立程序集，随同一 UPM 包交付；Realtime 编辑器的几何预演仍显式依赖它。
-
-## 复现
-
-```bash
-python3 Tools~/verify_architecture.py
-dotnet build Tests~/Core/Core.csproj -c Release -m:1 /nodeReuse:false -p:UseSharedCompilation=false
-dotnet .build~/tests/bin/Release/net8.0/Core.dll
-```
-
-GitHub Actions 的 Verify GAS 固定 Tags 提交并执行上述门禁。Unity 验证的接入步骤见 Tests~/README.md。
+Core 的 Release 构建、行为回归与托管分配检查在 .NET 8 执行。程序集边界脚本与 Roslyn 语法解析辅助检查删除后的源码。真实 Unity 编译、编辑器交互、Playables 输出、IL2CPP、移动端性能仍需 Unity 工程验证；不把语法解析当成 Unity 编译结果。

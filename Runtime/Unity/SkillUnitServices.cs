@@ -7,11 +7,9 @@ namespace ZFramework.GAS.Unity
     public class SkillUnitServices
     {
         public Transform Origin;
-        public Transform LaunchPoint;
         public TargetSearcher Searcher;
         public ITargetFilter TargetFilter;
         public SkillTargetRelationFilter TargetRelations;
-        public ISkillObjectService Objects;
         public ISkillTargetSelection TargetSelection;
         public GameplayTaskHost SceneTasks;
         public UnityEngine.SceneManagement.Scene Scene;
@@ -37,8 +35,8 @@ namespace ZFramework.GAS.Unity
 
         internal void CopyServicesFrom(SkillUnitServices source)
         {
-            Origin = source.Origin; LaunchPoint = source.LaunchPoint; Searcher = source.Searcher;
-            TargetFilter = source.TargetFilter; TargetRelations = source.TargetRelations; Objects = source.Objects;
+            Origin = source.Origin; Searcher = source.Searcher;
+            TargetFilter = source.TargetFilter; TargetRelations = source.TargetRelations;
             TargetSelection = source.TargetSelection; SceneTasks = source.SceneTasks; Scene = source.Scene;
             source.ShareExtensionsWith(this);
         }
@@ -53,8 +51,7 @@ namespace ZFramework.GAS.Unity
         public SkillCastTarget(AbilitySystemComponent unit, Transform aim = null, Vector3? point = null)
         { Unit = unit; Aim = aim; Point = point; }
         public static SkillCastTarget Ground(Vector3 point) => new(null, point: point);
-        internal static SkillCastTarget From(AbilitySystemComponent unit, SkillExecutionServices context)
-            => new(unit, context?.Target, context?.HasTargetPosition == true ? context.TargetPosition : (Vector3?)null);
+
     }
 
     /// <summary>Services and target input captured by one execution branch.</summary>
@@ -71,22 +68,14 @@ namespace ZFramework.GAS.Unity
                 throw new InvalidOperationException("缺少有效的目标点（需要显式设置 TargetPosition）。");
             return _targetPosition;
         }
-        internal bool FilterHasSnapshot;
         public SkillExecutionContext Execution { get; internal set; }
-        public SkillExecutionServices Snapshot()
-        {
-            var copy = (SkillExecutionServices)MemberwiseClone();
-            ShareExtensionsWith(copy);
-            return copy;
-        }
         internal void RebindTarget(Transform target)
-        { Target = target; if (target != null) TargetPosition = target.position; }
-        public void CopyFrom(SkillExecutionServices source, bool includeExecution = false)
+        { Target = target; ClearTargetPosition(); if (target != null) TargetPosition = target.position; }
+        internal void CopyFrom(SkillExecutionServices source)
         {
             CopyServicesFrom(source);
             Target = source.Target; _targetPosition = source._targetPosition;
-            HasTargetPosition = source.HasTargetPosition; FilterHasSnapshot = source.FilterHasSnapshot;
-            if (includeExecution) Execution = source.Execution;
+            HasTargetPosition = source.HasTargetPosition;
         }
     }
 

@@ -35,9 +35,7 @@ namespace ZFramework.GAS
         Fixed,
         /// <summary><c>Constant + Coefficient × 属性当前值</c>。</summary>
         AttributeScaled,
-        /// <summary>由施加方在 Spec 上按键名提供。</summary>
-        SetByCaller,
-        Parameter,
+        Parameter = 3,
         LevelTable,
         Calculation,
     }
@@ -61,13 +59,13 @@ namespace ZFramework.GAS
         public readonly float Coefficient;
         public readonly AttributeId CaptureAttribute;
         public readonly MagnitudeCapture CaptureFrom;
-        public readonly string CallerKey;
+        public readonly string ParameterId;
         internal readonly float[] Levels;
         internal readonly IEffectCalculation Calculation;
 
         private EffectMagnitude(
             MagnitudeKind kind, float constant, float coefficient,
-            AttributeId captureAttribute, MagnitudeCapture captureFrom, string callerKey,
+            AttributeId captureAttribute, MagnitudeCapture captureFrom, string parameterId,
             float[] levels = null, IEffectCalculation calculation = null)
         {
             if (!float.IsFinite(constant) || !float.IsFinite(coefficient)) throw new ArgumentException("Effect magnitude must be finite.");
@@ -77,7 +75,7 @@ namespace ZFramework.GAS
             Coefficient = coefficient;
             CaptureAttribute = captureAttribute;
             CaptureFrom = captureFrom;
-            CallerKey = callerKey;
+            ParameterId = parameterId;
             Levels = levels;
             Calculation = calculation;
         }
@@ -88,10 +86,6 @@ namespace ZFramework.GAS
         public static EffectMagnitude FromAttribute(
             AttributeId attribute, float coefficient, MagnitudeCapture captureFrom, float constant = 0f)
             => new(MagnitudeKind.AttributeScaled, constant, coefficient, attribute, captureFrom, null);
-
-        public static EffectMagnitude FromCaller(string key)
-            => new(MagnitudeKind.SetByCaller, 0f, 0f, default, default,
-                key ?? throw new ArgumentNullException(nameof(key)));
 
         public static EffectMagnitude FromParameter(string id, float coefficient = 1, float constant = 0)
             => new(MagnitudeKind.Parameter, constant, coefficient, default, default,
@@ -207,12 +201,8 @@ namespace ZFramework.GAS
         public float Duration { get; }
         public EffectMagnitude? DurationMagnitude { get; }
         public EffectMagnitude? PeriodMagnitude { get; }
-        /// <summary>设置后时长改从来源的该属性读取，覆盖 <see cref="Duration"/>（如冷却时长取攻击间隔）。</summary>
-        public AttributeId? DurationAttribute { get; }
         /// <summary>周期间隔秒；<c>&lt;= 0</c> 表示非周期效果。</summary>
         public float Period { get; }
-        /// <summary>设置后周期改从来源的该属性读取，覆盖 <see cref="Period"/>（如按攻击间隔跳伤害）。</summary>
-        public AttributeId? PeriodAttribute { get; }
         /// <summary>应用当帧是否立即结算一次周期。</summary>
         public bool ExecutePeriodicOnApplication { get; }
         public ReadOnlySpan<EffectModifier> Modifiers => _modifiers;
@@ -232,8 +222,6 @@ namespace ZFramework.GAS
         /// <summary>在本效果的特定时机施加到同一目标的子效果。</summary>
         public ReadOnlySpan<ConditionalEffect> ConditionalEffects => _conditionalEffects;
 
-        public bool IsPeriodic => Period > 0f || PeriodAttribute.HasValue || PeriodMagnitude.HasValue;
-
         public GameplayEffectDefinition(
             EffectDurationPolicy durationPolicy,
             float duration = 0f,
@@ -241,10 +229,8 @@ namespace ZFramework.GAS
             EffectTags tags = default,
             EffectStackingRule stacking = default,
             float period = 0f,
-            AttributeId? periodAttribute = null,
             bool executePeriodicOnApplication = false,
             GameplayTagSet cueTags = default,
-            AttributeId? durationAttribute = null,
             ReadOnlySpan<ConditionalEffect> conditionalEffects = default,
             EffectMagnitude? durationMagnitude = null,
             EffectMagnitude? periodMagnitude = null)
@@ -255,7 +241,6 @@ namespace ZFramework.GAS
             Duration = duration;
             DurationMagnitude = durationMagnitude;
             PeriodMagnitude = periodMagnitude;
-            DurationAttribute = durationAttribute;
             _modifiers = modifiers.ToArray();
             Tags = tags;
             _applicationRequirements = GameplayTagRequirements.Create(
@@ -263,7 +248,6 @@ namespace ZFramework.GAS
             _ongoingRequirements = GameplayTagRequirements.Create(tags.OngoingBlocked.AsSpan(), default);
             Stacking = stacking;
             Period = period;
-            PeriodAttribute = periodAttribute;
             ExecutePeriodicOnApplication = executePeriodicOnApplication;
             CueTags = cueTags;
             _conditionalEffects = conditionalEffects.ToArray();

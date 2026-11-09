@@ -95,13 +95,10 @@ namespace ZFramework.GAS.Editor.Tests
             var animation = ScriptableObject.CreateInstance<SkillAnimationAsset>(); AssetDatabase.AddObjectToAsset(animation, skill);
             var clip = AudioClip.Create("preview-clock", 48000 * 3, 1, 48000, false);
             var track = new AudioSkillTrack { clip = clip, end = 3, loop = true }; animation.runtimeTracks = new SkillRuntimeTrack[] { track };
-            using (var so = new SerializedObject(animation)) { so.FindProperty("clipName").stringValue = "a"; so.FindProperty("duration").floatValue = 3; so.ApplyModifiedPropertiesWithoutUndo(); }
+            using (var so = new SerializedObject(animation)) { so.FindProperty("duration").floatValue = 3; so.ApplyModifiedPropertiesWithoutUndo(); }
             using (var so = new SerializedObject(skill)) { so.FindProperty("animation").objectReferenceValue = animation; so.ApplyModifiedPropertiesWithoutUndo(); }
             string prefabPath = AssetDatabase.GenerateUniqueAssetPath("Assets/GASPreviewClockTest.prefab");
-            var motion = new AnimationClip { name = "a", legacy = true };
-            motion.SetCurve("", typeof(Transform), "localPosition.x", AnimationCurve.Linear(0, 0, 3, 1));
-            AssetDatabase.AddObjectToAsset(motion, skill);
-            var source = new GameObject("preview-clock-source"); source.AddComponent<Animation>().AddClip(motion, "a");
+            var source = new GameObject("preview-clock-source");
             var prefab = PrefabUtility.SaveAsPrefabAsset(source, prefabPath); Object.DestroyImmediate(source);
             SkillEditorWindow window = null;
             try
@@ -109,15 +106,6 @@ namespace ZFramework.GAS.Editor.Tests
                 SkillIndex.Invalidate(); window = SkillEditorWindow.Open(); window.Show(skill);
                 window.Document.PreviewPrefab = prefab;
                 var preview = window.rootVisualElement.Q<PreviewPanel>(); preview.Load();
-                Assert.IsFalse(preview.Query<Toggle>().ToList().Any(t=>t.label=="连锁路线" || t.label=="范围"));
-                var targetTools=preview.Query<Foldout>().ToList().Single(x=>x.text=="目标预演");
-                Assert.IsFalse(targetTools.value);
-                var field=typeof(PreviewPanel).GetField("_simulation",BindingFlags.Instance|BindingFlags.NonPublic);
-                Assert.IsNull(field.GetValue(preview));targetTools.value=true;Assert.NotNull(field.GetValue(preview));
-                targetTools.value=false;Assert.IsNull(field.GetValue(preview));
-                var motionSwitch=preview.Query<Toggle>().ToList().Single(t=>t.label=="根位移");
-                preview.Query<Foldout>().ToList().Single(x=>x.text=="动画辅助").value=true;
-                Assert.AreEqual(DisplayStyle.Flex,motionSwitch.style.display.value,"The preview clip moves its root.");
                 var sound = preview.Query<Toggle>().ToList().Single(t => t.label == "音效");
                 var previewTools = typeof(PreviewPanel).GetField("_tools", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(preview);
                 Assert.IsNotNull(previewTools, "The actual preview must load its sampler and tools.");
@@ -140,27 +128,6 @@ namespace ZFramework.GAS.Editor.Tests
                 Assert.IsTrue(playingSource == null); Assert.AreEqual(0, audio.Count, "Mute releases the active source and stays silent while the timeline advances.");
             }
             finally { window?.Close(); AssetDatabase.DeleteAsset(prefabPath); AssetDatabase.DeleteAsset(path); Object.DestroyImmediate(clip); SkillIndex.Invalidate(); }
-        }
-        [TestCase(false), TestCase(true)] public void DestroyedAnimatorAndLegacyDriversAreRecreated(bool legacy)
-        {
-            var go = new GameObject("driver-lifetime-test"); var player = go.AddComponent<SkillAnimator>();
-            var controller = new UnityEditor.Animations.AnimatorController(); controller.AddLayer("Base");
-            try
-            {
-                Component component = legacy ? go.AddComponent<Animation>() : go.AddComponent<Animator>();
-                if (component is Animator animator) animator.runtimeAnimatorController = controller;
-                player.SetBackend(legacy ? (AnimationBackend)new LegacyAnimationBackend() : new AnimatorBackend());
-                var first = player.Driver; Assert.IsTrue(((IAnimationDriverLifetime)first).IsValid);
-                Object.DestroyImmediate(component); Assert.IsFalse(((IAnimationDriverLifetime)first).IsValid);
-                if (legacy) go.AddComponent<Animation>(); else go.AddComponent<Animator>().runtimeAnimatorController = controller;
-                Assert.AreNotSame(first, player.Driver);
-            }
-            finally
-            {
-                player.SetBackend(null); Object.DestroyImmediate(go);
-                foreach (var layer in controller.layers) Object.DestroyImmediate(layer.stateMachine);
-                Object.DestroyImmediate(controller);
-            }
         }
     }
 }

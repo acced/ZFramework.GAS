@@ -87,29 +87,6 @@ namespace ZFramework.GAS.Editor
             centerTabs.Add(_structureTools);
             _structureTools.Add(new ToolbarButton(() => _graph.AutoArrange()) { text = "自动整理" });
             _structureTools.Add(new ToolbarButton(() => _graph.FrameAll()) { text = "显示全部" });
-            var minimap = new ToolbarToggle { name = "show-minimap", text = "小地图", value = EditorPrefs.GetBool("ZFramework.GAS.ShowMiniMap", true) };
-            _graph.MiniMapVisible = minimap.value;
-            minimap.RegisterValueChangedCallback(e => { _graph.MiniMapVisible = e.newValue; EditorPrefs.SetBool("ZFramework.GAS.ShowMiniMap", e.newValue); });
-            _structureTools.Add(minimap);
-            var graphTools = new ToolbarMenu { text = "图工具" };
-            graphTools.menu.AppendAction("左对齐", _ => _graph.AlignSelection(true));
-            graphTools.menu.AppendAction("顶对齐", _ => _graph.AlignSelection(false));
-            graphTools.menu.AppendAction("水平等距", _ => _graph.AlignSelection(true, true));
-            graphTools.menu.AppendAction("垂直等距", _ => _graph.AlignSelection(false, true));
-            graphTools.menu.AppendAction("折叠选中", _ => _graph.CollapseSelection(true));
-            graphTools.menu.AppendAction("展开选中", _ => _graph.CollapseSelection(false));
-            graphTools.menu.AppendAction("隐藏未连接端口", _ => _graph.SetHideUnusedPorts(true));
-            graphTools.menu.AppendAction("显示全部端口", _ => _graph.SetHideUnusedPorts(false));
-            graphTools.menu.AppendAction("保存当前视图书签", _ => _graph.AddBookmark());
-            _structureTools.Add(graphTools);
-            var bookmarks = new ToolbarMenu { text = "书签" };
-            bookmarks.RegisterCallback<MouseDownEvent>(_ =>
-            {
-                bookmarks.menu.MenuItems().Clear();
-                foreach (var bookmark in _doc.Layout.Bookmarks) { var saved = bookmark; bookmarks.menu.AppendAction(saved.name, __ => _graph.RestoreBookmark(saved)); }
-            }, TrickleDown.TrickleDown); _structureTools.Add(bookmarks);
-            var graphSearch = new ToolbarSearchField { tooltip = "图内搜索节点名称", style = { width = 120, minWidth = 40 } };
-            graphSearch.RegisterValueChangedCallback(e => _graph.SearchNodes(e.newValue)); _structureTools.Add(graphSearch);
             centerTabs.Add(new ToolbarButton(() => ToggleMessages()) { text = "消息" }); _center.Add(centerTabs);
             _graphHost = new VisualElement { style = { flexGrow = 1, minHeight = 120 } }; _graphHost.Add(_graph); _graphHost.Add(_flow); _flow.style.display = DisplayStyle.None; _graphHost.Add(_settings); _settings.style.display = DisplayStyle.None;
             _messagesHost = new VisualElement { style = { flexGrow = 1, display = DisplayStyle.None } }; _messagesHost.Add(_messages); _graphHost.Add(_messagesHost);
@@ -274,7 +251,15 @@ namespace ZFramework.GAS.Editor
             Feedback(error == null ? "编译检查通过" : "编译检查失败：" + error.Message);
             return error == null;
         }
-        public void NewSkill() => SkillTemplateRegistry.Choose(Show);
+        public void NewSkill()
+        {
+            string path = EditorUtility.SaveFilePanelInProject("新建技能", "新技能", "asset", "选择技能资产的保存位置");
+            if (string.IsNullOrEmpty(path)) return;
+            var ability = CreateInstance<GameplayAbilityAsset>();
+            ability.name = System.IO.Path.GetFileNameWithoutExtension(path);
+            AssetDatabase.CreateAsset(ability, path); Undo.RegisterCreatedObjectUndo(ability, "新建技能");
+            SkillIndex.Invalidate(); Show(ability);
+        }
         public void FocusSearch() => _library?.FocusSearch();
         private void Tick()
             => AdvancePlayback(EditorApplication.timeSinceStartup);
@@ -312,7 +297,7 @@ namespace ZFramework.GAS.Editor
                 if (_doc.Root != null && task.Asset != null && task.Asset == _doc.Root.Presentation &&
                     (match == null || task.AbilityAsset == _doc.Root)) match = task;
             _doc.Playback.Live = match != null;
-            if (match != null) _doc.Playback.Seek(match.AuthoredTime, match.AuthoredDuration);
+            if (match != null) _doc.Playback.Seek(match.Time, match.Duration);
         }
         private void OnDisable()
         {
@@ -336,8 +321,6 @@ namespace ZFramework.GAS.Editor
         private static void NewShortcut(ShortcutArguments args) => ((SkillEditorWindow)args.context).NewSkill();
         [Shortcut("GAS/搜索技能", typeof(SkillEditorWindow), KeyCode.F, ShortcutModifiers.Action)]
         private static void FindShortcut(ShortcutArguments args) => ((SkillEditorWindow)args.context).FocusSearch();
-        [Shortcut("GAS/全局查找",typeof(SkillEditorWindow),KeyCode.F,ShortcutModifiers.Action|ShortcutModifiers.Shift)]
-        private static void GlobalFind()=>SkillGlobalSearch.Open();
         private bool FlowVisible => _flow?.style.display.value==DisplayStyle.Flex;
         private bool GraphVisible => _graph!=null && _graph.style.display.value!=DisplayStyle.None;
         private bool EditingText => rootVisualElement.focusController?.focusedElement is VisualElement v &&
@@ -352,9 +335,6 @@ namespace ZFramework.GAS.Editor
         [Shortcut("GAS/聚焦选中节点",typeof(SkillEditorWindow),KeyCode.F)]
         private static void FrameNodes(ShortcutArguments args)
         {var w=(SkillEditorWindow)args.context;if(w.EditingText)return;if(w.FlowVisible)w._flow.FocusSelection();else if(w.GraphVisible)w._graph.FrameSelection();}
-        [Shortcut("GAS/为选中节点添加注释组",typeof(SkillEditorWindow),KeyCode.G,ShortcutModifiers.Action)]
-        private static void GroupNodes(ShortcutArguments args)
-        {var w=(SkillEditorWindow)args.context;if(w.GraphVisible && !w.EditingText)w._graph.AddComment();}
         [Shortcut("GAS/后退", typeof(SkillEditorWindow), KeyCode.LeftArrow, ShortcutModifiers.Alt)]
         private static void BackShortcut(ShortcutArguments args) => ((SkillEditorWindow)args.context).Navigate(-1);
         [Shortcut("GAS/前进", typeof(SkillEditorWindow), KeyCode.RightArrow, ShortcutModifiers.Alt)]

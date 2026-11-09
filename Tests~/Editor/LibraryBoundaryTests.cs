@@ -16,7 +16,7 @@ namespace ZFramework.GAS.Editor.Tests
             var target = new AbilitySystemComponent();
             var ability = source.GrantAbility(new GameplayAbilityDefinition());
             source.TryActivateAbility(ability);
-            var context = new SkillExecutionContext(null, ability, target, new EffectEvaluationContext(1), null);
+            var context = new SkillExecutionContext(null, ability, new SkillCastTarget(target), new EffectEvaluationContext(1), null);
             var query = new TargetQuery().Build();
             var buffer = context.RentBuffer();
             try
@@ -24,7 +24,6 @@ namespace ZFramework.GAS.Editor.Tests
                 Assert.AreEqual(1, context.Services.Searcher.Query(query, context, buffer));
                 Assert.AreSame(target, buffer.Units[0]);
                 Assert.IsNull(context.Services.SceneTasks);
-                Assert.IsNull(context.Services.Objects);
             }
             finally { context.ReturnBuffer(buffer); source.Clear(); target.Clear(); }
         }
@@ -35,7 +34,7 @@ namespace ZFramework.GAS.Editor.Tests
             var owner = new AbilitySystemComponent();
             var ability = owner.GrantAbility(new GameplayAbilityDefinition());
             owner.TryActivateAbility(ability);
-            var context = new SkillExecutionContext(null, ability, null, new EffectEvaluationContext(1), null);
+            var context = new SkillExecutionContext(null, ability, default, new EffectEvaluationContext(1), null);
             var buffer = context.RentBuffer();
             try
             {
@@ -63,8 +62,8 @@ namespace ZFramework.GAS.Editor.Tests
                 scene.GetPhysicsScene().Simulate(.02f);
                 Physics.SyncTransforms();
                 var searcher = new PhysicsTargetSearcher();
-                var context = new SkillExecutionContext(null, ability, null, new EffectEvaluationContext(1),
-                    new SkillExecutionServices { Scene = scene, Searcher = searcher });
+                var context = new SkillExecutionContext(null, ability, default, new EffectEvaluationContext(1),
+                    new SkillUnitServices { Scene = scene, Searcher = searcher });
                 var query = new TargetQuery { kind = TargetQueryKind.Circle }.Build();
                 var buffer = context.RentBuffer();
                 Assert.AreEqual(1, searcher.Query(query, context, buffer));

@@ -59,44 +59,23 @@ namespace ZFramework.GAS.Unity
     public sealed class SkillActionBuildContext
     {
         private readonly ScriptableObject _owner;
-        private readonly HashSet<string> _entryIds;
-        private SkillParameter[] _parameters;
-        private SkillParameter[] Parameters => _parameters ?? (_owner switch {
-            GameplayAbilityAsset skill => skill.parameters,
-            SkillActionModuleAsset module => module.parameters?.parameters,
-            _ => null
-        });
+        private readonly HashSet<string> _ids;
+        public SkillActionBuildContext(ScriptableObject owner = null, HashSet<string> entryIds = null)
+        { _owner = owner; _ids = entryIds ?? new HashSet<string>(); }
         private SkillParameter Parameter(string id)
         {
-            foreach (var p in Parameters ?? Array.Empty<SkillParameter>()) if (p.Id == id) return p;
-            if (_parameters == null && _owner is GameplayAbilityAsset skill && skill.parameterSet != null)
-                foreach (var p in skill.parameterSet.parameters) if (p.Id == id) return p;
+            foreach (var p in ((GameplayAbilityAsset)_owner).parameters) if (p.Id == id) return p;
             throw new InvalidOperationException("缺少参数: " + id);
         }
-        public SkillActionBuildContext(ScriptableObject owner = null)
-        {
-            _owner = owner;
-            if (owner is GameplayAbilityAsset skill) DependsOn(skill.parameterSet);
-        }
-        /// <param name="entryIds">多个入口（例如时间轴上的多个事件）共用的动作 ID 集合，用于跨入口查重。</param>
-        public SkillActionBuildContext(ScriptableObject owner,HashSet<string> entryIds) : this(owner) { _entryIds=entryIds; }
         public void Number(SkillNumber number, float min = float.MinValue, float max = float.MaxValue, bool integer = false)
         {
-            if (!string.IsNullOrEmpty(number.parameterId)) {
-                if (_owner is not GameplayAbilityAsset && Parameters == null) return;
+            if (!string.IsNullOrEmpty(number.parameterId))
+            {
+                if (_owner is not GameplayAbilityAsset) return;
                 var p = Parameter(number.parameterId);
                 if (p.kind == SkillParameterKind.Bool) throw new InvalidOperationException("数值绑定不能使用 Bool。");
-                float parameterValue = p.defaultValue;
-                var levels = p.levels;
-                if (_parameters == null && _owner is GameplayAbilityAsset skill)
-                    foreach (var entry in skill.parameterOverrides)
-                        if (entry.parameterId == p.Id)
-                        {
-                            if (entry.kind != p.kind) throw new InvalidOperationException("参数覆盖类型不匹配: " + p.Id);
-                            parameterValue = entry.value; levels = entry.levels;
-                        }
-                if (levels == null || levels.Length == 0) Number(new SkillNumber(parameterValue * number.coefficient), min, max, integer);
-                else foreach (var v in levels) Number(new SkillNumber(v * number.coefficient), min, max, integer);
+                if (p.levels == null || p.levels.Length == 0) Number(new SkillNumber(p.defaultValue * number.coefficient), min, max, integer);
+                else foreach (var value in p.levels) Number(new SkillNumber(value * number.coefficient), min, max, integer);
                 return;
             }
             float value = number.value;
@@ -105,15 +84,8 @@ namespace ZFramework.GAS.Unity
         }
         internal void RequireKind(string id, SkillParameterKind kind)
         {
-            if (!string.IsNullOrEmpty(id) && (_owner is GameplayAbilityAsset || Parameters != null) && Parameter(id).kind != kind)
+            if (!string.IsNullOrEmpty(id) && _owner is GameplayAbilityAsset && Parameter(id).kind != kind)
                 throw new InvalidOperationException($"参数 {id} 必须是 {kind}。");
-        }
-        internal void CheckBinding(ModuleParameterBinding binding, SkillParameter[] locals)
-        {
-            var local = Array.Find(locals, p => p.Id == binding.moduleParameterId)
-                ?? throw new InvalidOperationException("模块参数不存在: " + binding.moduleParameterId);
-            if (string.IsNullOrEmpty(binding.callerParameterId)) throw new InvalidOperationException("未指定调用方参数。");
-            RequireKind(binding.callerParameterId, local.kind);
         }
         public void Query(TargetQuery query)
         {
@@ -125,9 +97,6 @@ namespace ZFramework.GAS.Unity
             if (query.kind == TargetQueryKind.Sector) Number(query.angle, 0, 360);
         }
         public void DependsOn(ScriptableObject asset) => DefinitionSource.DependsOn(_owner, asset);
-        private readonly HashSet<SkillActionModuleAsset> _modules = new();
-        private int _depth;
-        private HashSet<string> _scopeIds;
         private bool _allowsAbilityTasks = true;
         public void RequireAbilityTask(string id)
         { if (!_allowsAbilityTasks) throw new SkillOwnershipException(id); }
@@ -138,45 +107,16 @@ namespace ZFramework.GAS.Unity
         }
         public SkillActionDefinition[] Build(SkillAction[] actions)
         {
-            if (actions == null || actions.Length == 0) return Array.Empty<SkillActionDefinition>();
-            if (++_depth > 8) { _depth--; throw new InvalidOperationException("动作／模块嵌套不能超过八层。"); }
-            try
+            var built = new SkillActionDefinition[actions.Length];
+            for (int i = 0; i < actions.Length; i++)
             {
-                var built = new SkillActionDefinition[actions.Length];
-                if(_depth==1 || _scopeIds==null) _scopeIds=_depth==1 && _entryIds!=null?_entryIds:new HashSet<string>();
-                var ids = _scopeIds;
-                for (int i = 0; i < actions.Length; i++)
-                {
-                    var action = actions[i] ?? throw new InvalidOperationException("动作列表包含空项。");
-                    if (string.IsNullOrEmpty(action.Id) || !ids.Add(action.Id)) throw new SkillActionException(action.Id, "动作 ID 缺失或重复。");
-                    try { built[i] = action.Build(this); }
-                    catch (SkillActionException) { throw; }
-                    catch (Exception exception) { throw new SkillActionException(action.Id, exception.Message, exception); }
-                }
-                return built;
+                var action = actions[i] ?? throw new InvalidOperationException("动作列表包含空项。");
+                if (string.IsNullOrEmpty(action.Id) || !_ids.Add(action.Id)) throw new SkillActionException(action.Id, "动作 ID 缺失或重复。");
+                try { built[i] = action.Build(this); }
+                catch (SkillActionException) { throw; }
+                catch (Exception exception) { throw new SkillActionException(action.Id, exception.Message, exception); }
             }
-            finally { _depth--; }
-        }
-        public SkillActionDefinition[] Scope(SkillAction[] actions, SkillParameter[] parameters)
-        {
-            ValidateParameters(parameters);
-            var previous = _parameters; _parameters = parameters;
-            try { return Build(actions); } finally { _parameters = previous; }
-        }
-        public SkillActionDefinition[] Module(SkillActionModuleAsset module)
-        {
-            if (module == null) throw new InvalidOperationException("缺少动作模块。");
-            DependsOn(module); DependsOn(module.parameters);
-            if (!_modules.Add(module)) throw new InvalidOperationException($"模块循环引用：{module.name}");
-            var parentIds=_scopeIds; _scopeIds=new HashSet<string>();
-            var parameters = _parameters; _parameters = module.parameters?.parameters ?? Array.Empty<SkillParameter>();
-            try { ValidateParameters(_parameters); return Build(module.actions); }
-            finally { _parameters = parameters; _scopeIds=parentIds; _modules.Remove(module); }
-        }
-        private static void ValidateParameters(SkillParameter[] parameters)
-        {
-            var values = new Dictionary<string, SkillParameterValue>(parameters.Length);
-            SkillParameterSetAsset.AddTo(values, parameters, 1);
+            return built;
         }
     }
 
@@ -190,7 +130,7 @@ namespace ZFramework.GAS.Unity
             return Define("提交消耗与冷却", context =>
             {
                 var owner = context.Ability.Owner;
-                if (owner.CommitAbility(context.Ability, context.Version) != AbilityActivationResult.Activated && context.IsCastActive)
+                if (!owner.CommitAbility(context.Ability, context.Version).Succeeded && context.IsCastActive)
                     owner.EndAbility(context.Ability);
             });
         }
@@ -200,8 +140,6 @@ namespace ZFramework.GAS.Unity
     [System.ComponentModel.DisplayName("施加效果")]
     public sealed class ApplyEffectAction : SkillAction
     {
-        private static void Apply(SkillExecutionContext context, GameplayEffectDefinition effect, AbilitySystemComponent target)
-        { if (target == null) throw new InvalidOperationException("效果目标已失效。"); target.Effects.Apply(context.Effect(effect)); }
         [FlowField("效果")] public GameplayEffectAsset effect;
         [FlowField("选敌", nameof(TargetQuery.kind))] public TargetQuery targets = new TargetQuery();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
@@ -219,7 +157,7 @@ namespace ZFramework.GAS.Unity
                     context.Services.Searcher.Query(query, context, buffer);
                     GasAssert.That(!buffer.Saturated, "目标查询缓冲区已满（256 个碰撞体），请收窄 LayerMask 或范围。");
                     for (int i = 0; i < buffer.Count; i++)
-                    { if (!context.CanContinue) break; if (buffer.IsCurrent(i)) Apply(context, effect, buffer.Units[i]); }
+                    { if (!context.CanContinue) break; if (buffer.IsCurrent(i)) buffer.Units[i].Effects.Apply(context.Effect(effect)); }
                 }
                 finally { context.ReturnBuffer(buffer); }
             });
@@ -277,7 +215,7 @@ namespace ZFramework.GAS.Unity
         [FlowField("事件")] public GameplayTag tag;
         public TargetQuery targets = new TargetQuery { kind = TargetQueryKind.Self };
         public bool includePosition;
-        public SkillSpawnPosition position;
+        public SkillOrigin position;
         public SkillParameterKind payloadKind;
         public SkillNumber payload = new SkillNumber(0);
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
@@ -308,79 +246,27 @@ namespace ZFramework.GAS.Unity
 
 
     [Serializable]
-    public struct ModuleParameterBinding
+    [System.ComponentModel.DisplayName("选择目标")]
+    public sealed class SelectTargetsAction : SkillAction
     {
-        public string moduleParameterId;
-        public string callerParameterId;
-    }
-    [Serializable]
-    [System.ComponentModel.DisplayName("调用共享模块")]
-    public sealed class CallModuleAction : ParameterScopeAction
-    {
-        [FlowField("模块")] public SkillActionModuleAsset module;
+        [FlowField("目标", nameof(TargetQuery.kind))] public TargetQuery targets = new();
+        [SerializeReference, FlowBranch("每个目标")] public SkillAction[] actions = Array.Empty<SkillAction>();
         public override SkillActionDefinition Build(SkillActionBuildContext builder)
         {
-            SkillActionDefinition[] actions;
-            try { actions = builder.Module(module); }
-            catch (Exception error) { throw new SkillActionException(Id, "模块 " + (module != null ? module.name : "<缺失>") + ": " + error.Message, error); }
-            // Resolve level tables at cast start, never hold mutable authoring data in running definitions.
-            var parameters = module.parameters == null ? Array.Empty<SkillParameter>() : module.parameters.parameters;
-            return Bind(builder, actions, parameters);
-        }
-    }
-    [Serializable]
-    [System.ComponentModel.DisplayName("内联参数")]
-    public sealed class InlineParameterScopeAction : ParameterScopeAction
-    {
-        public SkillParameter[] parameters=Array.Empty<SkillParameter>();
-        [SerializeReference, FlowBranch("动作")] public SkillAction[] actions=Array.Empty<SkillAction>();
-        public override SkillActionDefinition Build(SkillActionBuildContext builder)=> Bind(builder, builder.Scope(actions, parameters), parameters);
-    }
-    [Serializable]
-    public abstract class ParameterScopeAction : SkillAction
-    {
-        public ModuleParameterBinding[] bindings = Array.Empty<ModuleParameterBinding>();
-        public static SkillParameterValues ResolveParameters(EffectEvaluationContext caller, SkillParameter[] defaults, ModuleParameterBinding[] bindings)
-        {
-            if (defaults == null || defaults.Length == 0) return SkillParameterValues.Empty;
-            var values = new Dictionary<string, SkillParameterValue>(defaults.Length);
-            SkillParameterSetAsset.AddTo(values, defaults, caller.Level);
-            foreach (var binding in bindings)
-                values[binding.moduleParameterId] = caller.Parameters.Get(binding.callerParameterId);
-            return new SkillParameterValues(values);
-        }
-        protected SkillActionDefinition Bind(SkillActionBuildContext builder, SkillActionDefinition[] actions, SkillParameter[] parameters)
-        {
-            var bound = new HashSet<string>();
-            foreach (var binding in bindings)
+            builder.Query(targets);
+            var query = targets.Build(); var branch = builder.Build(actions);
+            return Define("选择目标", context =>
             {
-                builder.CheckBinding(binding, parameters);
-                if (!bound.Add(binding.moduleParameterId)) throw new InvalidOperationException("重复模块参数绑定: " + binding.moduleParameterId);
-            }
-            return new ModuleDefinition(this, actions, parameters);
+                var buffer = context.RentBuffer();
+                try
+                {
+                    context.Services.Searcher.Query(query, context, buffer);
+                    GasAssert.That(!buffer.Saturated, "目标查询缓冲区已满。");
+                    for (int i = 0; i < buffer.Count && context.CanContinue; i++)
+                        if (buffer.IsCurrent(i)) context.Selected(buffer.Units[i], buffer.Transforms[i], buffer.Points[i]).Execute(branch);
+                }
+                finally { context.ReturnBuffer(buffer); }
+            });
         }
-    }
-
-    internal sealed class ModuleDefinition : SkillActionDefinition
-    {
-        internal readonly SkillActionDefinition[] Actions;
-        private readonly ModuleParameterBinding[] _bindings;
-        private readonly SkillParameter[] _defaults;
-#if UNITY_EDITOR
-        internal readonly bool IsExternalCall;
-#endif
-        internal ModuleDefinition(ParameterScopeAction call, SkillActionDefinition[] actions, SkillParameter[] parameters)
-            : base(call.Id, string.IsNullOrEmpty(call.displayName) ? "调用动作模块" : call.displayName)
-        {
-            Actions = actions;
-#if UNITY_EDITOR
-            IsExternalCall = call is CallModuleAction;
-#endif
-            _bindings = (ModuleParameterBinding[])call.bindings.Clone();
-            _defaults = Array.ConvertAll(parameters, p => p.Snapshot());
-        }
-        internal SkillParameterValues Resolve(EffectEvaluationContext caller)
-            => ParameterScopeAction.ResolveParameters(caller, _defaults, _bindings);
-        public override void Execute(SkillExecutionContext context) => context.ExecuteModule(this);
     }
 }

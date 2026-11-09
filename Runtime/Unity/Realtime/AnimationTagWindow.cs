@@ -20,11 +20,6 @@ namespace ZFramework.GAS.Unity
         public readonly float Start, End;
         public readonly GameplayTagSet Tags;
         public AnimationTagWindow(float start, float end, GameplayTagSet tags)
-        {
-            if (float.IsNaN(start) || float.IsInfinity(start) || start < 0) throw new ArgumentOutOfRangeException(nameof(start));
-            if (float.IsNaN(end) || float.IsInfinity(end) || end >= 0 && end < start) throw new ArgumentOutOfRangeException(nameof(end));
-            Start = start; End = end < 0 ? -1 : end; Tags = tags;
-        }
+        { Start = start; End = end; Tags = tags; }
     }
-
 }

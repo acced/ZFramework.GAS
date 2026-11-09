@@ -32,7 +32,9 @@ namespace ZFramework.GAS.Unity
         public void MarkSaturated() => _b.Saturated = true;
         public void AddNearest(AbilitySystemComponent unit, Transform aim, Vector3? point, float distance)
         {
-            if (!_cast.Allows(_query, unit)) return;
+            if (unit == null) return;
+            int generation = unit.Generation;
+            if (!_cast.Allows(_query, unit) || unit.Generation != generation) return;
             for (int i = 0; i < _b.Count; i++) if (ReferenceEquals(_b.Units[i], unit)) return;
             if (_b.Count == _b.Units.Length) { _b.Saturated = true; return; }
             int index = _b.Count++;
@@ -43,7 +45,7 @@ namespace ZFramework.GAS.Unity
                 _b.Points[index] = _b.Points[index - 1]; index--;
             }
             _b.Units[index] = unit; _b.Transforms[index] = aim; _b.Points[index] = point;
-            _b.Distances[index] = distance; _b.Generations[index] = unit.Generation;
+            _b.Distances[index] = distance; _b.Generations[index] = generation;
         }
     }
 
@@ -53,16 +55,12 @@ namespace ZFramework.GAS.Unity
         public virtual TargetQueryBuffer CreateBuffer(int capacity = 256) => new TargetQueryBuffer(capacity);
 
         protected virtual void Collect(TargetQueryDefinition query, SkillExecutionContext context,
-            TargetQueryBuffer buffer, Vector3? center, Vector3 forward, bool captureAim)
+            TargetQueryBuffer buffer, Vector3? center, Vector3 forward)
             => throw new InvalidOperationException("空间查询需要显式注入 TargetSearcher 实现，例如 PhysicsTargetSearcher。");
 
         /// <summary>Physical results are nearest first; project results retain the supplied priority.</summary>
         public int Query(TargetQueryDefinition query, SkillExecutionContext context, TargetQueryBuffer buffer,
-            Vector3? centerOverride = null, bool applyLimit = true)
-            =>Query(query,context,buffer,centerOverride,applyLimit,false);
-
-        internal int Query(TargetQueryDefinition query,SkillExecutionContext context,TargetQueryBuffer buffer,
-            Vector3? centerOverride,bool applyLimit,bool captureAim,Vector3? forwardOverride = null)
+            Vector3? centerOverride = null, Vector3? forwardOverride = null)
         {
             buffer.Clear();
             var results = new SkillTargetResults(context, query, buffer);
@@ -77,16 +75,12 @@ namespace ZFramework.GAS.Unity
                 var service = context.Services.Get<ISkillTargetSource>() ?? throw new InvalidOperationException("没有接入项目目标来源：" + query.SourceKey);
                 service.Collect(query.SourceKey, context, results);
             }
-            else Collect(query, context, buffer, centerOverride, forwardOverride ?? context.Forward, captureAim);
-            int count = applyLimit ? Mathf.Min(buffer.Count, query.MaxTargets) : buffer.Count;
+            else Collect(query, context, buffer, centerOverride, forwardOverride ?? context.Forward);
+            int count = Mathf.Min(buffer.Count, query.MaxTargets);
             for (int i = count; i < buffer.Count; i++) { buffer.Units[i] = null; buffer.Transforms[i] = null; }
             buffer.Count = count;
             SkillActionDebug.Query(context,buffer); return count;
         }
-
-        /// <summary>Query an oriented hit volume and capture identities for safe processing across hit callbacks.</summary>
-        public int QueryAt(TargetQueryDefinition query, SkillExecutionContext context, TargetQueryBuffer buffer, Vector3 center, Vector3 forward)
-            => Query(query, context, buffer, center, true, false, forward);
 
     }
 }

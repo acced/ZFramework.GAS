@@ -8,10 +8,7 @@ namespace ZFramework.GAS.Editor
 {
     public sealed class LayoutStore
     {
-        [Serializable] public sealed class NodeLayout { public string key; public Vector2 position; public bool collapsed; }
-        [Serializable] public sealed class CommentLayout { public string title; public Rect rect; }
-        [Serializable] public sealed class Bookmark { public string name; public Vector3 position; public Vector3 scale = Vector3.one; }
-        [Serializable] public sealed class Reroute { public string link; public Vector2 position; }
+        [Serializable] public sealed class NodeLayout { public string key; public Vector2 position; }
         [Serializable] public sealed class FlowLayout { public string owner, actionId; public Vector2 position; }
         [Serializable] private sealed class Data
         {
@@ -20,10 +17,7 @@ namespace ZFramework.GAS.Editor
             public string previousUserData;
             public string previewGuid;
             public List<NodeLayout> nodes = new();
-            public List<CommentLayout> comments = new();
             public List<string> looseAssets = new();
-            public List<Bookmark> bookmarks = new();
-            public List<Reroute> reroutes = new();
         }
         // 每次按资产取路径：技能可能在编辑期间被重命名或移动，缓存的路径会让保存静默落空。
         private readonly GameplayAbilityAsset _root;
@@ -40,17 +34,7 @@ namespace ZFramework.GAS.Editor
             if(_undo==null || _undo.json==_lastSaved || string.IsNullOrEmpty(_undo.json))return false;
             _data=JsonUtility.FromJson<Data>(_undo.json);_lastSaved=_undo.json;_dirty=true;Save();return true;
         }
-        public List<CommentLayout> Comments => _data.comments;
         public List<string> LooseAssets => _data.looseAssets;
-        public List<Bookmark> Bookmarks => _data.bookmarks ??= new List<Bookmark>();
-        public List<Reroute> Reroutes => _data.reroutes ??= new List<Reroute>();
-        public bool IsCollapsed(UnityEngine.Object asset) => _data.nodes.Find(n => n.key == AssetReferences.Key(asset))?.collapsed ?? false;
-        public void SetCollapsed(UnityEngine.Object asset, bool value)
-        {
-            string key = AssetReferences.Key(asset); var node = _data.nodes.Find(n => n.key == key);
-            if (node == null) { node = new NodeLayout { key = key }; _data.nodes.Add(node); }
-            node.collapsed = value; _dirty = true;
-        }
         public GameObject PreviewPrefab
         {
             get => AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(_data.previewGuid ?? ""));
@@ -67,21 +51,6 @@ namespace ZFramework.GAS.Editor
             { try { _data = JsonUtility.FromJson<Data>(json) ?? new Data(); } catch (ArgumentException) { _data.previousUserData = json; } }
             else _data.previousUserData = json;
             _lastSaved=JsonUtility.ToJson(_data);
-        }
-        internal void CopyMovedEffectLayouts(Dictionary<string,string> changes)
-        {
-            foreach(var n in _data.nodes.ToArray())
-                if(changes.TryGetValue(n.key,out var key) && !_data.nodes.Exists(item=>item.key==key)){
-                    _data.nodes.Add(new NodeLayout{key=key,position=n.position,collapsed=n.collapsed});_dirty=true;
-                }
-            foreach(var r in Reroutes.ToArray()){
-                var fields=r.link.Split('/');if(fields.Length<2)continue;
-                if(changes.TryGetValue(fields[0],out var parent))fields[0]=parent;
-                if(changes.TryGetValue(fields[fields.Length-1],out var child))fields[fields.Length-1]=child;
-                string key=string.Join("/",fields);
-                if(key!=r.link && !Reroutes.Exists(item=>item.link==key)){Reroutes.Add(new Reroute{link=key,position=r.position});_dirty=true;}
-            }
-            if(_dirty)Save();
         }
         public Vector2 Position(UnityEngine.Object asset, Vector2 fallback)
             => Position(AssetReferences.Key(asset), fallback);
@@ -114,7 +83,6 @@ namespace ZFramework.GAS.Editor
             foreach(var asset in assets){
                 string key=AssetReferences.Key(asset)+"#";
                 if(asset is GameplayAbilityAsset)valid.Add(key+"activationActions");
-                if(asset is SkillActionModuleAsset)valid.Add(key+"actions");
                 if (SkillEditorExtensions.Supports(asset))
                 {
                     using var so = new SerializedObject(asset);
