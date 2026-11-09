@@ -44,8 +44,6 @@ namespace ZFramework.GAS.Editor
             var window = GetWindow<SkillEditorWindow>(); window.titleContent = new GUIContent("GAS 技能编辑器");
             window.minSize = new Vector2(780, 520); return window;
         }
-        [MenuItem("Window/ZFramework GAS/技能结构图")]
-        private static void OpenLegacy() => Open();
         [UnityEditor.Callbacks.OnOpenAsset]
         private static bool OnOpenAsset(int instanceId, int line)
         {
@@ -157,6 +155,7 @@ namespace ZFramework.GAS.Editor
             var toolbar = new Toolbar(); toolbar.AddToClassList("main-toolbar");
             var create = new ToolbarButton(NewSkill) { text = "+ 新建技能", tooltip = "创建空白技能" }; create.AddToClassList("primary-button");
             toolbar.Add(create); toolbar.Add(new ToolbarButton(Save) { text = "保存", tooltip = "Ctrl+S" });
+            toolbar.Add(new ToolbarButton(() => Compile()) { name = "compile-skill", text = "编译检查", tooltip = "F7 · 重建定义并检查全部规则，结果与 Player 构建门禁一致" });
             _followRuntime = new ToolbarToggle { text = "跟随运行时", name = "follow-runtime", tooltip = "跟随运行时调试窗口观察的单位，标出生效的技能与效果" };
             _followRuntime.SetEnabled(EditorApplication.isPlaying);
             _followRuntime.SetValueWithoutNotify(_followingRuntime);
@@ -265,6 +264,16 @@ namespace ZFramework.GAS.Editor
             if (compact) split.CollapseChild(_compactPreview ? 1 : 0); else split.UnCollapse();
         }
         public void Save() { _doc?.Save(); _validation?.ValidateNow(true); }
+        public bool Compile()
+        {
+            if (_doc?.Root == null) return false;
+            _doc.RefreshIfChanged();
+            _validation.ValidateNow(strict: true);
+            var error = _validation.Issues.FirstOrDefault(i => i.Severity == IssueSeverity.Error);
+            if (error != null) SkillActionNavigation.Select(_doc, error);
+            Feedback(error == null ? "编译检查通过" : "编译检查失败：" + error.Message);
+            return error == null;
+        }
         public void NewSkill() => SkillTemplateRegistry.Choose(Show);
         public void FocusSearch() => _library?.FocusSearch();
         private void Tick()
@@ -321,6 +330,8 @@ namespace ZFramework.GAS.Editor
         }
         [Shortcut("GAS/保存技能", typeof(SkillEditorWindow), KeyCode.S, ShortcutModifiers.Action)]
         private static void SaveShortcut(ShortcutArguments args) => ((SkillEditorWindow)args.context).Save();
+        [Shortcut("GAS/编译检查", typeof(SkillEditorWindow), KeyCode.F7)]
+        private static void CompileShortcut(ShortcutArguments args) => ((SkillEditorWindow)args.context).Compile();
         [Shortcut("GAS/新建技能", typeof(SkillEditorWindow), KeyCode.N, ShortcutModifiers.Action)]
         private static void NewShortcut(ShortcutArguments args) => ((SkillEditorWindow)args.context).NewSkill();
         [Shortcut("GAS/搜索技能", typeof(SkillEditorWindow), KeyCode.F, ShortcutModifiers.Action)]

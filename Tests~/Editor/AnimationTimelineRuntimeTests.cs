@@ -98,7 +98,7 @@ namespace ZFramework.GAS.Editor.Tests
             var definition = new SkillAnimationDefinition("Attack", 1, true,
                 tagWindows: new[] { new AnimationTagWindow(.2f, .5f, new GameplayTagSet(_window)) },
                 markers: new[] { new AnimationMarker(.3f, actions: new[] { spawner.Build(new()) }) });
-            owner.StartTask(ability, new AnimationTask(definition, new Driver(), taskContext: new TimelineTaskContext()));
+            owner.StartTask(ability, new AnimationTask(definition, new Driver(), taskContext: new SkillExecutionServices()));
             owner.Tick(3.6f); Assert.AreEqual(4, spawner.Count); Assert.IsFalse(owner.OwnedTags.HasTag(_window)); owner.EndAbility(ability);
         }
         // authored × scale 在这些组合下比实际时长多一个 ulp；圈末必须仍能收掉「随动画结束」的区间与窗口，
@@ -132,7 +132,7 @@ namespace ZFramework.GAS.Editor.Tests
         {
             var owner = new AbilitySystemComponent(); var ability = Activate(owner); var first = new CountingAction { Cancel = true }; var second = new CountingAction();
             var definition = new SkillAnimationDefinition("Attack", 1, markers: new[] { new AnimationMarker(.2f, actions: new[] { first.Build(new()) }), new AnimationMarker(.3f, actions: new[] { second.Build(new()) }) });
-            owner.StartTask(ability, new AnimationTask(definition, new Driver(), taskContext: new TimelineTaskContext())); owner.Tick(1);
+            owner.StartTask(ability, new AnimationTask(definition, new Driver(), taskContext: new SkillExecutionServices())); owner.Tick(1);
             Assert.AreEqual(1, first.Count); Assert.AreEqual(0, second.Count);
         }
         [Test]
@@ -142,7 +142,7 @@ namespace ZFramework.GAS.Editor.Tests
             var definition = new SkillAnimationDefinition("Attack", 1, true,
                 tagWindows: new[] { new AnimationTagWindow(.2f, .6f, new GameplayTagSet(_window)) },
                 markers: new[] { new AnimationMarker(.3f, actions: new[] { spawner.Build(new()) }) });
-            owner.StartTask(ability, new AnimationTask(definition, new Driver(), taskContext: new TimelineTaskContext()));
+            owner.StartTask(ability, new AnimationTask(definition, new Driver(), taskContext: new SkillExecutionServices()));
             for (int i = 0; i < 100; i++) owner.Tick(1);
             long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 1000; i++) owner.Tick(1);

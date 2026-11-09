@@ -1,5 +1,6 @@
 # BasicCombat
 
+先在 Package Manager 的 Samples 中 Import Basic Combat。本示例不随包自动编译；TrainingArena 显式选择 3D 查询、对象生成服务与场景任务宿主，具体阵营和闪电表现属于样例。
 要从预设开始配置单个技能，选择 **Tools → ZFramework GAS → BasicCombat → 技能模板**。这里有近战普攻、投射物、狂暴 Buff、持续伤害、引导和召唤骨架；只新建所选技能，不会重新生成训练场。投射物和召唤骨架的 Prefab 需要自行指定。
 
 在 Unity 菜单选择 **Tools → ZFramework GAS → 创建 BasicCombat 示例**。生成器全部由代码程序化构建，不依赖任何第三方美术资源，结果写入 `Assets/GAS Samples/BasicCombat`：

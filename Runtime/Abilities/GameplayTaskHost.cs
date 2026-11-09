@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 
 namespace ZFramework.GAS
@@ -9,7 +10,7 @@ namespace ZFramework.GAS
         private readonly List<GameplayAbilityTask> _tasks = new();
         private readonly List<(GameplayAbilityTask task, long run)> _frame = new();
         private bool _clearing, _ticking;
-        public GameplayAbilityTask CurrentTask { get; private set; }
+        public GameplayAbilityTask CurrentTask { get; internal set; }
         public int Count => _tasks.Count;
         public GameplayAbilityTask this[int index] => _tasks[index];
         public void Start(GameplayAbilitySpec origin, GameplayAbilityTask task)
@@ -17,7 +18,6 @@ namespace ZFramework.GAS
         public void Start(GameplayAbilitySpec origin, GameplayAbilityTask task, int activationVersion)
         {
             if (_clearing) throw new InvalidOperationException("Task host is shutting down.");
-            if (task == null) throw new ArgumentNullException(nameof(task));
             if (task.IsActive) throw new InvalidOperationException("Task already has a host.");
             CurrentTask = task; _tasks.Add(task);
             task.Begin(origin, activationVersion);
@@ -34,7 +34,8 @@ namespace ZFramework.GAS
                 {
                     var task = item.task;
                     if (task.RunVersion != item.run) continue;
-                    CurrentTask = task; if(task.IsActive)task.Advance(deltaTime);
+                    CurrentTask = task;
+                    task.Advance(deltaTime);
                     if (task.RunVersion == item.run && !task.IsActive) _tasks.Remove(task);
                 }
                 CurrentTask = null;
@@ -45,6 +46,26 @@ namespace ZFramework.GAS
         {
             if (!_tasks.Remove(task)) return false;
             task.CancelInternal(); return true;
+        }
+
+        internal void Cancel(GameplayAbilitySpec ability, int activationVersion)
+        {
+            int count = _tasks.Count;
+            if (count == 0) return;
+            var snapshot = ArrayPool<(GameplayAbilityTask task, long run)>.Shared.Rent(count);
+            for (int i = 0; i < count; i++) snapshot[i] = (_tasks[i], _tasks[i].RunVersion);
+            try
+            {
+                for (int i = count - 1; i >= 0; i--)
+                {
+                    var item = snapshot[i];
+                    var task = item.task;
+                    if (task.RunVersion == item.run && ReferenceEquals(task.Ability, ability) &&
+                        task.ActivationVersion == activationVersion)
+                        Cancel(task);
+                }
+            }
+            finally { ArrayPool<(GameplayAbilityTask, long)>.Shared.Return(snapshot, true); }
         }
         public void Clear()
         {

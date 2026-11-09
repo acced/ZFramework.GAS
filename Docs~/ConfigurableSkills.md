@@ -1,5 +1,6 @@
 # 可配置技能工作流
 
+0.2 接入变化：物理、对象和场景服务须显式注入；ASC.Clear 后须显式重新 Grant；详见 [迁移说明](Refactor-0.2.md)。
 本轮目标是让技能资产承担业务配置。结构图仍展示资产关系；动作由强类型执行器运行，运行期不扫描类型、不解析脚本、不解释图连线。
 
 ## 从示例开始
@@ -44,7 +45,7 @@ runner.TryCast(skill, SkillCastTarget.Ground(worldPoint));
 runner.TryCast(selfBuff);
 ```
 
-在动作的目标查询中选 **敌方、友方或不限**。例如把圣域的查询设为「圆形、友方、允许自身」，它就能治疗范围内的友方；改成另一种治疗技能不需要给施放入口加分支。BasicCombat 的 Q 只切换待施放的能量弹资产。使用旧重载传入非空 `TimelineTaskContext` 时，该次施放使用传入的整份服务。
+在动作的目标查询中选 **敌方、友方或不限**。例如把圣域的查询设为「圆形、友方、允许自身」，它就能治疗范围内的友方；改成另一种治疗技能不需要给施放入口加分支。BasicCombat 的 Q 只切换待施放的能量弹资产。使用服务重载传入非空 `SkillExecutionServices` 时，该次施放使用传入的整份服务。
 
 **少量技能直接在编辑器配置；已有表格或流程资产才写导入器。** 导入器留在消费项目的 Editor 程序集，引用 `ZFramework.GAS.Editor`。程序将源数据中的时间、属性 ID、标签和资源引用翻译成 GAS 资产。效果、动画片段、Prefab 都可以引用项目中已有的对象，不需要复制进包。
 
@@ -103,11 +104,11 @@ Clamp(常量 + 来源属性 × 系数 × 参数 - 目标属性 × 目标系数, 
 
 技能动画、等待和显式选择 Ability 的区域随取消结束。正常播放结束后，技能等待这些所属任务完成。已经发出的投射物、区域和召唤物在场景宿主中独立调度，不占 ASC 的任务列表，也不阻止再次施放。
 
-`SceneSkillTaskHost` 随场景卸载清理。项目可在 `TimelineTaskContext.SceneTasks` 注入手动调度宿主（适合测试或已有世界时钟），此时由项目负责 Tick 和 Clear。
+`SceneSkillTaskHost` 必须由项目显式添加，再将其 Tasks 注入 `SkillUnitServices.SceneTasks`，禁用/卸载时清理。也可注入手动 `GameplayTaskHost` 并由项目 Tick 和 Clear；库不再创建隐藏场景宿主。
 
 要对比两种打断行为，在 **Tools → ZFramework GAS → BasicCombat → 技能模板** 下分别创建示例。**持续伤害（打断后继续）** 会在标记触发时把周期效果挂到目标，此后由目标的 ASC 结算；**引导（随施放取消）** 会在标记触发时启动技能所属的周期任务，每半秒对固定目标施加一次瞬时伤害。打断前都能造成伤害，打断后只有前者继续。要修改每跳间隔，前者改效果的周期，后者改区域动作的周期。
 
-`ISkillObjectService` 接管生成与归还，默认实现为 Instantiate / Destroy。池实现必须在 Spawn 时重置对象，Release 时归还同一个对象。Prefab 可实现 `ISkillSpawnInitializer` 接收初始化上下文；AI、导航和阵营属于项目代码。
+`ISkillObjectService` 由项目显式注入，接管生成与归还。原型可主动选择 `InstantiateSkillObjectService.Instance`，它使用 Instantiate / Destroy；库不自动设置此服务。池实现必须在 Spawn 时重置对象，Release 时归还同一个对象。Prefab 可实现 `ISkillSpawnInitializer` 接收初始化上下文；AI、导航和阵营属于项目代码。
 
 ### 新动作应放在哪里
 
@@ -123,7 +124,7 @@ Clamp(常量 + 来源属性 × 系数 × 参数 - 目标属性 × 目标系数, 
 
 查询支持自身、固定目标、目标点周围、圆形、扇形和线形。可配置 LayerMask、任一／必需／阻断标签、排除自身和最多目标数；按单位去重并按距离排序截取。预演和运行时使用同一份原点、形状尺寸、扇形角度判定和标签规则；假人用球形代理，场景用 Unity 碰撞体。没有注册的标签不会成为有效的查询条件。
 
-物理查询读取 Unity 当前物理世界，不会自行调用 `Physics.SyncTransforms`。嵌套查询分别租用结果缓冲，外层结果不会被覆盖。默认缓冲为 256 个碰撞体。即时多目标动作在开发构建中断言缓冲未饱和；项目应限制碰撞层和范围。持续区域不会根据不完整的结果移除占用者。
+3D 查询需要显式注入 `PhysicsTargetSearcher`（Combat3D 程序集），它读取配置场景的 PhysicsScene，不会自行调用 `Physics.SyncTransforms`。缓冲区通过 searcher.CreateBuffer 创建。嵌套查询分别租用结果缓冲，外层结果不会被覆盖。默认缓冲为 256 个碰撞体。即时多目标动作在开发构建中断言缓冲未饱和；项目应限制碰撞层和范围。持续区域不会根据不完整的结果移除占用者。
 
 项目在 `SkillUnitServices.TargetRelations` 提供 `bool MatchesTeam(AbilitySourceIdentity source, AbilitySystemComponent target, TargetRelation relation)`。「不限」不查阵营；未接入服务时「友方／敌方」均不接纳目标。关系判断同样用于固定目标、范围查询和投射物命中；标签与已有的 `ITargetFilter` 仍然生效。关系服务拿到的是原施法者的代际标识；若投射物在单位被回收后仍需判敌，可按该标识保存队伍。用活动单位查队伍的项目遇到未知来源应返回 false。
 

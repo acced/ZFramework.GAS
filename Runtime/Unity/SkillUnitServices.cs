@@ -1,32 +1,8 @@
 using System;
-using GameplayTags;
 using UnityEngine;
 
 namespace ZFramework.GAS.Unity
 {
-    [Serializable]
-    public sealed class AnimationTagWindowAsset
-    {
-        [SerializeField, HideInInspector] private string id;
-        public string Id => id;
-        [SerializeField] private float start;
-        [SerializeField] private float end = -1;
-        [SerializeField] private GameplayTag[] tags = Array.Empty<GameplayTag>();
-        public AnimationTagWindow Build() => new(start, end, TagAssetUtility.ToSet(tags));
-    }
-
-    public readonly struct AnimationTagWindow
-    {
-        public readonly float Start, End;
-        public readonly GameplayTagSet Tags;
-        public AnimationTagWindow(float start, float end, GameplayTagSet tags)
-        {
-            if (float.IsNaN(start) || float.IsInfinity(start) || start < 0) throw new ArgumentOutOfRangeException(nameof(start));
-            if (float.IsNaN(end) || float.IsInfinity(end) || end >= 0 && end < start) throw new ArgumentOutOfRangeException(nameof(end));
-            Start = start; End = end < 0 ? -1 : end; Tags = tags;
-        }
-    }
-
     /// <summary>Bind once per unit. Each cast copies these service references into its own context.</summary>
     public class SkillUnitServices
     {
@@ -77,12 +53,12 @@ namespace ZFramework.GAS.Unity
         public SkillCastTarget(AbilitySystemComponent unit, Transform aim = null, Vector3? point = null)
         { Unit = unit; Aim = aim; Point = point; }
         public static SkillCastTarget Ground(Vector3 point) => new(null, point: point);
-        internal static SkillCastTarget From(AbilitySystemComponent unit, TimelineTaskContext context)
+        internal static SkillCastTarget From(AbilitySystemComponent unit, SkillExecutionServices context)
             => new(unit, context?.Target, context?.HasTargetPosition == true ? context.TargetPosition : (Vector3?)null);
     }
 
-    /// <summary>Services and aim for a single execution branch; also accepted by the original casting API.</summary>
-    public sealed class TimelineTaskContext : SkillUnitServices
+    /// <summary>Services and target input captured by one execution branch.</summary>
+    public sealed class SkillExecutionServices : SkillUnitServices
     {
         public Transform Target;
         private Vector3 _targetPosition;
@@ -97,15 +73,15 @@ namespace ZFramework.GAS.Unity
         }
         internal bool FilterHasSnapshot;
         public SkillExecutionContext Execution { get; internal set; }
-        public TimelineTaskContext Snapshot()
+        public SkillExecutionServices Snapshot()
         {
-            var copy = (TimelineTaskContext)MemberwiseClone();
+            var copy = (SkillExecutionServices)MemberwiseClone();
             ShareExtensionsWith(copy);
             return copy;
         }
         internal void RebindTarget(Transform target)
         { Target = target; if (target != null) TargetPosition = target.position; }
-        public void CopyFrom(TimelineTaskContext source, bool includeExecution = false)
+        public void CopyFrom(SkillExecutionServices source, bool includeExecution = false)
         {
             CopyServicesFrom(source);
             Target = source.Target; _targetPosition = source._targetPosition;

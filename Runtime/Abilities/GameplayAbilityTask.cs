@@ -1,5 +1,3 @@
-using System;
-
 namespace ZFramework.GAS
 {
     /// <summary>
@@ -45,7 +43,6 @@ namespace ZFramework.GAS
 
         internal void Begin(GameplayAbilitySpec ability, int activationVersion)
         {
-            if (IsActive) throw new InvalidOperationException("Task is already running.");
             Ability = ability;
             RunVersion++;
             ActivationVersion = activationVersion;

@@ -155,25 +155,6 @@ namespace ZFramework.GAS
             return removed;
         }
 
-        /// <summary>仅供效果容器验证池对象是否已与属性完全脱钩。</summary>
-        internal bool HasModifiersFromSource(object source)
-        {
-            if (source == null)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < _modifiers.Count; i++)
-            {
-                if (ReferenceEquals(_modifiers[i].Source, source))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
         /// <summary>效果堆叠层数变化时由持有方推送，避免聚合过程反向查询来源。</summary>
         public bool SetSourceStackCount(object source, int stackCount)
         {

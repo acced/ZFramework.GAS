@@ -14,7 +14,6 @@ namespace ZFramework.GAS.Unity
         private readonly AbilitySystemComponent _owner;
         private readonly SkillUnitServices _services;
         private readonly Dictionary<GameplayAbilityAsset, Entry> _skills = new();
-        private readonly object _directGrant = new();
         private sealed class GrantSettings
         {
             public object Source;
@@ -34,6 +33,7 @@ namespace ZFramework.GAS.Unity
             public SkillParameterOverride[] Overrides;
             public SkillExecutionContext Execution;
             public SkillActionDefinition[] Actions;
+            public bool AutoCommit;
             public readonly List<GrantSettings> Grants = new();
             public Prepared Default;
         }
@@ -44,7 +44,7 @@ namespace ZFramework.GAS.Unity
         { _owner = owner; _services = services; }
 
         public void Grant(GameplayAbilityAsset asset, int level=1, SkillParameterOverride[] overrides=null)
-            => GrantFrom(_directGrant,asset,level,overrides);
+            => GrantFrom(this,asset,level,overrides);
         private void GrantFrom(object source,GameplayAbilityAsset asset,int level,SkillParameterOverride[] overrides)
         {
             if(!_skills.TryGetValue(asset,out var entry)){
@@ -65,11 +65,13 @@ namespace ZFramework.GAS.Unity
         private void EnsureSpec(GameplayAbilityAsset asset,Entry entry)
         {
             var definition=asset.Definition;
-            if(entry.Spec==null){entry.Default=null;entry.Spec=_owner.GrantAbility(definition);RefreshGrant(entry);}
+            var actions=asset.BuildActions();
+            if(entry.Spec?.IsGranted!=true){entry.Default=null;entry.Spec=_owner.GrantAbility(definition);RefreshGrant(entry);}
             if(!ReferenceEquals(entry.Spec.Definition,definition)){
                 _owner.UpdateAbilityDefinition(entry.Spec,definition);entry.Default=null;
             }
-            entry.Actions=asset.BuildActions();
+            entry.Actions=actions;
+            entry.AutoCommit=asset.autoCommit;
         }
         private static Prepared Prepare(GameplayAbilityAsset asset,Entry entry,SkillParameterOverride[] cast)
         {
@@ -97,13 +99,13 @@ namespace ZFramework.GAS.Unity
         {
             var assets=new List<GameplayAbilityAsset>(_skills.Keys);
             foreach(var asset in assets){
-                var entry=Find(asset);
+                var entry=_skills[asset];
                 if(keep!=null && keep.Contains(asset) || entry.Grants.RemoveAll(g=>ReferenceEquals(g.Source,source))==0)continue;
                 if(entry.Grants.Count==0)RevokeAll(asset);else RefreshGrant(entry);
             }
         }
         public AbilityActivationResult TryCast(GameplayAbilityAsset asset, AbilitySystemComponent target=null,
-            TimelineTaskContext taskContext=null,SkillParameterOverride[] parameterOverrides=null)
+            SkillExecutionServices taskContext=null,SkillParameterOverride[] parameterOverrides=null)
             => Cast(asset, SkillCastTarget.From(target, taskContext), taskContext ?? _services, parameterOverrides);
 
         public AbilityActivationResult TryCast(GameplayAbilityAsset asset, SkillCastTarget target,
@@ -115,10 +117,12 @@ namespace ZFramework.GAS.Unity
         {
             var entry=Find(asset) ?? throw new InvalidOperationException("技能未授予: "+asset.name);
             if(entry.Spec?.IsActive==true){LastCastCheck=_owner.CheckActivation(entry.Spec);return LastCastCheck.Result;}
+#if UNITY_EDITOR
             EnsureSpec(asset,entry);
+#endif
             var prepared=Prepare(asset,entry,parameterOverrides);
             var spec=entry.Spec;
-            var result=_owner.TryActivateAbility(spec,prepared.Values);LastCastCheck=spec.LastActivationCheck;
+            var result=_owner.TryActivateAbility(spec,prepared.Values,entry.AutoCommit);LastCastCheck=spec.LastActivationCheck;
             if(result!=AbilityActivationResult.Activated)return result;
             var execution=prepared.Context;
             if(execution==null || !execution.Reusable) {
@@ -164,27 +168,19 @@ namespace ZFramework.GAS.Unity
         public bool Cancel(GameplayAbilityAsset asset) => _owner.EndAbility(Find(asset)?.Spec);
         public bool Revoke(GameplayAbilityAsset asset)
         {
-            var entry = Find(asset);
-            if (entry == null) return false;
-            bool removed = entry.Grants.RemoveAll(g => ReferenceEquals(g.Source,_directGrant)) != 0;
+            if (!_skills.TryGetValue(asset, out var entry)) return false;
+            bool removed = entry.Grants.RemoveAll(g => ReferenceEquals(g.Source,this)) != 0;
             if (!removed) return false;
             if (entry.Grants.Count == 0) RevokeAll(asset); else RefreshGrant(entry);
             return true;
         }
         public bool RevokeAll(GameplayAbilityAsset asset)
         {
-            var entry = Find(asset);
-            if (entry == null) return false;
+            if (!_skills.TryGetValue(asset, out var entry)) return false;
             _skills.Remove(asset);
             _owner.RemoveAbility(entry.Spec); return true;
         }
         private Entry Find(GameplayAbilityAsset asset)
-        {
-            if (asset == null || !_skills.TryGetValue(asset, out var entry)) return null;
-            if(entry.Spec?.IsGranted==true)return entry;
-            entry.Spec = null;
-            entry.Execution = null;
-            return entry;
-        }
+            => _skills.TryGetValue(asset, out var entry) && entry.Spec?.IsGranted == true ? entry : null;
     }
 }

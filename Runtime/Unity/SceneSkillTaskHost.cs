@@ -5,20 +5,13 @@ using UnityEngine.SceneManagement;
 
 namespace ZFramework.GAS.Unity
 {
-    /// <summary>One explicit task host per scene; unloading/disable returns every spawned object.</summary>
-    [AddComponentMenu("")]
+    /// <summary>Optional FixedUpdate host. Add explicitly and inject Tasks into SkillUnitServices.</summary>
+    [AddComponentMenu("GAS/Scene Task Host")]
     public sealed class SceneSkillTaskHost : MonoBehaviour
     {
-        private static readonly List<SceneSkillTaskHost> Hosts = new();
         public GameplayTaskHost Tasks { get; } = new GameplayTaskHost();
-        public static SceneSkillTaskHost For(Scene scene)
-        {
-            foreach (var host in Hosts) if (host != null && host.gameObject.scene == scene) return host;
-            if (!scene.IsValid() || !scene.isLoaded) throw new InvalidOperationException("技能场景已卸载。");
-            var go = new GameObject("GAS Scene Tasks");
-            SceneManager.MoveGameObjectToScene(go, scene);
-            return go.AddComponent<SceneSkillTaskHost>();
-        }
+#if UNITY_EDITOR
+        private static readonly List<SceneSkillTaskHost> Hosts = new();
         public static void CopyTasks(List<GameplayAbilityTask> results)
         {
             results.Clear();
@@ -26,6 +19,7 @@ namespace ZFramework.GAS.Unity
                 for (int i = 0; i < host.Tasks.Count; i++) results.Add(host.Tasks[i]);
         }
         private void OnEnable() { if (!Hosts.Contains(this)) Hosts.Add(this); }
+#endif
         private void FixedUpdate()
         {
             try { Tasks.Tick(Time.fixedDeltaTime); }
@@ -40,7 +34,9 @@ namespace ZFramework.GAS.Unity
         }
         private void OnDisable()
         {
+#if UNITY_EDITOR
             Hosts.Remove(this);
+#endif
             try { Tasks.Clear(); } catch (Exception exception) { Debug.LogException(exception, this); }
         }
     }

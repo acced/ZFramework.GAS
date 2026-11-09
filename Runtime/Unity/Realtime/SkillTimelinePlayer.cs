@@ -42,7 +42,7 @@ namespace ZFramework.GAS.Unity
             finally { _pendingDuration = 0; }
         }
 
-        public AbilityActivationResult TryCast(GameplayAbilityAsset asset, AbilitySystemComponent target, TimelineTaskContext taskContext,
+        public AbilityActivationResult TryCast(GameplayAbilityAsset asset, AbilitySystemComponent target, SkillExecutionServices taskContext,
             float durationOverride, SkillParameterOverride[] parameterOverrides = null)
         {
             _pendingDuration = durationOverride;

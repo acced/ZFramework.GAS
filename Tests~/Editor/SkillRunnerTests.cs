@@ -105,7 +105,8 @@ namespace ZFramework.GAS.Editor.Tests
             runner.Grant(skill); runner.Grant(skill); Assert.AreEqual(1, owner.GrantedAbilityCount);
             Assert.AreEqual(AbilityActivationResult.Activated, runner.TryCast(skill)); Assert.IsFalse(runner.IsActive(skill));
             Assert.AreEqual(0, owner.ActiveTaskCount);
-            owner.Clear(); runner.TryCast(skill); Assert.AreEqual(1, owner.GrantedAbilityCount);
+            owner.Clear(); Assert.Throws<System.InvalidOperationException>(() => runner.TryCast(skill));
+            runner.Grant(skill); runner.TryCast(skill); Assert.AreEqual(1, owner.GrantedAbilityCount);
             Assert.IsTrue(runner.Revoke(skill)); Assert.AreEqual(0, owner.GrantedAbilityCount);
         }
     }

@@ -1,6 +1,5 @@
 using System;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 namespace ZFramework.GAS.Unity
 {
@@ -26,11 +25,12 @@ namespace ZFramework.GAS.Unity
         private readonly SkillExecutionContext _cast;
         private readonly TargetQueryDefinition _query;
         private readonly TargetQueryBuffer _b;
-        internal SkillTargetResults(SkillExecutionContext cast, TargetQueryDefinition query, TargetQueryBuffer b)
+        public SkillTargetResults(SkillExecutionContext cast, TargetQueryDefinition query, TargetQueryBuffer b)
         { _cast = cast; _query = query; _b = b; }
         public void Add(AbilitySystemComponent unit, Transform aim = null, Vector3? point = null)
-            => Insert(unit, aim, point ?? (aim != null ? aim.position : (Vector3?)null), 0);
-        internal void Insert(AbilitySystemComponent unit, Transform aim, Vector3? point, float distance)
+            => AddNearest(unit, aim, point ?? (aim != null ? aim.position : (Vector3?)null), 0);
+        public void MarkSaturated() => _b.Saturated = true;
+        public void AddNearest(AbilitySystemComponent unit, Transform aim, Vector3? point, float distance)
         {
             if (!_cast.Allows(_query, unit)) return;
             for (int i = 0; i < _b.Count; i++) if (ReferenceEquals(_b.Units[i], unit)) return;
@@ -47,18 +47,15 @@ namespace ZFramework.GAS.Unity
         }
     }
 
-    /// <summary>
-    /// 指定对象、物理或项目目标来源的统一入口。通过 <see cref="TargetQueryBuffer"/> 缓冲结果，
-    /// 嵌套查询各持自己的 buffer 即可避免重入问题。
-    ///
-    /// 扇形的角度判定在 XZ 平面上进行（忽略高度差），以适配地面战斗；距离与重叠检测仍是三维的。
-    ///
-    /// 查询看到的是上一次物理同步时的碰撞体位置。项目若关闭了
-    /// <see cref="Physics.autoSyncTransforms"/>（Unity 默认关），当帧内挪动的 Transform
-    /// 不会反映到结果里，直到下一次 FixedUpdate 或显式 <see cref="Physics.SyncTransforms"/>。
-    /// </summary>
-    public sealed class TargetSearcher
+    /// <summary>Identity, filtering and ordering shared by every target source. Spatial queries are supplied by a host adapter.</summary>
+    public class TargetSearcher
     {
+        public virtual TargetQueryBuffer CreateBuffer(int capacity = 256) => new TargetQueryBuffer(capacity);
+
+        protected virtual void Collect(TargetQueryDefinition query, SkillExecutionContext context,
+            TargetQueryBuffer buffer, Vector3? center, Vector3 forward, bool captureAim)
+            => throw new InvalidOperationException("空间查询需要显式注入 TargetSearcher 实现，例如 PhysicsTargetSearcher。");
+
         /// <summary>Physical results are nearest first; project results retain the supplied priority.</summary>
         public int Query(TargetQueryDefinition query, SkillExecutionContext context, TargetQueryBuffer buffer,
             Vector3? centerOverride = null, bool applyLimit = true)
@@ -80,44 +77,7 @@ namespace ZFramework.GAS.Unity
                 var service = context.Services.Get<ISkillTargetSource>() ?? throw new InvalidOperationException("没有接入项目目标来源：" + query.SourceKey);
                 service.Collect(query.SourceKey, context, results);
             }
-            else
-            {
-                Vector3 center; int hits; Collider weapon = null;
-                var forward = forwardOverride ?? context.Forward;
-                var shape = query.ResolveShape(context.Values);
-                if (query.Kind == TargetQueryKind.Hitbox)
-                {
-                    var origin = context.Source != null ? context.Services.Origin : null;
-                    weapon = origin != null ? origin.GetComponent<SkillHitboxes>()?.Find(query.SourceKey) : null;
-                    if (origin != null && weapon == null) throw new InvalidOperationException("单位未绑定碰撞体槽位：" + query.SourceKey);
-                    if (weapon != null && weapon.enabled && weapon.gameObject.activeInHierarchy)
-                    {
-                        if (!SkillColliderVolume.TryRead(weapon, out var volume)) throw new InvalidOperationException("碰撞体槽位需要 Box、Sphere 或 Capsule Collider：" + query.SourceKey);
-                        center = volume.Center;
-                        hits = volume.Overlap(weapon.gameObject.scene.GetPhysicsScene(), buffer.Colliders, query.LayerMask);
-                    }
-                    else { center = default; hits = 0; }
-                }
-                else
-                {
-                    center = centerOverride ?? query.Center(context);
-                    hits = query.Kind == TargetQueryKind.Line
-                        ? Physics.OverlapBoxNonAlloc(center + forward * shape.HalfExtents.z, shape.HalfExtents,
-                            buffer.Colliders, Quaternion.LookRotation(forward), query.LayerMask, QueryTriggerInteraction.Collide)
-                        : Physics.OverlapSphereNonAlloc(center, shape.Radius, buffer.Colliders, query.LayerMask, QueryTriggerInteraction.Collide);
-                }
-                buffer.Saturated = hits == buffer.Colliders.Length;
-                var flatForward = new Vector2(forward.x, forward.z).normalized;
-                for (int i = 0; i < hits; i++)
-                {
-                    var collider = buffer.Colliders[i];
-                    if (collider == weapon || collider.GetComponentInParent<IAbilitySystemProvider>() is not { } provider) continue;
-                    var t = provider is Component component ? component.transform : collider.transform;
-                    var delta = t.position - center;
-                    if (shape.IncludesDirection(flatForward, delta))
-                        results.Insert(provider.AbilitySystem, t, captureAim ? collider.bounds.center : (Vector3?)null, delta.sqrMagnitude);
-                }
-            }
+            else Collect(query, context, buffer, centerOverride, forwardOverride ?? context.Forward, captureAim);
             int count = applyLimit ? Mathf.Min(buffer.Count, query.MaxTargets) : buffer.Count;
             for (int i = count; i < buffer.Count; i++) { buffer.Units[i] = null; buffer.Transforms[i] = null; }
             buffer.Count = count;
@@ -127,9 +87,6 @@ namespace ZFramework.GAS.Unity
         /// <summary>Query an oriented hit volume and capture identities for safe processing across hit callbacks.</summary>
         public int QueryAt(TargetQueryDefinition query, SkillExecutionContext context, TargetQueryBuffer buffer, Vector3 center, Vector3 forward)
             => Query(query, context, buffer, center, true, false, forward);
-
-        /// <param name="maxCandidates">Legacy parameter, kept for source compatibility. Buffer capacity is now per-query.</param>
-        public TargetSearcher(int maxCandidates = 64) { }
 
     }
 }

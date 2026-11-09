@@ -10,8 +10,8 @@ namespace ZFramework.GAS.Editor.Tests
 {
     public sealed class ImprovementPlanTests
     {
-        private static TimelineTaskContext WithServices(Action<TimelineTaskContext> setup)
-        { var services = new TimelineTaskContext(); setup(services); return services; }
+        private static SkillExecutionServices WithServices(Action<SkillExecutionServices> setup)
+        { var services = new SkillExecutionServices(); setup(services); return services; }
         [Test] public void BlendPresetsHaveBoundedWeightsAndDefinitionsKeepAuthoredCurve()
         {
             foreach(SkillBlendCurve curve in Enum.GetValues(typeof(SkillBlendCurve)))

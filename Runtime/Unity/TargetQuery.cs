@@ -66,20 +66,13 @@ namespace ZFramework.GAS.Unity
         private readonly GameplayTagSet _any;
         public TargetQueryDefinition(TargetQueryKind kind, SkillNumber radius, SkillNumber angle, SkillNumber width,
             SkillNumber height, LayerMask mask, bool excludeSelf, int maxTargets,
-            GameplayTagSet required = default, GameplayTagSet blocked = default)
-            :this(kind,radius,angle,width,height,mask,excludeSelf,maxTargets,required,blocked,SkillSpawnPosition.Caster){}
-        public TargetQueryDefinition(TargetQueryKind kind,SkillNumber radius,SkillNumber angle,SkillNumber width,
-            SkillNumber height,LayerMask mask,bool excludeSelf,int maxTargets,GameplayTagSet required,GameplayTagSet blocked,SkillSpawnPosition origin, GameplayTagSet any = default)
-            : this(kind,radius,angle,width,height,mask,excludeSelf,maxTargets,required,blocked,origin,any,TargetRelation.Any) { }
-        public TargetQueryDefinition(TargetQueryKind kind, SkillNumber radius, SkillNumber angle, SkillNumber width,
-            SkillNumber height, LayerMask mask, bool excludeSelf, int maxTargets, GameplayTagSet required, GameplayTagSet blocked, SkillSpawnPosition origin, GameplayTagSet any, TargetRelation relation)
-            : this(kind,radius,angle,width,height,mask,excludeSelf,maxTargets,required,blocked,origin,any,relation,null) { }
-        internal TargetQueryDefinition(TargetQueryKind kind, SkillNumber radius, SkillNumber angle, SkillNumber width,
-            SkillNumber height, LayerMask mask, bool excludeSelf, int maxTargets, GameplayTagSet required, GameplayTagSet blocked, SkillSpawnPosition origin, GameplayTagSet any, TargetRelation relation, string sourceKey)
+            GameplayTagSet required = default, GameplayTagSet blocked = default,
+            SkillSpawnPosition origin = SkillSpawnPosition.Caster, GameplayTagSet any = default,
+            TargetRelation relation = TargetRelation.Any, string sourceKey = null)
         {
             _any=any; Origin=origin; Relation=relation; SourceKey=sourceKey;
             Kind = kind; Radius = radius; Angle = angle; Width = width; Height = height; LayerMask = mask;
-            ExcludeSelf = excludeSelf; MaxTargets = Math.Max(1, maxTargets);
+            ExcludeSelf = excludeSelf; MaxTargets = maxTargets;
             _requirements = GameplayTagRequirements.Create(blocked.AsSpan(), required.AsSpan());
         }
         public bool MatchesTags(GameplayTagCountContainer tags)
@@ -116,9 +109,8 @@ namespace ZFramework.GAS.Unity
         }
     }
 
-    public sealed class TargetQueryBuffer
+    public class TargetQueryBuffer
     {
-        internal readonly Collider[] Colliders;
         public readonly AbilitySystemComponent[] Units;
         public readonly Transform[] Transforms;
         internal readonly Vector3?[] Points;
@@ -129,13 +121,13 @@ namespace ZFramework.GAS.Unity
         public bool IsCurrent(int index) => Units[index]?.Generation == Generations[index];
         public TargetQueryBuffer(int capacity = 256)
         {
-            Colliders = new Collider[capacity]; Units = new AbilitySystemComponent[capacity];
+            Units = new AbilitySystemComponent[capacity];
             Transforms = new Transform[capacity]; Distances = new float[capacity]; Points=new Vector3?[capacity]; Generations=new int[capacity];
         }
         internal void Clear()
         {
             Array.Clear(Units, 0, Count); Array.Clear(Transforms, 0, Count);
-            Array.Clear(Colliders, 0, Colliders.Length); Count = 0; Saturated = false;
+            Count = 0; Saturated = false;
         }
     }
 }

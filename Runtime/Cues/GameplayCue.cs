@@ -133,6 +133,12 @@ namespace ZFramework.GAS
 
         public void Clear()
         {
+            if (_dispatchDepth > 0)
+            {
+                for (int i = 0; i < _handlers.Count; i++) _handlers[i] = null;
+                _needsCompaction = true;
+                return;
+            }
             _tags.Clear();
             _handlers.Clear();
             _needsCompaction = false;

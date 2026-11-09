@@ -75,8 +75,6 @@ namespace ZFramework.GAS
         /// 静默回落会让配置错误伪装成「伤害为零」这类难以定位的现象。
         /// </summary>
         public float Resolve(in EffectMagnitude magnitude, AttributeSet targetAttributes)
-            => ResolveValue(magnitude, targetAttributes);
-        private float ResolveValue(in EffectMagnitude magnitude, AttributeSet targetAttributes)
         {
             switch (magnitude.Kind)
             {

@@ -49,20 +49,6 @@ namespace ZFramework.GAS
         public ReadOnlySpan<GameplayTag> AsSpan() => _tags;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void AddTo(GameplayTagCountContainer container)
-        {
-            for (int i = 0; i < Count; i++)
-                container.AddTag(_tags[i]);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void RemoveFrom(GameplayTagCountContainer container)
-        {
-            for (int i = 0; i < Count; i++)
-                container.RemoveTag(_tags[i]);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool HasAny(GameplayTagCountContainer container)
         {
             for (int i = 0; i < Count; i++)

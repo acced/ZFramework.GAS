@@ -1,0 +1,12 @@
+{
+    "name": "ZFramework.GAS.Samples.BasicCombat",
+    "rootNamespace": "ZFramework.GAS.Samples.BasicCombat",
+    "references": [
+        "ZFramework.GAS",
+        "ZFramework.GAS.Unity",
+        "ZFramework.GAS.Unity.Realtime",
+        "ZFramework.GameplayTags",
+        "ZFramework.GAS.Unity.Combat3D"
+    ],
+    "autoReferenced": true
+}

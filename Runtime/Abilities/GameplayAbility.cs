@@ -15,6 +15,8 @@ namespace ZFramework.GAS
         /// <summary>该能力已处于激活状态。</summary>
         AlreadyActive,
         InvalidConfiguration,
+        /// <summary>The activation ended, its grant was revoked, or a delayed commit used an old version.</summary>
+        Inactive,
     }
 
     /// <summary>
@@ -112,6 +114,9 @@ namespace ZFramework.GAS
         public AbilityActivationCheck LastActivationCheck { get; internal set; }
 
         public bool IsActive { get; internal set; }
+        public bool IsCommitted { get; internal set; }
+        public AbilityActivationCheck LastCommitCheck { get; internal set; }
+        internal int OwnedTagCount;
         internal bool Committing;
         public bool IsGranted { get; internal set; } = true;
 

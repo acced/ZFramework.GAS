@@ -242,7 +242,6 @@ namespace ZFramework.GAS.Editor
                 case TargetSequenceAction seq: VisitSequence(seq,at,v,depth); break;
                 case NextTargetStepAction: VisitStep(false,at,v,depth); break;
                 case SelectTargetsAction pick: VisitSelect(pick,at,v,depth); break;
-                case ShowTargetLinkAction link: VisitLink(link,at,v,age); break;
                 case LaunchProjectileAction p: VisitProjectile(p,at,v,depth,age); break;
                 case CreateAreaAction a: VisitArea(a,at,v,depth,age); break;
                 case ConditionalAction c: VisitConditional(c,at,v,depth); break;
@@ -290,17 +289,6 @@ namespace ZFramework.GAS.Editor
                 take--;ctx.Target=unit;ctx.Aim=_points[unit]+Vector3.up*DummyRadius;if(pick.recordSelection)record?.Add(unit);
                 VisitBranch(pick.actions,at,v,depth);
             }ctx.Target=oldTarget;ctx.Aim=oldAim;
-        }
-
-        private void VisitLink(ShowTargetLinkAction link,float at,EffectEvaluationContext v,float age)
-        {
-            var ctx=_ctx; float now=ctx.Now;
-            float until=at+link.duration.Resolve(v);End=Mathf.Max(End,Mathf.Max(until,at+ImpactPulse));
-            if(ctx.Target>=0 && ctx.Origin(link.from) is Vector3 startLink){
-                _contact?.Invoke(new SkillPreviewContact(link,ctx.FromUnit(link.from),ctx.Target,startLink,ctx.Aim,at,at));
-                if(ctx.Drawing!=null && ctx.ShowEffects && now>=at && now<until)
-                    ctx.Drawing.Line(ctx.Caster.TransformPoint(startLink),ctx.Caster.TransformPoint(ctx.Aim),Color.cyan);
-            }
         }
 
         private void VisitProjectile(LaunchProjectileAction p,float at,EffectEvaluationContext v,int depth,float age)
@@ -391,7 +379,15 @@ namespace ZFramework.GAS.Editor
                 try { VisitBranch(children,at+delay,v,depth); }
                 finally { ctx.Target=priorTarget; ctx.Aim=priorAim; }
             }
-            sample(action,new PreviewFrame(v,age,ctx.Origin,q=>ctx.Mark(q,v),Branch));
+            void Link(SkillSpawnPosition from, float duration)
+            {
+                float until = at + duration; End = Mathf.Max(End, Mathf.Max(until, at + ImpactPulse));
+                if (ctx.Target < 0 || ctx.Origin(from) is not Vector3 start) return;
+                _contact?.Invoke(new SkillPreviewContact(action, ctx.FromUnit(from), ctx.Target, start, ctx.Aim, at, at));
+                if (ctx.Drawing != null && ctx.ShowEffects && ctx.Now >= at && ctx.Now < until)
+                    ctx.Drawing.Line(ctx.Caster.TransformPoint(start), ctx.Caster.TransformPoint(ctx.Aim), Color.cyan);
+            }
+            sample(action,new PreviewFrame(v,age,ctx.Origin,q=>ctx.Mark(q,v),Branch,Link));
         }
         private void Clear(){foreach(var go in _units)if(go!=null)UnityEngine.Object.DestroyImmediate(go);_units.Clear();_bones.Clear();_rest.Clear();}
         public void Dispose()=>Clear();

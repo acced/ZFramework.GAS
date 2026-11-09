@@ -34,7 +34,7 @@
 
 ## 编辑器：技能工作台
 
-入口：`Window → ZFramework GAS → 技能编辑器`，或双击 `GameplayAbilityAsset`。旧的“技能结构图”菜单和 `SkillGraphWindow.Open().Show(asset)` 调用重定向到新窗口。
+入口：`Window → ZFramework GAS → 技能编辑器`，或双击 `GameplayAbilityAsset`。按 F7 或点击“编译检查”执行全部校验并定位出错资产/动作。Player 构建也强制执行同一规则；个人关闭的日常提示不能绕过构建检查。
 
 窗口采用与设计网页接近的深色三栏：左侧技能库和大纲，中间结构图／能力设置及多轨时间轴，右侧角色预览和 Details。分隔条记忆尺寸；窄窗口的预览和 Details 改为页签。
 
@@ -111,5 +111,5 @@ Cue 区间按标签分组，行头显示标签名（悬停可看完整标签）�
 
 消息页提供 GAS001–004、010–013、020–022、030–032 检查、定位和适用的自动修复。需用户选择的配置仍在 Details 中处理，不会猜测标签或资产。菜单 `Tools → ZFramework GAS → 校验所有技能` 可批量检查；CI 可调用 `ZFramework.GAS.Editor.BatchValidate.Run`，存在错误时退出码非零。批量校验不会为资产补 ID。
 
-`Tools → ZFramework GAS → 创建 BasicCombat 示例` 一次生成五种技能、属性词表、骑士预制体、Animator 动作、独立特效 Prefab 及 Cue 特效映射库，并自动接好角色和技能预览，全部位于 `Assets/GAS Samples/BasicCombat`。斩击包含刀光 Cue、霸体和连招窗口；战吼包含独立地面粒子法阵。已有示例目录会在确认后重新生成；已打开的示例场景会重新载入生成结果。标签注册与宿主接入见 `Samples/BasicCombat/README.md`。
+先在 Package Manager 导入 Basic Combat 样例，再用 `Tools → ZFramework GAS → 创建 BasicCombat 示例` 一次生成五种技能、属性词表、骑士预制体、Animator 动作、独立特效 Prefab 及 Cue 特效映射库，并自动接好角色和技能预览，全部位于 `Assets/GAS Samples/BasicCombat`。斩击包含刀光 Cue、霸体和连招窗口；战吼包含独立地面粒子法阵。已有示例目录会在确认后重新生成；已打开的示例场景会重新载入生成结果。标签注册与宿主接入见 `Samples~/BasicCombat/README.md`。
 
