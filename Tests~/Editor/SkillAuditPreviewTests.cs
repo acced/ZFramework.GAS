@@ -109,6 +109,15 @@ namespace ZFramework.GAS.Editor.Tests
                 SkillIndex.Invalidate(); window = SkillEditorWindow.Open(); window.Show(skill);
                 window.Document.PreviewPrefab = prefab;
                 var preview = window.rootVisualElement.Q<PreviewPanel>(); preview.Load();
+                Assert.IsFalse(preview.Query<Toggle>().ToList().Any(t=>t.label=="连锁路线" || t.label=="范围"));
+                var targetTools=preview.Query<Foldout>().ToList().Single(x=>x.text=="目标预演");
+                Assert.IsFalse(targetTools.value);
+                var field=typeof(PreviewPanel).GetField("_simulation",BindingFlags.Instance|BindingFlags.NonPublic);
+                Assert.IsNull(field.GetValue(preview));targetTools.value=true;Assert.NotNull(field.GetValue(preview));
+                targetTools.value=false;Assert.IsNull(field.GetValue(preview));
+                var motionSwitch=preview.Query<Toggle>().ToList().Single(t=>t.label=="根位移");
+                preview.Query<Foldout>().ToList().Single(x=>x.text=="动画辅助").value=true;
+                Assert.AreEqual(DisplayStyle.Flex,motionSwitch.style.display.value,"The preview clip moves its root.");
                 var sound = preview.Query<Toggle>().ToList().Single(t => t.label == "音效");
                 var previewTools = typeof(PreviewPanel).GetField("_tools", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(preview);
                 Assert.IsNotNull(previewTools, "The actual preview must load its sampler and tools.");

@@ -456,6 +456,26 @@ namespace ZFramework.GAS.Editor.Tests
                 Assert.AreEqual(3,simulation.HitCount,"No target must select only the alternate branch.");
             }finally{preview.Cleanup();AssetDatabase.DeleteAsset(path);}
         }
+        [Test] public void SelectedQueryUsesCallBindingsAndDoesNotDependOnPlayheadOrDummies()
+        {
+            var outer=new SkillParameter{levels=new[]{2f,8f}};
+            var local=new SkillParameter{defaultValue=1};
+            var area=new CreateAreaAction{targets=new TargetQuery{kind=TargetQueryKind.Sector,radius=new SkillNumber(0){parameterId=local.Id}}};
+            var module=New<SkillActionModuleAsset>();module.parameters=New<SkillParameterSetAsset>();module.parameters.parameters=new[]{local};module.actions=new SkillAction[]{area};
+            var cast=Skill(new CallModuleAction{module=module,bindings=new[]{new ModuleParameterBinding{moduleParameterId=local.Id,callerParameterId=outer.Id}}});
+            cast.parameters=new[]{outer};
+            var path=AssetDatabase.GenerateUniqueAssetPath("Assets/GASSelectedRange.asset");AssetDatabase.CreateAsset(cast,path);
+            try{
+                using var doc=new SkillDocument();doc.Open(cast,false);
+                Assert.IsNull(SelectedActionRange.Read(doc,2,out _,out _));
+                doc.Selection.Select(module,"@field","actions.Array.data[0]");
+                var shape=SelectedActionRange.Read(doc,2,out var origin,out _);
+                Assert.AreEqual(SkillSpawnPosition.Caster,origin);Assert.AreEqual(8,shape.Value.Radius);
+                area.targets.origin=SkillSpawnPosition.EventPosition;
+                Assert.IsNull(SelectedActionRange.Read(doc,2,out _,out var note));Assert.IsNotEmpty(note);
+                doc.Selection.Select(cast);Assert.IsNull(SelectedActionRange.Read(doc,2,out _,out _));
+            }finally{AssetDatabase.DeleteAsset(path);}
+        }
         [Test] public void GeneratedEnergyBoltPreviewShowsSimultaneousForksOrSuccessiveArrivals(){
             var root=AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>("Assets/GAS Samples/BasicCombat/Skills/分叉闪电.asset");
             Assert.NotNull(root,"Generate BasicCombat in the validation project.");
@@ -465,57 +485,57 @@ namespace ZFramework.GAS.Editor.Tests
                 using var sim=new SkillPreviewSimulation(preview){AimIndex=1};
                 var bounce=AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>("Assets/GAS Samples/BasicCombat/Skills/逐个弹射.asset");
                 Assert.AreSame(root.parameterSet,bounce.parameterSet);Assert.AreSame(root.Definition.Cooldown,bounce.Definition.Cooldown);
-                void Sample(bool fork,DummyLayout layout,float time=0){
+                var contacts=new List<SkillPreviewContact>();
+                void Sample(bool fork,bool relay=false,float time=0){
                     var selected=fork?root:bounce;if(doc.Root!=selected)doc.Open(selected,false);
-                    doc.Playback.Seek(time,10);sim.Sample(doc,caster.transform,3,layout,2,null,1,false,null,routes:true);
+                    doc.Playback.Seek(time,10);contacts.Clear();
+                    var points=new Vector3[3];
+                    for(int i=0;i<3;i++)points[i]=relay?new Vector3(i%2==0?0:.7f,0,2*(1+i)):SkillPreviewSimulation.Position(DummyLayout.直线,i,3,2);
+                    sim.ProjectContacts(doc,points,Vector3.forward*2,1,null,contacts.Add);
+                    contacts.Sort((a,b)=>a.Arrival.CompareTo(b.Arrival));
                 }
                 foreach(bool fork in new[]{true,false}){
-                    Sample(fork,DummyLayout.直线);
+                    Sample(fork,false);
                     Assert.AreEqual(0,sim.HitCount,"The route overview must not fire future impacts.");
-                    Assert.AreEqual(3,sim.Legs.Count);
-                    var a=sim.Legs[0];var b=sim.Legs[1];var c=sim.Legs[2];
-                    Assert.AreEqual(-1,a.FromUnit);Assert.AreEqual(0,a.ToUnit);Assert.IsFalse(a.Lightning);
+                    Assert.AreEqual(3,contacts.Count);
+                    var a=contacts[0];var b=contacts[1];var c=contacts[2];
+                    Assert.AreEqual(-1,a.FromUnit);Assert.AreEqual(0,a.ToUnit);Assert.IsFalse(a.Action is ShowTargetLinkAction);
                     Assert.Greater(a.Arrival,root.Animation().Duration);Assert.AreEqual(a.Arrival,b.Launch);
                     var body=SkillPreviewSimulation.Position(DummyLayout.直线,0,3,2)+Vector3.up*SkillPreviewSimulation.DummyRadius;
                     Assert.AreEqual(SkillPreviewSimulation.DummyRadius,(body-a.To).magnitude,.0001f);
                     Assert.AreEqual(a.To,b.From);Assert.AreEqual(a.ToUnit,b.FromUnit);Assert.AreNotEqual(b.ToUnit,c.ToUnit);
                     if(fork){
-                        Assert.IsTrue(b.Lightning && c.Lightning);Assert.AreEqual(a.To,c.From);Assert.AreEqual(0,c.FromUnit);
+                        Assert.IsTrue(b.Action is ShowTargetLinkAction && c.Action is ShowTargetLinkAction);Assert.AreEqual(a.To,c.From);Assert.AreEqual(0,c.FromUnit);
                         Assert.AreEqual(a.Arrival,b.Arrival);Assert.AreEqual(a.Arrival,c.Arrival);
                     }else{
-                        Assert.IsFalse(b.Lightning || c.Lightning);Assert.AreEqual(b.To,c.From);Assert.AreEqual(b.ToUnit,c.FromUnit);
+                        Assert.IsFalse(b.Action is ShowTargetLinkAction || c.Action is ShowTargetLinkAction);Assert.AreEqual(b.To,c.From);Assert.AreEqual(b.ToUnit,c.FromUnit);
                         Assert.AreEqual(b.Arrival,c.Launch);Assert.Greater(b.Arrival,a.Arrival);Assert.Greater(c.Arrival,b.Arrival);
                     }
                     Assert.Greater(sim.End,c.Arrival,"Looping playback must have time to show the last impact.");
-                    Sample(fork,DummyLayout.直线,a.Arrival);Assert.AreEqual(fork?3:1,sim.HitCount);
-                    Sample(fork,DummyLayout.直线,c.Arrival);Assert.IsTrue(sim.WasHit(c.ToUnit));
-                    Sample(fork,DummyLayout.直线,0);Assert.AreEqual(c.Arrival,sim.Legs[2].Arrival);Assert.AreEqual(0,sim.HitCount);
+                    Sample(fork,false,a.Arrival);Assert.AreEqual(fork?3:1,sim.HitCount);
+                    Sample(fork,false,c.Arrival);Assert.IsTrue(sim.WasHit(c.ToUnit));
+                    Sample(fork,false,0);Assert.AreEqual(c.Arrival,contacts[2].Arrival);Assert.AreEqual(0,sim.HitCount);
                 }
-                Sample(true,DummyLayout.接力);Assert.AreEqual(2,sim.Legs.Count,"#3 is outside the first contact's search radius.");
-                Sample(false,DummyLayout.接力);Assert.AreEqual(3,sim.Legs.Count,"#2 can reach #3 on its own impact.");
+                Sample(true,true);Assert.AreEqual(2,contacts.Count,"#3 is outside the first contact's search radius.");
+                Sample(false,true);Assert.AreEqual(3,contacts.Count,"#2 can reach #3 on its own impact.");
             }finally{preview.Cleanup();}
         }
         [Test] public void EnergyBoltRouteControlsSwitchPreviewOnlyAndSeekPastTheAnimation(){
             var root=AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>("Assets/GAS Samples/BasicCombat/Skills/分叉闪电.asset");
             Assert.NotNull(root);
             var bounce=AssetDatabase.LoadAssetAtPath<GameplayAbilityAsset>("Assets/GAS Samples/BasicCombat/Skills/逐个弹射.asset");
-            SkillEditorWindow window=null;
+            var window=ZFramework.GAS.Samples.BasicCombat.Editor.EnergyBoltPreviewWindow.Open(root);
             try{
-                window=SkillEditorWindow.Open();window.Show(root);
-                var doc=window.Document;var panel=window.rootVisualElement.Q<PreviewPanel>();
-                // No prefab needed: exercise the actual window wiring using the geometry-only stage.
-                doc.PreviewPrefab=null;panel.Load();
-                panel.Query<Toggle>().ToList().Find(t=>t.label=="连锁路线").value=true;
-                List<Button> Stops()=>panel.Query<Button>().ToList().FindAll(b=>b.userData is float);
+                List<Button> Stops()=>window.rootVisualElement.Query<Button>().ToList().FindAll(b=>b.userData is float);
                 var stops=Stops();Assert.AreEqual(3,stops.Count);Assert.IsTrue(stops[2].text.Contains("闪电"));
                 Assert.AreEqual(stops[0].userData,stops[2].userData);
-                window.Show(bounce);doc.PreviewPrefab=null;panel.Load();panel.Query<Toggle>().ToList().Find(t=>t.label=="连锁路线").value=true;
+                window.ShowAsset(bounce);
                 stops=Stops();Assert.AreEqual(3,stops.Count);Assert.IsTrue(stops[2].text.Contains("飞弹"));
                 float last=(float)stops[2].userData;Assert.Greater(last,(float)stops[1].userData);
                 Assert.Greater(last,root.Animation().Duration);
                 using(var submit=NavigationSubmitEvent.GetPooled()){submit.target=stops[2];stops[2].SendEvent(submit);}
-                Assert.AreEqual(last,doc.Playback.Time,.00001f);
-            }finally{window?.Close();}
+                Assert.AreEqual(last,window.Time,.00001f);
+            }finally{window.Close();}
         }
         [Test] public void EffectOnlyParameterSurvivesModuleExtractionRemappingAndInlining()
         {

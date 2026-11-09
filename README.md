@@ -305,9 +305,11 @@ var result = runner.TryCast(skill, new SkillCastTarget(targetAsc, aimPoint));
 
 ### Spine（可选包）
 
-`Runtime.Spine` 和 `Editor.Spine` 通过官方 `com.esotericsoftware.spine.spine-unity` 包的 4.x 版本定义开启。未安装时不参与编译；已有 Spine 3.8 不会启用此适配器。角色选择 `SpineBackend` 后，编辑器自动枚举动画并支持姿态采样。
+安装包名为 `com.esotericsoftware.spine.spine-unity` 的 3.8 或 4.x 运行库后，GAS 的可选 Spine 后端与 Realtime 编辑器适配器会自动启用。支持项目的 3.8 合并程序集 `Spine.Runtime`，以及官方拆分的 `spine-unity` / `spine-csharp`。骨架导出版本须与项目的 Spine 运行库匹配。未安装 Spine 的项目仍可使用其他动画后端。
 
-本次在独立 Unity 6000.3.14f1 工程中使用官方 spine-unity 4.2.120 / spine-csharp 4.2.37 实际编译并通过 PlayMode 测试。没有升级使用方项目中的 Spine 3.8。4.0/4.1 的包版本尚未实测。
+1. 将 Spine 导出的骨架、图集和贴图导入 Unity，制作带 `SkeletonAnimation` 的角色 Prefab，并给它指定 `SkeletonDataAsset`。这里接的是场景角色，不是 Canvas 上的 `SkeletonGraphic`。
+2. 在角色根节点添加 `SkillAnimator`，将动画后端设为 **Spine**。默认使用 0 号轨；正数轨可用于在已有轨道上叠加播放。
+3. 打开 **Window → ZFramework GAS → 技能编辑器**，将 Prefab 拖到顶部 **预览角色**。绑定主动画，在动画节点的片段列表中选择骨架中的动画名。拖动播放头可预览姿势，技能标记仍由同一条时间轴触发。
 
 ## 编辑器：技能工作台
 

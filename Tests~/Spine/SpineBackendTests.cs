@@ -13,10 +13,46 @@ namespace ZFramework.GAS.Tests
 {
     public sealed class SpineBackendTests
     {
-        [UnityTest]
-        public IEnumerator Spine42PlaybackStretchMarkersAndStop()
+        // Real Spine JSON: rotate timelines changed from "angle" to "value" in 4.x.
+        public static TextAsset SkeletonJson(int attackStart, bool textured = false)
         {
-            var json = new TextAsset("{\"skeleton\":{\"hash\":\"test\",\"spine\":\"4.2.0\"},\"bones\":[{\"name\":\"root\"}],\"animations\":{\"Attack\":{\"bones\":{\"root\":{\"rotate\":[{\"value\":0},{\"time\":0.8,\"value\":30}]}}}}}");
+#if GAS_SPINE_38
+            const string version = "3.8.99", rotation = "angle";
+#else
+            const string version = "4.2.0", rotation = "value";
+#endif
+            string Keys(int start, int end) => "{\"bones\":{\"root\":{\"rotate\":[{\"" + rotation + "\":" +
+                start + "},{\"time\":0.8,\"" + rotation + "\":" + end + "}]}}}";
+            return new TextAsset("{\"skeleton\":{\"hash\":\"test\",\"spine\":\"" + version + "\",\"fps\":24}," +
+                "\"bones\":[{\"name\":\"root\"}]," + (textured ?
+                "\"slots\":[{\"name\":\"image\",\"bone\":\"root\",\"attachment\":\"quad\"}]," +
+                "\"skins\":[{\"name\":\"default\",\"attachments\":{\"image\":{\"quad\":{\"width\":2,\"height\":2}}}}]," : "") +
+                "\"animations\":{\"Idle\":" + Keys(0, 0) + ",\"Attack\":" + Keys(attackStart, 30) + "}}");
+        }
+
+        [UnityTest]
+        public IEnumerator EnabledSkeletonAdvancesSkillWithoutManualSampling()
+        {
+            var json = SkeletonJson(0);
+            var data = SkeletonDataAsset.CreateRuntimeInstance(json, Array.Empty<AtlasAssetBase>(), true, 1);
+            var go = new GameObject("Spine auto playback");
+            try
+            {
+                var skeleton = go.AddComponent<SkeletonAnimation>(); skeleton.skeletonDataAsset = data; skeleton.Initialize(true);
+                var animator = go.AddComponent<SkillAnimator>(); animator.SetBackend(new SpineBackend());
+                animator.Driver.Play("Attack", 0, false);
+                float deadline = Time.realtimeSinceStartup + 3;
+                while (skeleton.Skeleton.RootBone.Rotation < 3 && Time.realtimeSinceStartup < deadline) yield return null;
+                Assert.GreaterOrEqual(skeleton.Skeleton.RootBone.Rotation, 3);
+                Assert.AreEqual("Attack", skeleton.AnimationState.GetCurrent(0).Animation.Name);
+            }
+            finally { Object.Destroy(go); Object.Destroy(data); Object.Destroy(json); }
+        }
+
+        [UnityTest]
+        public IEnumerator PlaybackStretchMarkersAndStop()
+        {
+            var json = SkeletonJson(0);
             var data = SkeletonDataAsset.CreateRuntimeInstance(json, Array.Empty<AtlasAssetBase>(), true, 1);
             var go = new GameObject("Spine backend test");
             var skeleton = go.AddComponent<SkeletonAnimation>(); skeleton.skeletonDataAsset = data; skeleton.Initialize(true);
@@ -24,13 +60,14 @@ namespace ZFramework.GAS.Tests
             try
             {
                 yield return null;
+                skeleton.enabled = false; // Manually step this skeleton; no Unity or threaded update may advance it twice.
                 var driver = animator.Driver;
                 Assert.AreEqual(.4f, driver.Play("Attack", .4f, false), .001f);
                 Assert.AreEqual(2, skeleton.AnimationState.GetCurrent(0).TimeScale, .001f);
                 skeleton.Update(.2f); Assert.AreEqual(15, skeleton.Skeleton.RootBone.Rotation, .2f);
                 driver.Stop(); Assert.AreEqual("<empty>", skeleton.AnimationState.GetCurrent(0).Animation.Name);
                 Assert.AreEqual(0, driver.Play("Missing", 1, false));
-                GameplayTagManager.Initialize(Array.Empty<GameplayTagRegistration>());
+                if (!GameplayTagManager.IsInitialized) GameplayTagManager.Initialize(Array.Empty<GameplayTagRegistration>());
                 var owner = new AbilitySystemComponent(); var ability = owner.GrantAbility(new GameplayAbilityDefinition()); owner.TryActivateAbility(ability);
                 float hit = -1, elapsed = 0;
                 var task = new AnimationTask(new SkillAnimationDefinition("Attack", .8f, markers: new[] { new AnimationMarker(.4f) }),
@@ -42,11 +79,9 @@ namespace ZFramework.GAS.Tests
             finally { Object.Destroy(go); Object.Destroy(data); Object.Destroy(json); }
         }
         [UnityTest]
-        public IEnumerator Spine42BlendScalesWithStretchAndReturnsToPrevious()
+        public IEnumerator BlendScalesWithStretchAndReturnsToPrevious()
         {
-            var json = new TextAsset("{\"skeleton\":{\"hash\":\"blend\",\"spine\":\"4.2.0\"},\"bones\":[{\"name\":\"root\"}],\"animations\":{" +
-                "\"Idle\":{\"bones\":{\"root\":{\"rotate\":[{\"value\":0},{\"time\":1,\"value\":0}]}}}," +
-                "\"Attack\":{\"bones\":{\"root\":{\"rotate\":[{\"value\":30},{\"time\":0.8,\"value\":30}]}}}}}");
+            var json = SkeletonJson(30);
             var data = SkeletonDataAsset.CreateRuntimeInstance(json, Array.Empty<AtlasAssetBase>(), true, 1);
             var go = new GameObject("Spine blend test");
             var skeleton = go.AddComponent<SkeletonAnimation>(); skeleton.skeletonDataAsset = data; skeleton.Initialize(true);
@@ -55,6 +90,7 @@ namespace ZFramework.GAS.Tests
             try
             {
                 yield return null;
+                skeleton.enabled = false; // Manually step this skeleton; no Unity or threaded update may advance it twice.
                 var driver = (IBlendingAnimationDriver)animator.Driver;
                 driver.Play("Attack", .4f, false, .2f);
                 var entry = skeleton.AnimationState.GetCurrent(0);

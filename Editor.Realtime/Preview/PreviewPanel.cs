@@ -33,58 +33,47 @@ namespace ZFramework.GAS.Editor
         private GameObject _dummyPrefab;
         private AnimationClip _reaction;
         private SkillClipOverrideSet _override;
-        private bool _simulate, _routes;
-        private readonly Toggle _dummyOption, _simulationOption;
-        private readonly VisualElement _routePanel = new(), _parameterFields = new();
-        private readonly ScrollView _legScroll = new(ScrollViewMode.Horizontal);
-        private readonly Label _routeHint = new();
-        private GUIStyle _pinStyle;
-        private GameplayAbilityAsset _parameterOwner;
-        private SkillParameterOverride[] _previewOverrides = Array.Empty<SkillParameterOverride>();
-        private float _routeZoom = 1;
-        private bool _ghosts, _trajectory, _ranges, _dummy, _sound;
+        private readonly Foldout _targetTools = new() { text = "目标预演", value = false };
+        private readonly Foldout _animationTools = new() { text = "动画辅助", value = false };
+        private readonly Toggle _rootMotion = new("根位移");
+        private bool _simulate, _ghosts, _sound;
+        private TargetShape? _range;
+        private SkillSpawnPosition _rangeOrigin;
+        private string _rangeNote;
+        private bool NeedsOrigin => _doc.Root != null && (_targetTools.value || _range.HasValue);
         private float _targetDistance = 2;
         private int _level = 1;
         private readonly List<ICuePreview> _cues = new();
         // 略微俯视：既看得到角色正面，也看得到贴地的法阵与光环。
-        private Vector2 _orbit = new(145, 14), _routeOrbit = new(155, 54);
+        private Vector2 _orbit = new(145, 14);
         private float _distance = 4;
-        private Bounds _bounds;
+        private Bounds _bounds, _contentBounds;
         private string _error, _cueWarning;
         private readonly Label _caption;
         public PreviewPanel(SkillDocument doc)
         {
             _doc = doc; AddToClassList("preview-panel"); style.minHeight = 280;
             var header = new Label("预览视口"); header.AddToClassList("panel-heading"); Add(header);
-            var options = new VisualElement { style = { flexDirection = FlexDirection.Row, flexWrap = Wrap.Wrap, flexShrink = 0, paddingLeft = 4, paddingRight = 4 } }; Add(options);
-            Toggle Option(string label, Action<bool> changed)
-            {
-                var toggle = new Toggle(label) { style = { width = 68, flexShrink = 0 } };
-                toggle.labelElement.style.minWidth = 0; toggle.labelElement.style.width = StyleKeyword.Auto;
-                toggle.labelElement.style.flexGrow = 1;
-                toggle.RegisterValueChangedCallback(e => { changed(e.newValue); Sample(); }); options.Add(toggle); return toggle;
-            }
-            Option("范围", value => _ranges = value); _dummyOption=Option("假人", value => _dummy = value);
-            Option("连锁路线",SetRoutes).tooltip="显示假人和整次施放的路线；点击命中时间定位播放头。";
-            Option("前后帧", value => _ghosts = value); Option("根位移", value => _trajectory = value); Option("音效", value => _sound = value);
-            options.Add(_preClip); _preClip.RegisterValueChangedCallback(_ => Sample());
-            var distance = new FloatField("目标距离") { value = 2, style = { width = 145 } }; options.Add(distance);
-            distance.labelElement.style.minWidth = 56; distance.labelElement.style.width = 56;
-            distance.RegisterValueChangedCallback(e => { _targetDistance = Mathf.Max(0, e.newValue); Sample(); });
-            var level = new IntegerField("等级") { value = 1, style = { width = 100 } }; options.Add(level);
-            level.labelElement.style.minWidth = 30; level.labelElement.style.width = 30;
-            level.RegisterValueChangedCallback(e => { _level = Mathf.Max(1, e.newValue); Sample(); });
-            Add(_routePanel); _routePanel.style.flexShrink=0; _routePanel.style.display=DisplayStyle.None;
-            var parameterScroll=new ScrollView {style={maxHeight=70}};
-            parameterScroll.Add(_parameterFields);_routePanel.Add(parameterScroll);
-
-            _routeHint.style.fontSize=11;_routeHint.style.whiteSpace=WhiteSpace.Normal;_routePanel.Add(_routeHint);
-            _legScroll.contentContainer.style.flexDirection=FlexDirection.Row;
-            _legScroll.verticalScrollerVisibility=ScrollerVisibility.Hidden;
-            _routePanel.Add(_legScroll);
-            var advanced=new Foldout{text="目标与表现预演",value=false,style={flexShrink=0}};Add(advanced);
-            var more=new ScrollView{style={maxHeight=110}};advanced.Add(more);
-            more.Add(_sectionFrom);_sectionFrom.RegisterValueChangedCallback(_=>Sample());
+            var bar = new VisualElement { style = { flexDirection = FlexDirection.Row, flexShrink = 0 } };
+            Add(bar); bar.Add(_animationTools); bar.Add(_targetTools);
+            // The controls live in their own collapsible groups, outside the character viewport.
+            _animationTools.style.flexGrow=1; _targetTools.style.flexGrow=1;
+            var animationOptions=new ScrollView { style={maxHeight=120} }; _animationTools.Add(animationOptions);
+            var ghosts=new Toggle("前后帧"); animationOptions.Add(ghosts);
+            ghosts.RegisterValueChangedCallback(e=>{_ghosts=e.newValue;Sample();});
+            animationOptions.Add(_rootMotion); _rootMotion.style.display=DisplayStyle.None;
+            _rootMotion.RegisterValueChangedCallback(_=>Sample());
+            var sound=new Toggle("音效"); animationOptions.Add(sound);
+            sound.RegisterValueChangedCallback(e=>{_sound=e.newValue;Sample();});
+            animationOptions.Add(_preClip); _preClip.RegisterValueChangedCallback(_=>{_tools?.Invalidate();Sample();});
+            animationOptions.Add(_sectionFrom);_sectionFrom.RegisterValueChangedCallback(_=>{_tools?.Invalidate();Sample();});
+            _animationTools.RegisterValueChangedCallback(e=>{if(e.target==_animationTools)Sample();});
+            _targetTools.RegisterValueChangedCallback(e=>{if(e.target==_targetTools)RefreshSelection();});
+            var more=new ScrollView{style={maxHeight=120}};_targetTools.Add(more);
+            var distance=new FloatField("目标距离"){value=_targetDistance};more.Add(distance);
+            distance.RegisterValueChangedCallback(e=>{_targetDistance=Mathf.Max(0,e.newValue);Sample();});
+            var level=new IntegerField("等级"){value=_level};more.Add(level);
+            level.RegisterValueChangedCallback(e=>{_level=Mathf.Max(1,e.newValue);RefreshSelection();});
             var count=new IntegerField("假人数量"){value=_dummyCount};more.Add(count);count.RegisterValueChangedCallback(e=>{_dummyCount=Mathf.Clamp(e.newValue,1,32);Sample();});
             var layout=new EnumField("排布",_layout);more.Add(layout);layout.RegisterValueChangedCallback(e=>{_layout=(DummyLayout)e.newValue;Sample();});
             var prefab=new UnityEditor.UIElements.ObjectField("假人 Prefab"){objectType=typeof(GameObject),allowSceneObjects=false};more.Add(prefab);
@@ -96,84 +85,44 @@ namespace ZFramework.GAS.Editor
             var targetIndex=new IntegerField("瞄准假人（0 为地面）"){value=_aimIndex};more.Add(targetIndex);targetIndex.RegisterValueChangedCallback(e=>{_aimIndex=e.newValue;Sample();});
             var sourceValue=new FloatField("条件属性样值 · 施法者");more.Add(sourceValue);sourceValue.RegisterValueChangedCallback(e=>{_sourceValue=e.newValue;Sample();});
             var targetValue=new FloatField("条件属性样值 · 假人");more.Add(targetValue);targetValue.RegisterValueChangedCallback(e=>{_targetValue=e.newValue;Sample();});
-            _simulationOption=new Toggle("模拟投射物与区域");more.Add(_simulationOption);_simulationOption.RegisterValueChangedCallback(e=>{_simulate=e.newValue;Sample();});
-            var overrides=new UnityEditor.UIElements.ObjectField("片段替换表"){objectType=typeof(SkillClipOverrideSet),allowSceneObjects=false};more.Add(overrides);
-            overrides.RegisterValueChangedCallback(e=>{_override=e.newValue as SkillClipOverrideSet;Sample();});
+            var simulationOption=new Toggle("模拟投射物与区域");more.Add(simulationOption);simulationOption.RegisterValueChangedCallback(e=>{_simulate=e.newValue;Sample();});
+            var overrides=new UnityEditor.UIElements.ObjectField("片段替换表"){objectType=typeof(SkillClipOverrideSet),allowSceneObjects=false};animationOptions.Add(overrides);
+            overrides.RegisterValueChangedCallback(e=>{_override=e.newValue as SkillClipOverrideSet;_tools?.Invalidate();Sample();});
             _viewport = new IMGUIContainer(Draw) { style = { flexGrow = 1, flexBasis=0,minHeight = 35 } }; Add(_viewport);
             _caption = new Label("拖动旋转 · 滚轮缩放 · 双击聚焦"); _caption.AddToClassList("preview-caption"); Add(_caption);
             doc.Playback.Changed += Sample;
-            doc.Changed += Changed;
+            doc.Changed += Changed; doc.Selection.Changed += RefreshSelection;
             EditorApplication.projectChanged += ProjectChanged;
         }
-        private void SetRoutes(bool enabled)
+        private void ResolveSelection()
         {
-            _routes=enabled;_routeZoom=1;
-            _routePanel.style.display=enabled?DisplayStyle.Flex:DisplayStyle.None;
-            _dummyOption.SetValueWithoutNotify(enabled || _dummy);_dummyOption.SetEnabled(!enabled);
-            _simulationOption.SetValueWithoutNotify(enabled || _simulate);_simulationOption.SetEnabled(!enabled);
-            RefreshParameters();
-            if(_source==null)Load(); // A geometric cast also works without a character prefab.
+            _range=null; _rangeNote=null;
+            try { _range=SelectedActionRange.Read(_doc,_level,out _rangeOrigin,out _rangeNote); }
+            catch (Exception e) { _rangeNote=e.Message; }
         }
-        private void RefreshParameters()
+        private void RefreshSelection()
         {
-            if(_parameterOwner!=_doc.Root){_parameterOwner=_doc.Root;_previewOverrides=Array.Empty<SkillParameterOverride>();}
-            _parameterFields.Clear();
-            if(!_routes || _doc.Root==null)return;
-            var flags=SkillNumberDrawer.Parameters(_doc.Root).Where(p=>p?.kind==SkillParameterKind.Bool).ToArray();
-            _previewOverrides=Array.FindAll(_previewOverrides,o=>Array.Exists(flags,p=>p.Id==o.parameterId));
-            foreach(var p in flags){
-                string id=p.Id;
-                var choices=new List<string>{"资产默认","开","关"};
-                var current=Array.FindIndex(_previewOverrides,o=>o.parameterId==id);
-                var field=new DropdownField(p.displayName,choices,current<0?0:_previewOverrides[current].value!=0?1:2){
-                    name="preview-bool-"+id, tooltip="仅覆盖本次几何预演。"+p.description};
-                field.RegisterValueChangedCallback(e=>{
-                    var list=new List<SkillParameterOverride>(_previewOverrides);list.RemoveAll(o=>o.parameterId==id);
-                    if(e.newValue!="资产默认")list.Add(new SkillParameterOverride{parameterId=id,kind=SkillParameterKind.Bool,value=e.newValue=="开"?1:0});
-                    _previewOverrides=list.ToArray();Sample();
-                });
-                _parameterFields.Add(field);
-            }
-        }
-        private void UpdateRouteStops()
-        {
-            if(!_routes)return;
-            var legs=_simulation?.Legs;
-            int count=_error==null?(legs?.Count??0):0;
-            _routeHint.text=_error??(count==0?"当前配置没有命中路线。检查瞄准目标、搜索半径和标签。":
-                "黄线：飞弹　青线：闪电　虚线：待发　点击一段定位命中");
-            while(_legScroll.contentContainer.childCount>count)_legScroll.contentContainer.RemoveAt(_legScroll.contentContainer.childCount-1);
-            for(int i=0;i<count;i++){
-                Button b;
-                if(i<_legScroll.contentContainer.childCount)b=(Button)_legScroll.contentContainer[i];
-                else{
-                    b=new Button(){style={flexShrink=0}};
-                    b.clicked+=()=>{if(!_doc.Playback.Live){_doc.Playback.Playing=false;_doc.Playback.Seek((float)b.userData,_doc.PlaybackDuration);}};
-                    _legScroll.Add(b);
-                }
-                var leg=legs[i];b.userData=leg.Arrival;b.text=leg.Caption;
-                bool current=Mathf.Abs(_doc.Playback.Time-leg.Arrival)<.015f;
-                b.style.color=current?Color.white:leg.Lightning?new Color(.49f,.91f,.97f):new Color(1f,.84f,.47f);
-                b.SetEnabled(!_doc.Playback.Live);
-            }
+            ResolveSelection();
+            if(_source!=_doc.PreviewPrefab || (_source==null && NeedsOrigin!=(_instance!=null))) Load();
+            else Sample();
         }
         private void ProjectChanged() { if (_source != null) Load(); }
         private void Changed(ChangeSet change)
         {
-            RefreshParameters();
+            ResolveSelection();
             _previewSections.Clear();if(_doc.Root?.Animation()?.sections!=null)foreach(var s in _doc.Root.Animation().sections)if(s!=null)_previewSections.Add(s);
             var choices=new List<string>{"无"};foreach(var s in _previewSections)choices.Add(s.displayName+" · "+s.start.ToString("0.##")+"s");
             _sectionFrom.choices=choices;if(!choices.Contains(_sectionFrom.value))_sectionFrom.SetValueWithoutNotify("无");
             _tools?.Invalidate();
-            if (_source != _doc.PreviewPrefab || _routes && (_instance==null)!=(_doc.Root==null)) Load();
-            else if (_instance != null) { _vfx?.Dispose(); _vfx = new CueVfxPreview(_instance); }
+            if (_source != _doc.PreviewPrefab || (_source==null && NeedsOrigin!=(_instance!=null))) { Load(); return; }
+            if (_instance != null) { _vfx?.Dispose(); _vfx = new CueVfxPreview(_instance); }
             Sample();
         }
         public void Load()
         {
             Cleanup(); _source = _doc.PreviewPrefab; _error = null;
             _preClip.SetEnabled(false);
-            if (_source == null && (!_routes || _doc.Root==null)) return;
+            if (_source == null && !NeedsOrigin) { Sample(); return; }
             try
             {
                 _preview = new PreviewRenderUtility();
@@ -197,11 +146,11 @@ namespace ZFramework.GAS.Editor
                 _preClip.choices = names; _preClip.SetValueWithoutNotify(names.Contains(_preClip.value) ? _preClip.value : idle);
                 _preClip.SetEnabled(_sampler is IBlendPoseSampler);
                 _vfx = new CueVfxPreview(_instance);
-                _tools = new SkillPreviewTools(); _simulation=new SkillPreviewSimulation(_preview);
+                _tools = new SkillPreviewTools();
                 _bounds = new Bounds(_instance.transform.position, Vector3.one);
                 var renderers = _instance.GetComponentsInChildren<Renderer>();
                 if (renderers.Length > 0) { _bounds = renderers[0].bounds; foreach (var r in renderers) _bounds.Encapsulate(r.bounds); }
-                _distance = Mathf.Max(1, _bounds.size.magnitude * 1.7f);
+                _contentBounds=_bounds; _distance = Mathf.Max(1, _bounds.size.magnitude * 1.7f);
                 PreviewStage.AddGround(_preview, _bounds);
                 foreach (var type in TypeCache.GetTypesDerivedFrom<ICuePreview>())
                     if (!type.IsAbstract && type.GetConstructor(Type.EmptyTypes) != null) _cues.Add((ICuePreview)Activator.CreateInstance(type));
@@ -213,7 +162,8 @@ namespace ZFramework.GAS.Editor
         {
             _cueWarning = null;
             if(_instance!=null)_error=null;
-            if(_routes && _parameterOwner!=_doc.Root)RefreshParameters();
+            bool hasTrajectory=false;
+            if(!_targetTools.value){_simulation?.Dispose();_simulation=null;_doc.PreviewEnd=0;}
             var animation = _doc.Root?.Animation();
             if (_sampler != null && animation != null)
             {
@@ -224,8 +174,9 @@ namespace ZFramework.GAS.Editor
                     bool acceptsClip=_source.GetComponentInChildren<SkillAnimator>(true)?.Backend is PlayableAnimationBackend;
                     if((_override!=null && _override.TryGet(clipName,out var replacement,acceptsClip)) ||
                         (_doc.Root.ClipOverrides()!=null && _doc.Root.ClipOverrides().TryGet(clipName,out replacement,acceptsClip))){ if(!string.IsNullOrEmpty(replacement.replacement))clipName=replacement.replacement; direct=replacement.clip;}
+                    AnimationClip motion=direct; GameObject motionRoot=null;
                     float natural = animation.Duration;
-                    foreach (var clip in clips) if (clip.Name == clipName) { natural = clip.Length; break; }
+                    foreach (var clip in clips) if (clip.Name == clipName) { natural = clip.Length; motion=direct!=null?direct:clip.Source as AnimationClip; motionRoot=clip.SampleRoot; break; }
                     void Pose(float time)
                     {
                         float sample = time / Mathf.Max(.001f, animation.Duration) * natural;
@@ -247,9 +198,19 @@ namespace ZFramework.GAS.Editor
                             mixer.Sample(_preClip.value, blend.mode == SkillBlendMode.Freeze ? 0 : time, clipName, sample, blend.Evaluate(time / blend.duration));
                         else _sampler.Sample(clipName, sample);
                     }
-                    _tools?.Rebuild(_instance, _doc, Pose, _ghosts, _trajectory, SimulateTargets);
+                    // SampleRoot in clip metadata belongs to the source prefab. Resolve its counterpart in the preview clone.
+                    Transform sampledRoot = null;
+                    if(_animationTools.value && motion!=null){
+                        var animator=_instance.GetComponentInChildren<Animator>(true);
+                        if(direct!=null && animator!=null) sampledRoot=animator.transform;
+                        else if(motionRoot!=null){
+                            var path=AnimationUtility.CalculateTransformPath(motionRoot.transform,_source.transform);
+                            sampledRoot=path.Length==0?_instance.transform:_instance.transform.Find(path);
+                        }
+                    }
+                    hasTrajectory=sampledRoot!=null && _tools.HasTrajectory(motion,sampledRoot,animation.Duration,Pose,_doc.Playback.Time);
+                    _tools.Rebuild(_instance,_doc,Pose,_animationTools.value && _ghosts,hasTrajectory && _rootMotion.value,DrawTargets);
                     _tools?.Audio(animation, _doc.Playback.Time, _sound && _doc.Playback.Playing, _doc.Playback.SeekVersion, _doc.Playback.Speed);
-                    Pose(_doc.Playback.Time);
                     _vfx?.Sample(animation, _doc.Playback.Time, Pose);
                     var so = _doc.Serialized(animation); var regions = so.FindProperty("cueRegions");
                     for (int i = 0; i < regions.arraySize; i++)
@@ -277,18 +238,32 @@ namespace ZFramework.GAS.Editor
                 catch (Exception ex) { _error = ex.Message; _tools?.Audio(null, 0, false); }
             }
             else { _vfx?.Dispose(); _tools?.Audio(null, 0, false);
-                if(_doc.Root!=null && _instance!=null && _simulation!=null)
-                    try{_tools.Rebuild(_instance,_doc,_=>{},false,false,SimulateTargets);}catch(Exception e){_error=e.Message;}
+                if(_doc.Root!=null && _instance!=null)
+                    try{_tools.Rebuild(_instance,_doc,_=>{},false,false,DrawTargets);}catch(Exception e){_error=e.Message;}
             }
-            void SimulateTargets(){
-                _simulation.SourceTags=_sourceTags;_simulation.TargetTags=_targetTags;_simulation.AimIndex=_aimIndex;
-                _simulation.SourceAttribute=_sourceValue;_simulation.TargetAttribute=_targetValue;_simulation.Reaction=_reaction;
-                _simulation.Sample(_doc,_instance.transform,_dummy || _routes?_dummyCount:0,_layout,_targetDistance,_dummyPrefab,_level,
-                    _simulate || _routes,_tools,_ranges,_routes?_previewOverrides:null,_routes);
-                _doc.PreviewEnd=_simulate || _routes?_simulation.End:0;
+            void DrawTargets(){
+                _contentBounds=_bounds;
+                if(_targetTools.value){
+                    _simulation??=new SkillPreviewSimulation(_preview);
+                    _simulation.SourceTags=_sourceTags; _simulation.TargetTags=_targetTags; _simulation.AimIndex=_aimIndex;
+                    _simulation.SourceAttribute=_sourceValue; _simulation.TargetAttribute=_targetValue; _simulation.Reaction=_reaction;
+                    _simulation.Sample(_doc,_instance.transform,_dummyCount,_layout,_targetDistance,_dummyPrefab,_level,_simulate,_tools);
+                    foreach(var p in _simulation.Targets)_contentBounds.Encapsulate(_instance.transform.TransformPoint(p));
+                    _doc.PreviewEnd=_simulate?_simulation.End:0;
+                }
+                if(_range is TargetShape shape){
+                    var source=_instance.transform;
+                    var target=_simulation!=null && _aimIndex>0 && _simulation.Targets.Count>0
+                        ? _simulation.Targets[Mathf.Min(_aimIndex,_simulation.Targets.Count)-1] : Vector3.forward*_targetDistance;
+                    var center=_rangeOrigin==SkillSpawnPosition.Target || _rangeOrigin==SkillSpawnPosition.TargetPoint ? target : Vector3.zero;
+                    var point=source.TransformPoint(center); _tools.Query(shape,source,point);
+                    float extent=Mathf.Max(shape.Radius,shape.HalfExtents.magnitude);
+                    _contentBounds.Encapsulate(new Bounds(point,Vector3.one*(2*extent)));
+
+                }
             }
-            UpdateRouteStops();
-            _caption.text = _error ?? _cueWarning ?? ((_dummy || _routes) && _simulation!=null?$"几何预演 · 命中 {_simulation.HitCount} / {_dummyCount}（不含阵营与物理遮挡）":"拖动旋转 · 滚轮缩放 · 双击聚焦");
+            _rootMotion.style.display=hasTrajectory?DisplayStyle.Flex:DisplayStyle.None;
+            _caption.text = _error ?? _cueWarning ?? _rangeNote ?? (_simulation!=null?$"几何预演 · 命中 {_simulation.HitCount} / {_dummyCount}（不含阵营与物理遮挡）":"拖动旋转 · 滚轮缩放 · 双击聚焦");
             _caption.tooltip = _cueWarning;
             _viewport.MarkDirtyRepaint();
         }
@@ -305,42 +280,26 @@ namespace ZFramework.GAS.Editor
             var evt = Event.current;
             if (rect.Contains(evt.mousePosition))
             {
-                if (evt.type == EventType.MouseDrag && evt.button == 0) { if(_routes)_routeOrbit+=evt.delta*.6f;else _orbit += evt.delta * .6f; evt.Use(); _viewport.MarkDirtyRepaint(); }
-                if (evt.type == EventType.ScrollWheel) { if(_routes)_routeZoom=Mathf.Clamp(_routeZoom*(1+evt.delta.y*.05f),.15f,4);
-                    else _distance = Mathf.Clamp(_distance * (1 + evt.delta.y * .05f), .2f, 100); evt.Use(); _viewport.MarkDirtyRepaint(); }
-                if (evt.type == EventType.MouseDown && evt.clickCount == 2) { _routeZoom=1;_routeOrbit=new Vector2(155,54); _distance = Mathf.Max(1, _bounds.size.magnitude * 1.7f); evt.Use(); }
+                if (evt.type == EventType.MouseDrag && evt.button == 0) { _orbit += evt.delta * .6f; evt.Use(); _viewport.MarkDirtyRepaint(); }
+                if (evt.type == EventType.ScrollWheel) { _distance = Mathf.Clamp(_distance * (1 + evt.delta.y * .05f), .2f, 100); evt.Use(); _viewport.MarkDirtyRepaint(); }
+                if (evt.type == EventType.MouseDown && evt.clickCount == 2) { _distance = Mathf.Max(1, _bounds.size.magnitude * 1.7f); evt.Use(); }
             }
             if (evt.type != EventType.Repaint) return;
             _preview.BeginPreview(rect, GUIStyle.none);
             _tools?.Draw(_preview);
-            var orbit=_routes?_routeOrbit:_orbit;
-            var rotation = Quaternion.Euler(orbit.y, orbit.x, 0);
-            var frame=_bounds;float zoom=_distance;
-            if(_routes && _simulation!=null){
-                foreach(var p in _simulation.Targets)frame.Encapsulate(_instance.transform.TransformPoint(p)+Vector3.up*.45f);
-                foreach(var leg in _simulation.Legs){frame.Encapsulate(_instance.transform.TransformPoint(leg.From));frame.Encapsulate(_instance.transform.TransformPoint(leg.To));}
+            var rotation = Quaternion.Euler(_orbit.y, _orbit.x, 0);
+            var frame=_contentBounds; float zoom=_distance;
+            if(_range.HasValue || _simulation!=null){
                 float halfFov=_preview.camera.fieldOfView*.5f*Mathf.Deg2Rad;
-                float fitFov=Mathf.Atan(Mathf.Tan(halfFov)*Mathf.Min(1,rect.width/rect.height));
-                zoom=Mathf.Max(1,frame.extents.magnitude*1.12f/Mathf.Sin(fitFov))*_routeZoom;
+                float fit=Mathf.Atan(Mathf.Tan(halfFov)*Mathf.Min(1,rect.width/rect.height));
+                float userZoom=_distance/Mathf.Max(1,_bounds.size.magnitude*1.7f);
+                zoom=Mathf.Max(1,frame.extents.magnitude*1.05f/Mathf.Sin(fit))*userZoom;
             }
             _preview.camera.transform.position = frame.center + rotation * new Vector3(0, 0, -zoom);
             _preview.camera.transform.rotation = rotation;
             _preview.camera.nearClipPlane = .01f; _preview.camera.farClipPlane = 200;
             _preview.Render(true);
             GUI.DrawTexture(rect, _preview.EndPreview(), ScaleMode.StretchToFill, false);
-            if(_routes && _simulation!=null){
-                void Pin(Vector3 local,string label){
-                    Vector3 p=_preview.camera.WorldToViewportPoint(_instance.transform.TransformPoint(local));
-                    if(p.z<=0)return;
-                    var chip=new Rect(rect.x+p.x*rect.width-19,rect.y+(1-p.y)*rect.height-17,38,16);
-                    if(!rect.Contains(chip.center))return;
-                    EditorGUI.DrawRect(chip,new Color(.06f,.09f,.12f,.84f));
-                    _pinStyle??=new GUIStyle(EditorStyles.whiteMiniLabel){alignment=TextAnchor.MiddleCenter};
-                    GUI.Label(chip,label,_pinStyle);
-                }
-                Pin(Vector3.zero,"施法者");
-                for(int i=0;i<_simulation.Targets.Count;i++)Pin(_simulation.Targets[i]+Vector3.up*(2*SkillPreviewSimulation.DummyRadius),"#"+(i+1));
-            }
             string caption = _error ?? _cueWarning ?? (_doc.Root?.Animation()?.ClipName ?? "角色预览") + $"  @ {_doc.Playback.Time:0.00}s";
             GUI.Label(new Rect(rect.x + 8, rect.y + 6, rect.width - 16, 22), caption, EditorStyles.whiteMiniLabel);
             var animationAsset = _doc.Root?.Animation();
@@ -361,7 +320,7 @@ namespace ZFramework.GAS.Editor
             foreach (var cue in _cues) { try { cue.Dispose(); } catch (Exception e) { Debug.LogException(e); } } _cues.Clear();
             try { _sampler?.Dispose(); } finally { _sampler = null; _preview?.Cleanup(); _preview = null; _instance = null; }
         }
-        public void Dispose() { _doc.Playback.Changed -= Sample; _doc.Changed -= Changed; EditorApplication.projectChanged -= ProjectChanged; Cleanup(); }
+        public void Dispose() { _doc.Playback.Changed -= Sample; _doc.Changed -= Changed; _doc.Selection.Changed -= RefreshSelection; EditorApplication.projectChanged -= ProjectChanged; Cleanup(); }
     }
 
     /// <summary>预览舞台：灯光、环境光与脚下的地面和接触阴影。预览面板与外部截图工具共用，保证看到的一致。</summary>

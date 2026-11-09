@@ -9,12 +9,14 @@ namespace ZFramework.GAS.Editor
     /// <summary>Preview-only meshes. Queries and parameters come from the authored runtime configuration.</summary>
     internal sealed class SkillPreviewTools : IDisposable
     {
-        private readonly List<(Mesh mesh, Matrix4x4 matrix, bool owned, Color color)> _ghosts = new();
+        private readonly List<(Mesh mesh, Matrix4x4 matrix, Color color)> _ghosts = new();
         private readonly Mesh _lines = new() { hideFlags = HideFlags.HideAndDontSave };
         private readonly Material _material;
         private readonly List<Vector3> _vertices = new();
         private readonly List<Color> _colors = new();
         private readonly List<Vector3> _trajectory = new();
+        private AnimationClip _trajectoryClip;
+        private bool _moves;
         private readonly SkillPreviewAudio _audio = new();
         public SkillPreviewTools()
         {
@@ -29,10 +31,6 @@ namespace ZFramework.GAS.Editor
         {
             ClearGhosts(); _vertices.Clear(); _colors.Clear();
             float duration = doc.Root?.Animation()?.Duration ?? 1;
-            if (trajectory && _trajectory.Count == 0)
-            {
-                for (int i = 0; i <= 60; i++) { pose(duration * i / 60); _trajectory.Add(instance.transform.position); }
-            }
             if (trajectory) for (int i = 1; i < _trajectory.Count; i++) Line(_trajectory[i - 1] + Vector3.up * .04f, _trajectory[i] + Vector3.up * .04f, Color.yellow);
             if (ghosts && doc.Root?.Animation() != null)
             {
@@ -41,11 +39,24 @@ namespace ZFramework.GAS.Editor
             }
             pose(doc.Playback.Time);
             simulation();
+            if(_vertices.Count==0)return; // Draw skips the previous line mesh when this frame has no geometry.
             _lines.Clear(); _lines.SetVertices(_vertices); _lines.SetColors(_colors);
             var indices = new int[_vertices.Count]; for (int i = 0; i < indices.Length; i++) indices[i] = i;
             _lines.SetIndices(indices, MeshTopology.Lines, 0); _lines.RecalculateBounds();
         }
-        public void Invalidate() => _trajectory.Clear();
+        internal bool HasTrajectory(AnimationClip clip,Transform root,float duration,Action<float> pose,float currentTime)
+        {
+            if(_trajectoryClip==clip && _trajectory.Count>0)return _moves;
+            _trajectoryClip=clip; _moves=false; _trajectory.Clear();
+            try {
+                for(int i=0;i<=60;i++){
+                    pose(duration*i/60); var position=root.position; _trajectory.Add(position);
+                    if((position-_trajectory[0]).sqrMagnitude>1e-8f)_moves=true;
+                }
+            } finally { pose(currentTime); }
+            return _moves;
+        }
+        public void Invalidate() { _trajectoryClip=null; _trajectory.Clear(); }
         private void Capture(GameObject instance, Action<float> pose, float time, Color color)
         {
             pose(time);
@@ -53,9 +64,12 @@ namespace ZFramework.GAS.Editor
             {
                 if (!renderer.enabled || renderer.GetComponentInParent<CueVfxBehaviour>() != null || renderer is ParticleSystemRenderer || renderer is TrailRenderer) continue;
                 if (renderer is SkinnedMeshRenderer skin)
-                { var mesh = new Mesh { hideFlags = HideFlags.HideAndDontSave }; skin.BakeMesh(mesh); _ghosts.Add((mesh, skin.localToWorldMatrix, true, color)); }
-                else if (renderer.TryGetComponent<MeshFilter>(out var filter) && filter.sharedMesh != null)
-                    _ghosts.Add((filter.sharedMesh, renderer.localToWorldMatrix, false, color));
+                { var mesh = new Mesh { hideFlags = HideFlags.HideAndDontSave }; skin.BakeMesh(mesh); _ghosts.Add((mesh, skin.localToWorldMatrix, color)); }
+                else if (renderer.TryGetComponent<MeshFilter>(out var filter) && filter.sharedMesh != null) {
+                    // Spine reuses its mesh when scrubbing. Freeze the sampled vertices before posing the next frame.
+                    var mesh=UnityEngine.Object.Instantiate(filter.sharedMesh); mesh.hideFlags=HideFlags.HideAndDontSave;
+                    _ghosts.Add((mesh,renderer.localToWorldMatrix,color));
+                }
             }
         }
         internal void Query(TargetShape shape, Transform source, Vector3 origin)
@@ -95,7 +109,7 @@ namespace ZFramework.GAS.Editor
         }
         public void Audio(SkillAnimationAsset animation, float time, bool enabled, int seekVersion = 0, float speed = 1)
             => _audio.Sample(animation, time, enabled, seekVersion, speed);
-        private void ClearGhosts() { foreach (var ghost in _ghosts) if (ghost.owned) UnityEngine.Object.DestroyImmediate(ghost.mesh); _ghosts.Clear(); }
+        private void ClearGhosts() { foreach (var ghost in _ghosts) UnityEngine.Object.DestroyImmediate(ghost.mesh); _ghosts.Clear(); }
         public void Dispose() { _audio.Dispose(); ClearGhosts(); UnityEngine.Object.DestroyImmediate(_lines); if (_material != null) UnityEngine.Object.DestroyImmediate(_material); }
     }
 }

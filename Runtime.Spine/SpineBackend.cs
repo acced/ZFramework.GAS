@@ -16,20 +16,23 @@ namespace ZFramework.GAS.Unity.Spine
         {
             var skeleton = host != null ? host.GetComponentInChildren<SkeletonAnimation>(true) : null;
             error = skeleton == null ? "缺少 SkeletonAnimation" : skeleton.skeletonDataAsset == null ? "缺少 SkeletonDataAsset" :
+                skeleton.skeletonDataAsset.GetSkeletonData(true) == null ? "无法读取 Spine 骨架，请检查导出版本与图集。" :
                 trackIndex < 0 || mixDuration < 0 ? "Spine 轨道与混合时长不能为负" : null;
             return error == null;
         }
         public override IAnimationDriver CreateDriver(GameObject host)
             => new SpineAnimationDriver(host.GetComponentInChildren<SkeletonAnimation>(true), trackIndex, mixDuration);
     }
-    public sealed class SpineAnimationDriver : ISkillAnimationSpeed, IAdvancedBlendingDriver, ISeekableAnimationDriver
+    public sealed class SpineAnimationDriver : ISkillAnimationSpeed, IAdvancedBlendingDriver, ISeekableAnimationDriver, IAnimationDriverLifetime
     {
         private readonly SkeletonAnimation _skeleton;
         private readonly int _track;
         private readonly float _mix;
         private TrackEntry _entry;
         private float _speed;
-        public void SetLocalScale(float scale){if(_entry!=null)_entry.TimeScale=_speed*scale;}
+        public bool IsValid => _skeleton != null && _skeleton.AnimationState != null;
+        private bool OwnsTrack => IsValid && _entry != null && _skeleton.AnimationState.GetCurrent(_track) == _entry;
+        public void SetLocalScale(float scale) { if (OwnsTrack) _entry.TimeScale = _speed * scale; }
         // 施放前这条轨道上的动画：结束时混回它（通常是待机），而不是回到绑定姿势。
         private global::Spine.Animation _previous;
         private bool _previousLoop;
@@ -45,7 +48,7 @@ namespace ZFramework.GAS.Unity.Spine
         {
             if (_skeleton == null || _skeleton.Skeleton == null) return 0;
             var animation = _skeleton.Skeleton.Data.FindAnimation(clipName); if (animation == null) return 0;
-            if (_entry == null)
+            if (!OwnsTrack)
             {
                 var current = _skeleton.AnimationState.GetCurrent(_track);
                 bool idle = current != null && current.Animation != null && current.Animation.Name != "<empty>";
@@ -61,10 +64,10 @@ namespace ZFramework.GAS.Unity.Spine
         public AnimationBlendCapabilities Capabilities => AnimationBlendCapabilities.SeekBlend;
         public float Play(string clip, float duration, bool loop, in SkillBlend blend) => Play(clip, duration, loop, blend.duration);
         public void Stop(in SkillBlend blend) => Stop(blend.duration);
-        public void Seek(float normalizedTime) { if (_entry != null) _entry.TrackTime = normalizedTime * _entry.Animation.Duration; }
+        public void Seek(float normalizedTime) { if (OwnsTrack) _entry.TrackTime = Mathf.Clamp01(normalizedTime) * _entry.Animation.Duration; }
         public bool SeekBlend(float normalizedTime, in SkillBlend blend)
         {
-            if (_skeleton == null || _entry == null || _skeleton.AnimationState.GetCurrent(_track) != _entry) return false;
+            if (!OwnsTrack) return false;
             float speed = _entry.TimeScale;
             _entry = _skeleton.AnimationState.SetAnimation(_track, _entry.Animation, _entry.Loop);
             _entry.TimeScale = speed; _entry.MixDuration = blend.duration; Seek(normalizedTime); return true;
@@ -75,7 +78,7 @@ namespace ZFramework.GAS.Unity.Spine
         public void Stop(float blendOut)
         {
             if (_entry == null) return;
-            if (_skeleton != null && _skeleton.AnimationState.GetCurrent(_track) == _entry)
+            if (OwnsTrack)
             {
                 if (_previous != null) _skeleton.AnimationState.SetAnimation(_track, _previous, _previousLoop).MixDuration = blendOut;
                 else _skeleton.AnimationState.SetEmptyAnimation(_track, blendOut);
