@@ -127,7 +127,7 @@ namespace ZFramework.GAS.Editor.Tests
         public IEnumerator OpenTimelineShowsImportedHitWindowWithoutReselectingOrSaving()
         {
             var clip = Animation(); var effect = Effect("Slash damage");
-            SkillTimelineAuthoring.Edit(clip, timeline => timeline.Clip("swing", 2));
+            SkillTimelineAuthoring.Edit(clip, timeline => timeline.Clip(null, 2));
             var track = TrackTypeRegistry.Get("hitWindows");
             string id = TimelineCommands.Add(_doc, track, .65f, effect);
             EditCommand.Run(_doc, "设置关闭时间", clip, so =>

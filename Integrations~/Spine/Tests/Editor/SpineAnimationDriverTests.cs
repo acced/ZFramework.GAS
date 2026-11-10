@@ -90,6 +90,9 @@ namespace ZFramework.GAS.Editor.Tests
             Assert.That(_animation.Skeleton.RootBone.Pose.X, Is.EqualTo(6).Within(.001f));
             Frame(.2f);
             Assert.That(_animation.Skeleton.RootBone.Pose.X, Is.EqualTo(2).Within(.001f));
+            // 4.3 detaches the mixed-out entry, applies the empty entry once,
+            // then clears the track on the following native Update.
+            Frame(.01f);
             Frame(.01f);
             Assert.That(_state.GetTrack(1), Is.Null);
             Assert.That(_state.GetTrack(0).Animation.Name, Is.EqualTo("idle"));

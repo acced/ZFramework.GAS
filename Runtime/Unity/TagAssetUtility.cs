@@ -1,6 +1,8 @@
 using System;
 using GameplayTags;
 
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("ZFramework.GAS.Unity.Realtime")]
+
 namespace ZFramework.GAS.Unity
 {
     internal static class TagAssetUtility

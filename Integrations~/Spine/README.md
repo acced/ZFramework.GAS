@@ -84,7 +84,7 @@ Spine 的动画切换会同步调用订阅者。驱动在 Start 通知中配置�
 
 `Tests/Editor` 的测试程序集只在启用包测试时使用。它覆盖原生 Spine 混入混出、归一化采样、同步回调取消/重施放、释放隔离，以及预览逆向采样、恢复 setup pose 和资源不匹配。
 
-本次开发环境没有 Unity Editor，未执行 Unity 语义编译、EditMode、PlayMode、实际网格显示或 IL2CPP。仓库的 Core / 架构 CI 不替代这些验证。
+已在 Windows 的 Unity 6000.3.14f1 上运行上述 10 项 EditMode 测试。消费工程另用一份 Spine 4.3.13 素材验证了预览网格正向采样与回拖，以及 PlayMode 中通过 GAS 施放、结束、再次施放和相机渲染。尚未验证 IL2CPP 播放器。
 
 ## 参考
 

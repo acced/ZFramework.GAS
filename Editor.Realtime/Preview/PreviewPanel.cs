@@ -159,7 +159,7 @@ namespace ZFramework.GAS.Editor
             _preview.Render(true);
             GUI.DrawTexture(rect, _preview.EndPreview(), ScaleMode.StretchToFill, false);
             GUI.Label(new Rect(rect.x + 8, rect.y + 6, rect.width - 16, 22),
-                _error ?? $"{_doc.Root?.Animation()?.Clip?.name ?? "时间轴预览"}  @ {_doc.Playback.Time:0.00}s", EditorStyles.whiteMiniLabel);
+                _error ?? $"{(_clip != null ? _clip.name : "时间轴预览")}  @ {_doc.Playback.Time:0.00}s", EditorStyles.whiteMiniLabel);
         }
         private void Cleanup()
         {

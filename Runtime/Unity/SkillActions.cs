@@ -75,7 +75,7 @@ namespace ZFramework.GAS.Unity
                 var p = Parameter(number.parameterId);
                 if (p.kind == SkillParameterKind.Bool) throw new InvalidOperationException("数值绑定不能使用 Bool。");
                 if (p.levels == null || p.levels.Length == 0) Number(new SkillNumber(p.defaultValue * number.coefficient), min, max, integer);
-                else foreach (var value in p.levels) Number(new SkillNumber(value * number.coefficient), min, max, integer);
+                else foreach (var levelValue in p.levels) Number(new SkillNumber(levelValue * number.coefficient), min, max, integer);
                 return;
             }
             float value = number.value;
