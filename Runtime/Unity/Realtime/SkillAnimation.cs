@@ -2,6 +2,7 @@ using GameplayTags;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace ZFramework.GAS.Unity
 {
@@ -31,7 +32,7 @@ namespace ZFramework.GAS.Unity
         private readonly AnimationMarker[] _markers;
         private readonly AnimationCueRegion[] _cues;
         private readonly AnimationTagWindow[] _tags;
-        public AnimationClip Clip { get; }
+        public Object Clip { get; }
         public float Duration { get; }
         public bool Loop { get; }
         public float BlendIn { get; }
@@ -41,7 +42,7 @@ namespace ZFramework.GAS.Unity
         public ReadOnlySpan<AnimationTagWindow> TagWindows => _tags;
         public IReadOnlyList<RuntimeTrackDefinition> RuntimeTracks { get; }
 
-        public SkillAnimationDefinition(AnimationClip clip, float duration, bool loop = false,
+        public SkillAnimationDefinition(Object clip, float duration, bool loop = false,
             AnimationMarker[] markers = null, AnimationCueRegion[] cueRegions = null,
             AnimationTagWindow[] tagWindows = null, float blendIn = 0, float blendOut = 0,
             RuntimeTrackDefinition[] runtimeTracks = null)

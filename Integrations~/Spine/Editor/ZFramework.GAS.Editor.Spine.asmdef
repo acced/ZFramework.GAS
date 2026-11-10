@@ -1,0 +1,12 @@
+{
+  "name": "ZFramework.GAS.Editor.Spine",
+  "rootNamespace": "ZFramework.GAS.Editor",
+  "references": [
+    "ZFramework.GAS.Editor.Realtime",
+    "spine-csharp",
+    "spine-unity"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ]
+}

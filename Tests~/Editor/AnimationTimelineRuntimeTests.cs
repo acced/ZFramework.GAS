@@ -16,7 +16,7 @@ namespace ZFramework.GAS.Editor.Tests
         {
             public int Plays, Stops;
             public float BlendIn, BlendOut;
-            public void Play(AnimationClip clip, float blendIn) { Plays++; BlendIn = blendIn; }
+            public void Play(UnityEngine.Object clip, float blendIn) { Plays++; BlendIn = blendIn; }
             public void Advance(float time) { }
             public void Stop(float blendOut) { Stops++; BlendOut = blendOut; }
             public void Dispose() { }

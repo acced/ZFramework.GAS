@@ -313,10 +313,10 @@ namespace ZFramework.GAS.Editor
         private void BuildClipPicker(SkillAnimationAsset animation)
         {
             var picker = new UnityEditor.UIElements.ObjectField("动画片段") {
-                objectType = typeof(AnimationClip), allowSceneObjects = false, value = animation.Clip,
+                objectType = typeof(UnityEngine.Object), allowSceneObjects = false, value = animation.Clip,
                 style = { flexGrow = 1 }, tooltip = "留空可创建仅包含事件、Cue 和音效的时间轴。"
             };
-            picker.RegisterValueChangedCallback(e => SetClip(e.newValue as AnimationClip, animation));
+            picker.RegisterValueChangedCallback(e => { SetClip(e.newValue, animation); picker.SetValueWithoutNotify(animation.Clip); });
             _clipRow.Add(picker);
             var sync = new Button(() => SetClip(animation.Clip, animation)) { text = "同步时长" };
             sync.SetEnabled(animation.Clip != null); _clipRow.Add(sync);
@@ -426,13 +426,18 @@ namespace ZFramework.GAS.Editor
             }
         }
 
-        private void SetClip(AnimationClip clip, SkillAnimationAsset animation)
+        private void SetClip(UnityEngine.Object clip, SkillAnimationAsset animation)
         {
+            float duration = 0;
+            if (clip != null)
+            {
+                try { duration = Mathf.Max(.001f, AnimationClipEditors.GetDuration(clip)); }
+                catch (Exception error) { _doc.Report(error.Message); return; }
+            }
             EditCommand.Run(_doc, "选择动画片段", animation, so =>
             {
                 so.FindProperty("clip").objectReferenceValue = clip;
                 if (clip == null) return;
-                float duration = Mathf.Max(.001f, clip.length);
                 float ratio = duration / Mathf.Max(.001f, animation.Duration);
                 foreach (var track in TrackTypeRegistry.Types)
                 {
@@ -442,7 +447,8 @@ namespace ZFramework.GAS.Editor
                 }
                 so.FindProperty("blendIn").floatValue *= ratio;
                 so.FindProperty("duration").floatValue = duration;
-                so.FindProperty("frameRate").floatValue = Mathf.Max(1, clip.frameRate);
+                if (clip is AnimationClip unityClip)
+                    so.FindProperty("frameRate").floatValue = Mathf.Max(1, unityClip.frameRate);
             }, true);
             Seek(Mathf.Min(_doc.Playback.Time, Duration)); Fit();
         }

@@ -48,9 +48,11 @@ SelectTargets 只负责按查询结果执行分支。目标上限来自 TargetQu
 
 ## 表现
 
-Realtime 只保留一条直接 AnimationClip 的技能时间轴。Marker、Cue、标签窗口、命中窗口与音效都以定义的秒数推进。AnimationTask 必须接收现有 SkillExecutionContext，不再推测目标、创建备用上下文或重写时长。
+Realtime 保留一条技能时间轴和一个 UnityEngine.Object 片段引用。主包的 Playables 驱动解释 AnimationClip，可选 Spine 包的驱动解释 AnimationReferenceAsset；公共时间轴不识别后端。Marker、Cue、标签窗口、命中窗口与音效都以定义的秒数推进。AnimationTask 必须接收现有 SkillExecutionContext，不推测目标、创建备用上下文或重写时长。
 
-IAnimationDriver 只有 Play、Advance、Stop、Dispose。内置 Playables 实现负责线性混入混出；Locomotion、角色动画状态机、RootMotion 策略、Spine 等由项目管理。技能结束和 Playables 资源释放有独立且明确的时机。
+IAnimationDriver 只有 Play(Object, blendIn)、Advance(normalizedTime)、Stop(blendOut)、Dispose。主包的 Playables 实现负责线性混入混出；Spine 4.3 驱动由可选包提供。Locomotion、角色动画状态机和 RootMotion 策略由项目管理。技能结束和表现资源释放有独立且明确的时机。
+
+驱动定位技能片段，表现宿主推进混合；混出可在任务结束后继续。Spine 的原生事件不驱动 GAS 业务。现有 AnimationTask 先处理边界再定位驱动，Playables 也由其图稍后求值，因此不能把 Marker 中读取到的骨骼当作该边界的同步采样结果。骨骼精确命中需要公共采样与挂点同步约定，不属于当前动画适配范围。
 
 ## 准备与热路径
 

@@ -10,10 +10,11 @@ Unity 技能工具库：纯 C# GAS 运行时、资产编排、技能时间轴与
 | --- | --- | --- |
 | Core | Attribute、GameplayTag、Effect、Ability、Task、Event、Cue、不可变参数 | 仅 GameplayTags；不引用 Unity |
 | Unity | 能力/效果资产、动作编排、SkillRunner、逻辑目标与项目服务 | Core |
-| Realtime | 单个 AnimationClip 时间轴、Marker、Tag/Cue 窗口、命中窗口、音效、Playables 驱动 | Unity + Core |
+| Realtime | 单资源时间轴、Marker、Tag/Cue 窗口、命中窗口、音效、Playables 驱动 | Unity + Core |
 | Combat3D | 3D 查询适配、碰撞体槽位与几何 | Unity + Core |
 | Editor | 一个技能编辑器、一个运行时调试窗口 | Unity + Core |
 | Editor.Realtime | 时间轴编辑、姿势/VFX/音效与查询范围预览 | Editor + Realtime + Combat3D |
+| Spine（可选包） | Spine 4.3 动画驱动、资源时长与姿势预览 | Realtime + Spine；Editor 适配另引用 Editor.Realtime |
 | Samples~ | 一个可选 AbilityActor 接入样例 | 仅用户导入时使用 |
 
 `Combat3D` 当前是程序集边界，尚未拆成单独发布的 UPM 包。阵营判断和逻辑目标来源通过项目服务注入；框架不定义阵营、角色类型或敌我规则。
@@ -37,7 +38,7 @@ Unity 6000.3；GameplayTags 1.0.0。通过 Package Manager 的 Git URL 安装：
 https://github.com/acced/ZFramework.GAS.git
 ```
 
-当前重构工作在 `refactor/gas-library-boundaries` 分支；检查该分支时在 URL 后添加 `#refactor/gas-library-boundaries`。先配置 GameplayTags 包的来源与标签注册。样例通过 Package Manager 的 Samples 导入。
+先配置 GameplayTags 包的来源与标签注册。样例通过 Package Manager 的 Samples 导入。Spine 集成在同一仓库的独立子包中，主包不依赖 Spine，安装方法见 [Spine 集成](Integrations~/Spine/README.md)。
 
 ## 一个施放入口
 
@@ -97,7 +98,20 @@ using var presentation = new SkillTimelinePlayer(
 // 仍然只调用 runner.TryCast。presentation 不提供另一套 Cast API。
 ```
 
-技能表现资产直接引用 AnimationClip。时长由时间轴定义，GAS Tick 推进玩法边界；Playables 接收归一化位置。结束单位前先结束 ASC 工作并释放 presentation。项目自己的动画系统可以实现 `IAnimationDriver`；库只附带 Playables 实现。
+技能表现资产保留一个 `clip` 资源字段，类型为 `UnityEngine.Object`。主包支持 AnimationClip，可选 Spine 包支持官方 AnimationReferenceAsset；留空时只执行时间轴。时长由时间轴定义，GAS Tick 推进玩法边界，驱动接收归一化位置。结束单位前先结束 ASC 工作并释放 presentation。
+
+`IAnimationDriver.Play(Object clip, float blendIn)` 在播放入口解释自己的资源类型；`Advance(normalizedTime)`、`Stop(blendOut)`、`Dispose()` 保持原有职责。资源类型由编辑器在 F7 / 构建时校验，运行时由项目明确绑定匹配的角色和驱动。
+
+安装可选包后，Spine 角色仍然使用同一个绑定和施放入口：
+
+```csharp
+using ZFramework.GAS.Unity.Spine;
+
+using var presentation = new SkillTimelinePlayer(
+    runner, new SpineAnimationDriver(skeletonAnimation));
+```
+
+Spine 适配独占一个技能轨道（默认 1），GAS 控制技能片段进度，宿主负责基础动画和混合。项目应让 GAS Tick 先于 Spine 的正常更新。当前时间轴保留原有边界处理顺序，不承诺 Marker 对应时刻的同步骨骼命中。
 
 ### 显式提交
 

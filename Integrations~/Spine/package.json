@@ -1,0 +1,14 @@
+{
+  "name": "com.acced.zframework.gas.spine",
+  "version": "0.3.0",
+  "displayName": "ZFramework GAS Spine",
+  "description": "Optional Spine 4.3 animation driver and pose preview for the GAS skill timeline.",
+  "unity": "6000.3",
+  "author": { "name": "acced" },
+  "dependencies": {
+    "com.acced.zframework.gas": "0.3.0",
+    "com.esotericsoftware.spine.spine-csharp": "4.3.42",
+    "com.esotericsoftware.spine.spine-unity": "4.3.119"
+  },
+  "license": "MIT"
+}

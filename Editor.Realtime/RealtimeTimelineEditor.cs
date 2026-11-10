@@ -68,7 +68,7 @@ namespace ZFramework.GAS.Editor
         }
         public void AddNodeFields(ISkillNodeFields node, SerializedObject asset)
         {
-            node.Field(asset, "clip", new ObjectField("片段") { objectType = typeof(AnimationClip), allowSceneObjects = false });
+            node.Field(asset, "clip", new ObjectField("片段") { objectType = typeof(UnityEngine.Object), allowSceneObjects = false });
             node.Field(asset, "duration", new FloatField("时长 / s") { isDelayed = true });
             node.Field(asset, "loop", new Toggle("循环"));
         }
