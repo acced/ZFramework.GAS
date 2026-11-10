@@ -1,9 +1,21 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using ZFramework.GAS.Unity;
 
 namespace ZFramework.GAS.Editor
 {
+    public sealed class AnimationClipRule : ISkillValidationRule
+    {
+        public string Id => "GAS015";
+        public void Validate(ValidationContext c, ScriptableObject asset, List<Issue> issues)
+        {
+            if (asset is not SkillAnimationAsset animation || animation.Clip == null) return;
+            try { AnimationClipEditors.GetDuration(animation.Clip); }
+            catch (Exception error) { c.Add(issues, Id, asset, "clip", error.Message); }
+        }
+    }
+
     public sealed class SpanRule : ISkillValidationRule
     {
         public string Id => "GAS011";

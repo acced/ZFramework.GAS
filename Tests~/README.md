@@ -22,7 +22,7 @@ Tests~ 默认不导入。将需要的测试目录复制到测试工程 Assets �
 - `Editor`：动作、逻辑/物理目标、参数、生命周期、编辑器 Undo/引用、时间轴与运行时调试。
 - `PlayMode`：真实 Playables、Cue/VFX 生命周期和自足播放用例。
 
-删除了 Spine/多动画后端、模块、套组、弹射、投射物、区域、BasicCombat、专用截图及 Windows 样例烟测相关测试。保留能力/效果/目标身份/任务取消等语义回归；已取消功能不保留兼容专测。
+删除了旧多动画后端、模块、套组、弹射、投射物、区域、BasicCombat、专用截图及 Windows 样例烟测相关测试。保留能力/效果/目标身份/任务取消等语义回归；已取消功能不保留兼容专测。当前可选 Spine 集成的测试随独立包提供，见 [Spine 集成验证](../Integrations~/Spine/README.md#验证)。公共 Editor 的 AnimationClipEditorTests 覆盖资源适配、Undo、校验、采样器释放和初始化失败恢复。
 
 当前自动化环境没有 Unity Editor。因此 Unity 测试是待执行的回归集合，不能标为已通过。发行前需在 Unity 6000.3 完成 EditMode/PlayMode、编辑器实际操作与目标平台构建。
 

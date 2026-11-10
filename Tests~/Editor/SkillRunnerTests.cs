@@ -16,7 +16,7 @@ namespace ZFramework.GAS.Editor.Tests
         {
             public int Plays, Stops;
             public bool Fail;
-            public void Play(AnimationClip clip, float blendIn)
+            public void Play(UnityEngine.Object clip, float blendIn)
             { Plays++; if (Fail) throw new InvalidOperationException("Driver failed"); }
             public void Advance(float time) { }
             public void Stop(float blendOut) => Stops++;

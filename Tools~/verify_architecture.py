@@ -4,6 +4,7 @@
 Source ownership follows the nearest assembly definition/reference. Comments and
 string literals are removed before checking forbidden engine/physics identifiers.
 External assembly references are intentionally outside the local dependency DAG.
+Nested optional UPM packages are checked relative to their own package roots.
 """
 
 import argparse
@@ -37,8 +38,8 @@ def main():
              if not any(part.startswith('.') or part == '__pycache__' for part in p.relative_to(root).parts)]
     files = [p for p in paths if p.is_file()]
 
-    def ignored(path):
-        return any(part.endswith('~') for part in path.relative_to(root).parts)
+    def ignored(path, package=root):
+        return any(part.endswith('~') for part in path.relative_to(package).parts)
 
     def read_json(path):
         try:
@@ -46,6 +47,22 @@ def main():
         except (OSError, ValueError) as error:
             fail(path, str(error))
             return {}
+
+    packages = {path.parent: read_json(path) for path in files if path.name == 'package.json'}
+
+    def package_root(path):
+        for directory in (path, *path.parents):
+            if directory in packages:
+                return directory
+        return root
+
+    for package in packages:
+        if package != root and not ignored(package):
+            fail(package, 'nested package must be opt-in under a ~ folder')
+        if package != root and packages[package]['name'] in packages[root].get('dependencies', {}):
+            fail(root / 'package.json', 'base package must not depend on an optional integration')
+    if any(name.startswith('com.esotericsoftware.spine.') for name in packages[root].get('dependencies', {})):
+        fail(root / 'package.json', 'base package must not depend on Spine')
 
     assemblies = {}
     by_folder = {}
@@ -73,6 +90,9 @@ def main():
     def resolve(reference):
         return by_guid.get(reference[5:], reference) if reference.startswith('GUID:') else reference
 
+    def test_assembly(definition):
+        return 'TestAssemblies' in definition.get('optionalUnityReferences', [])
+
     for path in files:
         if path.suffix == '.asmref':
             reference = resolve(read_json(path).get('reference', ''))
@@ -93,15 +113,22 @@ def main():
     external = set()
     for name, (path, definition) in assemblies.items():
         references = {resolve(item) for item in definition.get('references', [])}
+        package = package_root(path)
+        optional = ignored(path, package) or test_assembly(definition)
         graph[name] = references & assemblies.keys()
         external.update(references - assemblies.keys())
+        if package == root and not optional and any(reference.startswith('spine-') for reference in references):
+            fail(path, 'base package must not reference Spine')
         for reference in references:
             if reference.startswith('ZFramework.GAS') and reference not in assemblies:
                 fail(path, f'missing package assembly {reference}')
         for reference in graph[name]:
             target_path, target = assemblies[reference]
-            if not ignored(path) and ignored(target_path):
+            target_package = package_root(target_path)
+            if not optional and (ignored(target_path, target_package) or test_assembly(target)):
                 fail(path, f'installed assembly depends on optional source {reference}')
+            if not optional and package != target_package and packages[target_package]['name'] not in packages[package].get('dependencies', {}):
+                fail(path, f'package dependency is not declared for {reference}')
             if definition.get('includePlatforms') != ['Editor'] and target.get('includePlatforms') == ['Editor']:
                 fail(path, f'player assembly depends on editor assembly {reference}')
             if name in FOUNDATIONS and reference not in FOUNDATIONS[name]:
@@ -144,18 +171,21 @@ def main():
             continue
         source_count += 1
         code = LITERALS.sub(lambda match: '\n' * match.group().count('\n'), path.read_text(encoding='utf-8-sig'))
+        if package_root(path) == root and not ignored(path) and re.search(r'\bSpine\b', code):
+            fail(path, 'base package must not reference Spine types')
         forbidden = ENGINE if assemblies[assembly][1].get('noEngineReferences') else PHYSICS if assembly == 'ZFramework.GAS.Unity' else None
         if forbidden:
             for match in forbidden.finditer(code):
                 fail(path, f'line {code.count(chr(10), 0, match.start()) + 1}: {assembly} uses {match.group()}')
 
     for path in paths:
-        if ignored(path) or path.suffix == '.meta':
+        package = package_root(path)
+        if path == package or ignored(path, package) or path.suffix == '.meta':
             continue
         if not Path(str(path) + '.meta').is_file():
             fail(path, 'missing Unity .meta file')
 
-    manifest = read_json(root / 'package.json')
+    manifest = packages[root]
     if (root / 'Samples').exists():
         fail(root / 'Samples', 'samples must be opt-in under Samples~')
     samples = manifest.get('samples', [])
@@ -172,7 +202,7 @@ def main():
         print('\n'.join(errors), file=sys.stderr)
         print(f'FAIL: {len(errors)} architecture violations.', file=sys.stderr)
         return 1
-    print(f'PASS: {len(assemblies)} assembly definitions, {source_count} C# sources; boundaries, DAG, metadata and optional samples verified.')
+    print(f'PASS: {len(packages)} packages, {len(assemblies)} assembly definitions, {source_count} C# sources; boundaries, DAG, metadata and optional samples verified.')
     if external:
         print('External references (not inspected): ' + ', '.join(sorted(external)))
     return 0

@@ -34,8 +34,9 @@ namespace ZFramework.GAS.Unity
             _graph.Play();
         }
 
-        public void Play(AnimationClip clip, float blendIn)
+        public void Play(Object clip, float blendIn)
         {
+            var animation = (AnimationClip)clip;
             if (_previous.IsValid()) _graph.DestroyPlayable(_previous);
             if (_current.IsValid())
             {
@@ -43,11 +44,11 @@ namespace ZFramework.GAS.Unity
                 _previous = _current;
                 _graph.Connect(_previous, 0, _mixer, 0);
             }
-            _current = AnimationClipPlayable.Create(_graph, clip);
+            _current = AnimationClipPlayable.Create(_graph, animation);
             _current.SetSpeed(0);
             _current.SetApplyFootIK(false);
             _graph.Connect(_current, 0, _mixer, 1);
-            _length = clip.length;
+            _length = animation.length;
             _fade.Begin(1, blendIn, _previous.IsValid() && _output.GetWeight() > 0);
         }
 

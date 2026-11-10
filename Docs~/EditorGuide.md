@@ -9,7 +9,7 @@
 1. 主窗口新建空白 GameplayAbilityAsset。
 2. 在详情里设置标签、参数、消耗和冷却。消耗与冷却均引用 GameplayEffectAsset。
 3. 在动作视图中排列动作和条件分支。效果直接配置到「施加效果」动作；目标策略配置在 TargetQuery。
-4. 需要实时表现时创建 SkillAnimationAsset，直接指定 AnimationClip 和时间轴时长；配置 Marker、Cue/标签窗口、命中窗口或音效。
+4. 需要实时表现时创建 SkillAnimationAsset，指定动画资源和时间轴时长；主包支持 AnimationClip，安装可选 Spine 包后支持 AnimationReferenceAsset。配置 Marker、Cue/标签窗口、命中窗口或音效。
 5. 需要蓄力后付款时关闭 autoCommit，在真实提交点添加 CommitAbilityAction。
 6. 按 F7 或「编译检查」。诊断可定位到字段、动作或 Marker；构建前自动运行全部资产检查。
 

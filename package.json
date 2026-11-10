@@ -1,6 +1,6 @@
 {
   "name": "com.acced.zframework.gas",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "displayName": "ZFramework GAS",
   "description": "Gameplay Ability System for Unity. Attribute / Effect / Ability / Tag / Cue in idiomatic C#, with no host-project coupling.",
   "unity": "6000.3",
@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "com.acced.zframework.gameplaytags": "1.0.0",
+    "com.unity.modules.animation": "1.0.0",
     "com.unity.modules.audio": "1.0.0",
     "com.unity.modules.particlesystem": "1.0.0",
     "com.unity.modules.physics": "1.0.0"

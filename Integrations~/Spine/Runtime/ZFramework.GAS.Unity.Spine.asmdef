@@ -1,0 +1,9 @@
+{
+  "name": "ZFramework.GAS.Unity.Spine",
+  "rootNamespace": "ZFramework.GAS.Unity.Spine",
+  "references": [
+    "ZFramework.GAS.Unity.Realtime",
+    "spine-csharp",
+    "spine-unity"
+  ]
+}

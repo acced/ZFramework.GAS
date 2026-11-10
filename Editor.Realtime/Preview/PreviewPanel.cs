@@ -14,7 +14,8 @@ namespace ZFramework.GAS.Editor
         private readonly Label _caption;
         private PreviewRenderUtility _preview;
         private GameObject _source, _instance;
-        private ClipPoseSampler _sampler;
+        private UnityEngine.Object _clip;
+        private IAnimationPreviewSampler _sampler;
         private CueVfxPreview _vfx;
         private SkillPreviewTools _tools;
         private bool _ghosts, _sound;
@@ -22,7 +23,7 @@ namespace ZFramework.GAS.Editor
         private float _targetDistance = 2, _distance = 4;
         private TargetShape? _range;
         private SkillOrigin _rangeOrigin;
-        private string _rangeNote, _error;
+        private string _rangeNote, _error, _samplerError;
         private Vector2 _orbit = new(145, 14);
         private Bounds _bounds, _contentBounds;
 
@@ -57,12 +58,13 @@ namespace ZFramework.GAS.Editor
         private void ProjectChanged() => Load();
         private void Changed(ChangeSet change)
         {
-            if (_source != _doc.PreviewPrefab) Load();
+            if (_source != _doc.PreviewPrefab || _clip != _doc.Root?.Animation()?.Clip) Load();
             else RefreshSelection();
         }
         public void Load()
         {
-            Cleanup(); _source = _doc.PreviewPrefab; _error = null;
+            Cleanup(); _source = _doc.PreviewPrefab; _clip = _doc.Root?.Animation()?.Clip;
+            _error = null; _samplerError = null;
             _preview = new PreviewRenderUtility();
             PreviewStage.Configure(_preview);
             if (_source != null) _instance = _preview.InstantiatePrefabInScene(_source);
@@ -70,7 +72,17 @@ namespace ZFramework.GAS.Editor
             _instance.hideFlags = HideFlags.HideAndDontSave;
             foreach (var behaviour in _instance.GetComponentsInChildren<Behaviour>(true))
                 if (behaviour != null) behaviour.enabled = false;
-            _sampler = new ClipPoseSampler(_instance);
+            if (_clip != null)
+            {
+                try
+                {
+                    AnimationClipEditors.GetDuration(_clip);
+                    AnimationClipEditors.TryGet(_clip, out var editor);
+                    _sampler = editor.CreatePreview(_instance, _clip);
+                    _sampler.Sample(0);
+                }
+                catch (Exception error) { _samplerError = error.Message; }
+            }
             _vfx = new CueVfxPreview(_instance);
             _tools = new SkillPreviewTools();
             _bounds = new Bounds(_instance.transform.position, Vector3.one);
@@ -87,14 +99,17 @@ namespace ZFramework.GAS.Editor
         private void Sample()
         {
             if (_instance == null) return;
-            _error = null;
+            _error = _samplerError;
             var animation = _doc.Root?.Animation();
-            void Pose(float time) => _sampler.Sample(animation?.Clip, animation != null ? time / animation.Duration : 0);
+            void Pose(float time) => _sampler?.Sample(animation != null ? time / animation.Duration : 0);
             try
             {
-                _tools.Rebuild(_instance, _doc, Pose, _ghosts, DrawRanges);
-                _tools.Audio(animation, _doc.Playback.Time, _sound && _doc.Playback.Playing, _doc.Playback.SeekVersion, _doc.Playback.Speed);
-                _vfx.Sample(animation, _doc.Playback.Time, Pose);
+                if (_samplerError == null)
+                {
+                    _tools.Rebuild(_instance, _doc, Pose, _ghosts, DrawRanges);
+                    _tools.Audio(animation, _doc.Playback.Time, _sound && _doc.Playback.Playing, _doc.Playback.SeekVersion, _doc.Playback.Speed);
+                    _vfx.Sample(animation, _doc.Playback.Time, Pose);
+                }
             }
             catch (Exception error) { _error = error.Message; _tools.Audio(null, 0, false); }
             _caption.text = _error ?? _rangeNote ?? "拖动旋转 · 滚轮缩放 · 双击聚焦";
@@ -150,7 +165,7 @@ namespace ZFramework.GAS.Editor
         {
             _tools?.Dispose(); _tools = null;
             _vfx?.Dispose(); _vfx = null;
-            _sampler?.Dispose(); _sampler = null;
+            _sampler?.Dispose(); _sampler = null; _clip = null;
             _preview?.Cleanup(); _preview = null; _instance = null;
         }
         public void Dispose()

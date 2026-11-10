@@ -51,8 +51,8 @@ namespace ZFramework.GAS.Unity
         public SkillHitWindow[] hitWindows = Array.Empty<SkillHitWindow>();
         [SerializeReference] public SkillRuntimeTrack[] runtimeTracks = Array.Empty<SkillRuntimeTrack>();
         [Header("片段")]
-        [Tooltip("可留空，仅执行技能时间轴。播放时直接使用此 AnimationClip。")]
-        [SerializeField] private AnimationClip clip;
+        [Tooltip("动画资源，由角色绑定的驱动播放。留空时仅执行技能时间轴。")]
+        [SerializeField] private UnityEngine.Object clip;
         [Tooltip("授权时长（秒），也是时间轴的长度")]
         [SerializeField] private float duration = 1f;
         [SerializeField] private bool loop;
@@ -78,7 +78,7 @@ namespace ZFramework.GAS.Unity
         /// <summary>时间轴显示用的帧率；运行期不使用。</summary>
         public float FrameRate => frameRate;
         public System.Collections.Generic.IReadOnlyList<AnimationMarkerAsset> Markers => markers;
-        public AnimationClip Clip => clip;
+        public UnityEngine.Object Clip => clip;
         public bool Loop => loop;
         public float BlendIn => blendIn;
         public float BlendOut => blendOut;

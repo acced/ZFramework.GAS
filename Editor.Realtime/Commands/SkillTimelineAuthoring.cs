@@ -19,8 +19,9 @@ namespace ZFramework.GAS.Editor
             if (recordUndo) so.ApplyModifiedProperties(); else so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        public void Clip(AnimationClip clip, float duration, float frameRate = 30, float blendIn = .12f, float blendOut = .18f)
+        public void Clip(UnityEngine.Object clip, float duration, float frameRate = 30, float blendIn = .12f, float blendOut = .18f)
         {
+            if (clip != null) AnimationClipEditors.GetDuration(clip);
             if (!float.IsFinite(duration) || duration <= 0) throw new ArgumentOutOfRangeException(nameof(duration));
             if (!float.IsFinite(frameRate) || frameRate <= 0) throw new ArgumentOutOfRangeException(nameof(frameRate));
             if (!float.IsFinite(blendIn) || blendIn < 0 || blendIn > duration) throw new ArgumentOutOfRangeException(nameof(blendIn));

@@ -1,0 +1,17 @@
+{
+  "name": "ZFramework.GAS.Editor.Spine.Tests",
+  "references": [
+    "ZFramework.GAS.Editor.Realtime",
+    "ZFramework.GAS.Editor.Spine",
+    "ZFramework.GAS.Unity.Realtime",
+    "ZFramework.GAS.Unity.Spine",
+    "spine-csharp",
+    "spine-unity"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}
