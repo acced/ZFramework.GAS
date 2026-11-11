@@ -31,3 +31,9 @@ jobs:
       - name: Run lifecycle and allocation regressions
         working-directory: ZFramework.GAS
         run: dotnet .build~/tests/bin/Release/net8.0/Core.dll
+      - name: Compile Iron Oath game rules
+        working-directory: ZFramework.GAS
+        run: dotnet build Tests~/IronOath/IronOath.Tests.csproj -c Release -m:1 /nodeReuse:false -p:UseSharedCompilation=false
+      - name: Run Iron Oath gameplay regressions
+        working-directory: ZFramework.GAS
+        run: dotnet .build~/iron-oath/bin/Release/net8.0/IronOath.Tests.dll
