@@ -15,7 +15,7 @@ Unity 技能工具库：纯 C# GAS 运行时、资产编排、技能时间轴与
 | Editor | 一个技能编辑器、一个运行时调试窗口 | Unity + Core |
 | Editor.Realtime | 时间轴编辑、姿势/VFX/音效与查询范围预览 | Editor + Realtime + Combat3D |
 | Spine（可选包） | Spine 4.3 动画驱动、资源时长与姿势预览 | Realtime + Spine；Editor 适配另引用 Editor.Realtime |
-| Samples~ | 一个可选 AbilityActor 接入样例 | 仅用户导入时使用 |
+| Samples~ | 可选 AbilityActor 接入样例与《铁誓当铺》首章游戏切片 | 仅用户导入时使用 |
 
 `Combat3D` 当前是程序集边界，尚未拆成单独发布的 UPM 包。阵营判断和逻辑目标来源通过项目服务注入；框架不定义阵营、角色类型或敌我规则。
 
@@ -143,6 +143,18 @@ var check = owner.CommitAbility(spec, capturedActivationVersion);
 Core 的热身分配回归不代表所有 Unity 操作零分配：创建 Playable、分支上下文、自定义任务、VFX 实例以及冷启动参数解析应在实际项目中测量。
 
 ## 验证与文档
+
+### 《铁誓当铺》独立分支样例
+
+`feat/iron-oath-pawnshop` 从 `feat/spine-animation-adapter` 的 `40d081b` 建立。通过 Package Manager 导入 **Iron Oath Pawnshop / 铁誓当铺** 样例，选择 `Tools > Iron Oath > Open Demo`，在 Unity 6000.3 按 Play。项目需安装 Unity UI（uGUI）。
+
+样例包含双主角、双方 3×3 自动战斗、条件战术、破甲/保甲战利品、当铺交易、周租、三层地牢与存档。游戏规则位于样例自己的程序集，不改变 GAS Core 的通用边界。原创场景画与中文字体已包含；角色使用脚底锚点明确的占位表现，可替换为自己的 Spine Prefab。
+
+- [运行与操作说明](Samples~/IronOath/README.md)
+- [开发进度与规则约定](Docs~/IronOath/Development.md)
+- [游戏回归测试](Tests~/IronOath/README.md)
+
+### 框架验证
 
 CI 验证程序集边界并构建、运行 .NET Core 回归。Unity EditMode/PlayMode 测试保留在 `Tests~`，需要真实 Unity 工程执行；当前环境没有 Unity，未宣称它们已通过。
 

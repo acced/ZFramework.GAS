@@ -16,6 +16,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="CombatTests.cs" />
     <Compile Include="CampaignTests.cs" />
+    <Compile Include="IntegrationTests.cs" />
   </ItemGroup>
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
 </Project>

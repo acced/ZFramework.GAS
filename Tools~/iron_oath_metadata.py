@@ -5,6 +5,7 @@ Existing metadata is never rewritten (especially scene MonoBehaviour GUIDs).
 Use --check in CI to detect omissions without writing files.
 """
 import argparse
+import re
 import uuid
 from pathlib import Path
 
@@ -108,6 +109,19 @@ def main():
             meta.write_text("\n".join(line.rstrip() for line in metadata(path).splitlines()) + "\n", encoding="utf-8")
     if args.check and missing:
         raise SystemExit("Missing Unity metadata:\n" + "\n".join(missing))
+    guids = {}
+    for meta in SAMPLE.rglob("*.meta"):
+        match = re.search(r"^guid: ([0-9a-f]{32})$", meta.read_text(), re.M)
+        if not match:
+            raise SystemExit("Invalid GUID: " + str(meta))
+        guid = match.group(1)
+        if guid in guids:
+            raise SystemExit("Duplicate GUID: " + str(meta) + " and " + str(guids[guid]))
+        guids[guid] = meta
+    for scene in SAMPLE.rglob("*.unity"):
+        for guid in re.findall(r"m_Script:.*?guid: ([0-9a-f]{32})", scene.read_text()):
+            if guid not in guids or not str(guids[guid]).endswith(".cs.meta"):
+                raise SystemExit("Scene script reference is missing: " + str(scene))
     print("PASS: Iron Oath metadata complete." if args.check else f"Created {len(missing)} missing metadata files.")
 
 

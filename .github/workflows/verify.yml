@@ -24,7 +24,9 @@ jobs:
           dotnet-version: 8.0.x
       - name: Check assembly and package boundaries
         working-directory: ZFramework.GAS
-        run: python3 Tools~/verify_architecture.py
+        run: |
+          python3 Tools~/verify_architecture.py
+          python3 Tools~/iron_oath_metadata.py --check
       - name: Compile portable core
         working-directory: ZFramework.GAS
         run: dotnet build Tests~/Core/Core.csproj -c Release -m:1 /nodeReuse:false -p:UseSharedCompilation=false

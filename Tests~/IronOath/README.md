@@ -9,6 +9,8 @@ dotnet .build~/iron-oath/bin/Release/net8.0/IronOath.Tests.dll
 
 The runner uses the **real GAS Core and GameplayTags assemblies**. The game domain has no Unity dependencies. Tests exercise complete effects, costs, battle steps, formation/tactics, status composition and loot, rather than a second copy of the formulas.
 
+Current baseline: **38 passing groups** — 19 combat, 14 campaign, 5 integration. The integration suite runs real battles through all 15 campaign nodes for both protagonists, settles the shared reward bridge, sells stock, and pays Sunday rent. It also exercises saved active tickets, full-bag pending results, exact armor condition mapping, nonterminal result rejection, and defeat/draw without loot.
+
 Only a warmed, explicitly measured simulation path may be described as allocating 0 B. Game creation, UI updates, strings, loading, save serialization and Unity/Spine rendering are outside that claim.
 
 Unity scene import, UGUI, font rendering, input handling, optional Spine prefabs and IL2CPP require a real Unity 6000.3 project. This console suite does not claim to validate them.
