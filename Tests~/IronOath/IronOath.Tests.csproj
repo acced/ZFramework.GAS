@@ -1,0 +1,24 @@
+<Project>
+  <PropertyGroup>
+    <BaseOutputPath>../../.build~/iron-oath/bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>../../.build~/iron-oath/obj/</BaseIntermediateOutputPath>
+  </PropertyGroup>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../ZFramework.GAS.Core.csproj" />
+    <Compile Include="../../Samples~/IronOath/Runtime/Domain/**/*.cs" />
+    <Compile Include="../../Samples~/IronOath/Runtime/Presentation/IronOathSaveStore.cs" />
+    <Compile Include="Program.cs" />
+    <Compile Include="CombatTests.cs" />
+    <Compile Include="CampaignTests.cs" />
+    <Compile Include="IntegrationTests.cs" />
+    <Compile Include="PersistenceTests.cs" />
+  </ItemGroup>
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+</Project>

@@ -24,10 +24,23 @@ jobs:
           dotnet-version: 8.0.x
       - name: Check assembly and package boundaries
         working-directory: ZFramework.GAS
-        run: python3 Tools~/verify_architecture.py
+        run: |
+          python3 Tools~/verify_architecture.py
+          python3 Tools~/iron_oath_metadata.py --check
+      - name: Verify isolated Unity project preparation
+        working-directory: ZFramework.GAS
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s Tests~/IronOathBootstrap -p 'test_*.py'
       - name: Compile portable core
         working-directory: ZFramework.GAS
         run: dotnet build Tests~/Core/Core.csproj -c Release -m:1 /nodeReuse:false -p:UseSharedCompilation=false
       - name: Run lifecycle and allocation regressions
         working-directory: ZFramework.GAS
         run: dotnet .build~/tests/bin/Release/net8.0/Core.dll
+      - name: Compile Iron Oath game rules
+        working-directory: ZFramework.GAS
+        run: dotnet build Tests~/IronOath/IronOath.Tests.csproj -c Release -m:1 /nodeReuse:false -p:UseSharedCompilation=false
+      - name: Run Iron Oath gameplay regressions
+        working-directory: ZFramework.GAS
+        run: dotnet .build~/iron-oath/bin/Release/net8.0/IronOath.Tests.dll

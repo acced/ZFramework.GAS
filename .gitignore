@@ -114,3 +114,4 @@ bin/
 obj/
 !ZFramework.GAS.Core.csproj
 !Tests~/Core/Core.csproj
+!Tests~/IronOath/IronOath.Tests.csproj

@@ -1,0 +1,22 @@
+fileFormatVersion: 2
+guid: 04f10bce29cf50b684b8285e1024a8ba
+TrueTypeFontImporter:
+  externalObjects: {}
+  serializedVersion: 4
+  fontSize: 24
+  forceTextureCase: -2
+  characterSpacing: 0
+  characterPadding: 1
+  includeFontData: 1
+  fontName: Iron Oath Serif
+  fontNames:
+  - Iron Oath Serif
+  fallbackFontReferences: []
+  customCharacters:
+  fontRenderingMode: 0
+  ascentCalculationMode: 1
+  useLegacyBoundsCalculation: 0
+  shouldRoundAdvanceValue: 1
+  userData: OFL font subset; see adjacent OFL.txt.
+  assetBundleName:
+  assetBundleVariant:

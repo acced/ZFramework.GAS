@@ -20,6 +20,11 @@
       "displayName": "Minimal Ability",
       "description": "One actor showing explicit grants, ticking, target input and optional Playables presentation.",
       "path": "Samples~/Minimal"
+    },
+    {
+      "displayName": "Iron Oath Pawnshop / 铁誓当铺",
+      "description": "Playable first-chapter tactical RPG: GAS 3x3 combat, pawnshop economy, dungeon clues, original painted environments and optional Spine actor anchors. Requires Unity UI (uGUI).",
+      "path": "Samples~/IronOath"
     }
   ]
 }
