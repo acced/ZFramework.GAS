@@ -47,6 +47,7 @@ namespace IronOath.Campaign
         public ExpeditionTicket ActiveExpedition { get; private set; }
         public bool HasPendingRewards => _pendingOutcome != null;
         public int PendingLootCount => _pendingOutcome?.Loot.Length ?? 0;
+        public int PendingRewardCoins => _pendingOutcome?.Coins ?? 0;
 
         public CampaignSession(Protagonist protagonist, int seed = 1701)
         {
@@ -282,6 +283,32 @@ namespace IronOath.Campaign
             _lastSettledTicketId = ActiveExpedition.Id; ActiveExpedition = null; _pendingOutcome = null;
             DungeonNodeIndex++; MarkChapterCompletion();
             return CampaignResult.Ok("远征胜利！获得 " + outcome.Coins + " 金币与 " + outcome.Loot.Length + " 件战利品。" + (Protagonist == Protagonist.Rayn ? "雷恩已免费修补战利护甲的 20% 品相。" : "克萝伊已鉴定全部战利品。"));
+        }
+
+        /// <summary>Returns a copy so inspecting a pending award cannot change the recorded battle result.</summary>
+        public LootAward GetPendingLoot(int index)
+        {
+            if (_pendingOutcome == null || (uint)index >= (uint)_pendingOutcome.Loot.Length) return null;
+            LootAward item = _pendingOutcome.Loot[index];
+            return new LootAward(item.Kind, item.Condition, item.Stolen);
+        }
+
+        /// <summary>
+        /// Removes only the selected unclaimed item. The ticket and coins remain pending until an explicit claim,
+        /// including when no items remain. Discarded relics never become owned and therefore reveal no clue.
+        /// </summary>
+        public CampaignResult DiscardPendingLoot(int index)
+        {
+            if (_pendingOutcome == null || ActiveExpedition == null || !_pendingOutcome.Victory)
+                return CampaignResult.Fail("没有待清点的战利品。");
+            LootAward[] loot = _pendingOutcome.Loot;
+            if ((uint)index >= (uint)loot.Length) return CampaignResult.Fail("这件战利品已不在待领列表中。");
+            LootAward removed = loot[index];
+            var remaining = new LootAward[loot.Length - 1];
+            Array.Copy(loot, 0, remaining, 0, index);
+            Array.Copy(loot, index + 1, remaining, index, loot.Length - index - 1);
+            _pendingOutcome.Loot = remaining;
+            return CampaignResult.Ok("已放弃「" + ItemCatalog.Get(removed.Kind).Name + "」。金币与保留物品仍待领取。");
         }
 
         public CampaignResult AbandonExpedition()

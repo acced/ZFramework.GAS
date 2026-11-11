@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using IronOath.Campaign;
+using IronOath.Combat;
 
 namespace IronOath.Tests
 {
@@ -19,6 +20,9 @@ namespace IronOath.Tests
             test("Campaign: expedition tickets reject mismatch and duplicate reward claims", RewardIdentity);
             test("Campaign: defeat pays no loot and uses the day's expedition attempt", DefeatAndDailyLimit);
             test("Campaign: full-bag rewards remain atomic, immutable and recoverable", OverflowRewards);
+            test("Campaign: six preserved armors can be selected and claimed without blocking the campaign", OversizedRewardRecovery);
+            test("Campaign: pending selection recovers a batch whose greedy placement fails in an empty bag", RewardGeometryRecovery);
+            test("Campaign: discarding all loot preserves coins and ticket, grants no relic clue, and settles once", EmptyRewardRecovery);
             test("Campaign: saves round-trip active tickets, pending rewards and negotiation", SaveRoundTrip);
             test("Campaign: malformed saves and outcomes are rejected without changing live state", SaveValidation);
             test("Campaign: all fifteen dungeon steps retain both partners and unlock three clues", FullChapter);
@@ -201,6 +205,107 @@ namespace IronOath.Tests
             Require(!session.TryClaimExpeditionRewards().Succeeded); Equal(soldCoins + 80, session.Coins);
         }
 
+        private static void OversizedRewardRecovery()
+        {
+            CampaignSession session = EmptyBag(Protagonist.Chloe);
+            Require(session.GetPendingLoot(0) == null && !session.DiscardPendingLoot(0).Succeeded);
+            Equal(0, session.PendingRewardCoins);
+            Require(session.TryEnterDungeonNode(out ExpeditionTicket ticket).Succeeded);
+            Require(!session.DiscardPendingLoot(0).Succeeded);
+
+            // A legal six-enemy encounter can produce 36 cells of intact armor in a 30-cell bag.
+            var battle = new BattleSimulation();
+            var hero = new UnitDefinition("collector", "collector", "", "", 1000, 0, 100, 100, 6, 0,
+                0, 0, 0, 1, EnemyKind.Humanoid, false,
+                new[] { BattleSkillId.Backstab }, new[] { new TacticRule(BattleSkillId.Backstab) });
+            Require(battle.AddUnit(new BattleUnit(hero, BattleSide.Allies, 0)));
+            for (int i = 0; i < Formation.MaxUnitsPerSide; i++)
+            {
+                var enemy = new UnitDefinition("carrier" + i, "carrier" + i, "", "", 10, 100, 0, 1, 1, 0,
+                    0, 0, 0, 1, EnemyKind.Humanoid, false,
+                    new[] { BattleSkillId.SwordStrike }, new[] { new TacticRule(BattleSkillId.SwordStrike) });
+                Require(battle.AddUnit(new BattleUnit(enemy, BattleSide.Enemies, i)));
+            }
+            Require(battle.Start());
+            for (int step = 0; battle.State == BattleState.Fighting && step <= BattleSimulation.MaximumActions; step++)
+                Require(battle.Step());
+            Equal(BattleState.Victory, battle.State); Equal(6, battle.LootCount);
+            ExpeditionOutcome outcome = BattleRewards.FromBattle(ticket, battle);
+            Require(!session.SettleExpedition(outcome).Succeeded);
+            Equal(6, session.PendingLootCount); Equal(50, session.PendingRewardCoins);
+            Equal(0, session.Inventory.Count); Equal(240, session.Coins); Equal(0, session.DungeonNodeIndex);
+            Require(!session.CloseDay().Succeeded && !session.AbandonExpedition().Succeeded);
+
+            // Both the submitted result and the read model are detached from the authoritative pending batch.
+            outcome.Loot[0].Condition = 1;
+            LootAward view = session.GetPendingLoot(0);
+            view.Kind = ItemKind.MagicCore; view.Condition = 1; view.Stolen = true;
+            Equal(ItemKind.IntactArmor, session.GetPendingLoot(0).Kind);
+            Equal(100, session.GetPendingLoot(0).Condition); Require(!session.GetPendingLoot(0).Stolen);
+            Require(session.GetPendingLoot(-1) == null && session.GetPendingLoot(6) == null);
+            Require(!session.DiscardPendingLoot(-1).Succeeded && !session.DiscardPendingLoot(6).Succeeded);
+            Equal(6, session.PendingLootCount); Equal(ticket.Id, session.ActiveExpedition.Id);
+
+            Require(session.DiscardPendingLoot(2).Succeeded);
+            Equal(5, session.PendingLootCount); Equal(50, session.PendingRewardCoins);
+            Equal(240, session.Coins); Equal(0, session.Inventory.Count); Equal(0, session.DungeonNodeIndex);
+            Require(CampaignSession.TryRestore(session.CaptureSave(), out CampaignSession restored, out _));
+            Equal(5, restored.PendingLootCount); Equal(ticket.Id, restored.ActiveExpedition.Id);
+            Require(restored.TryClaimExpeditionRewards().Succeeded);
+            Equal(5, restored.Inventory.Count); Equal(30, restored.Inventory.OccupiedCells);
+            Equal(290, restored.Coins); Equal(1, restored.DungeonNodeIndex); Equal(1, restored.ExpeditionsToday);
+            Require(restored.ActiveExpedition == null && !restored.HasPendingRewards);
+            Require(!restored.TryClaimExpeditionRewards().Succeeded && !restored.SettleExpedition(outcome).Succeeded);
+            Require(!restored.DiscardPendingLoot(0).Succeeded); Equal(290, restored.Coins); Equal(5, restored.Inventory.Count);
+            Require(restored.CloseDay().Succeeded);
+        }
+
+        private static void RewardGeometryRecovery()
+        {
+            CampaignSession session = EmptyBag(Protagonist.Rayn);
+            session.TryEnterDungeonNode(out ExpeditionTicket ticket);
+            // 27 cells in total, but nine leading 1x1 cores leave a layout where the third 2x3 armor cannot fit.
+            var loot = new LootAward[12];
+            for (int i = 0; i < 9; i++) loot[i] = new LootAward(ItemKind.MagicCore);
+            for (int i = 9; i < 12; i++) loot[i] = new LootAward(ItemKind.IntactArmor);
+            var outcome = new ExpeditionOutcome { TicketId = ticket.Id, Victory = true, Coins = 47, Loot = loot };
+            Require(!session.SettleExpedition(outcome).Succeeded);
+            Equal(0, session.Inventory.OccupiedCells); Equal(12, session.PendingLootCount);
+            Require(session.DiscardPendingLoot(0).Succeeded);
+            Equal(11, session.PendingLootCount); Equal(ItemKind.MagicCore, session.GetPendingLoot(7).Kind);
+            Equal(ItemKind.IntactArmor, session.GetPendingLoot(8).Kind);
+            Equal(240, session.Coins); Equal(0, session.DungeonNodeIndex);
+            Require(CampaignSession.TryRestore(session.CaptureSave(), out CampaignSession restored, out _));
+            Require(restored.TryClaimExpeditionRewards().Succeeded);
+            Equal(11, restored.Inventory.Count); Equal(26, restored.Inventory.OccupiedCells);
+            Equal(287, restored.Coins); Equal(1, restored.DungeonNodeIndex);
+            Require(!restored.SettleExpedition(outcome).Succeeded); Equal(287, restored.Coins);
+        }
+
+        private static void EmptyRewardRecovery()
+        {
+            CampaignSession session = FullBag();
+            session.TryEnterDungeonNode(out ExpeditionTicket ticket);
+            var outcome = new ExpeditionOutcome { TicketId = ticket.Id, Victory = true, Coins = 88,
+                Loot = new[] { new LootAward(ItemKind.FathersSignet) } };
+            Require(!session.SettleExpedition(outcome).Succeeded);
+            Require(session.DiscardPendingLoot(0).Succeeded);
+            Equal(0, session.PendingLootCount); Equal(88, session.PendingRewardCoins);
+            Require(session.HasPendingRewards && session.ActiveExpedition.Id == ticket.Id);
+            Equal(30, session.Inventory.Count); Equal(240, session.Coins); Equal(0, session.DungeonNodeIndex);
+            Equal(0, session.ClueCount); Require(!session.DiscardPendingLoot(0).Succeeded);
+            Require(CampaignSession.TryRestore(session.CaptureSave(), out CampaignSession restored, out _));
+            Require(restored.HasPendingRewards && restored.PendingLootCount == 0);
+            // Retrying the original result must not reinsert the deliberately discarded relic.
+            Require(restored.SettleExpedition(outcome).Succeeded);
+            Equal(30, restored.Inventory.Count); Equal(328, restored.Coins); Equal(0, restored.ClueCount);
+            Equal(1, restored.DungeonNodeIndex); Equal(1, restored.ExpeditionsToday);
+            Require(!restored.HasPendingRewards && restored.ActiveExpedition == null);
+            Require(!restored.TryClaimExpeditionRewards().Succeeded && !restored.SettleExpedition(outcome).Succeeded);
+            Equal(328, restored.Coins); Equal(30, restored.Inventory.Count);
+            Require(CampaignSession.TryRestore(restored.CaptureSave(), out _, out _));
+        }
+
         private static void SaveRoundTrip()
         {
             var session = new CampaignSession(Protagonist.Rayn, 1);
@@ -276,6 +381,8 @@ namespace IronOath.Tests
                     Condition = 100, Appraised = true, X = i % 6, Y = i / 6 };
             });
         }
+        private static CampaignSession EmptyBag(Protagonist protagonist)
+            => AlterSave(new CampaignSession(protagonist), save => save.Items = Array.Empty<InventoryItemSave>());
         private static CampaignSession AlterSave(CampaignSession session, Action<CampaignSave> alter)
         {
             CampaignSave save = session.CaptureSave(); alter(save);

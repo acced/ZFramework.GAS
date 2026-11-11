@@ -1,144 +1,214 @@
 using System;
+using System.Collections.Generic;
 using IronOath.Combat;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 namespace IronOath.Presentation
 {
-    /// <summary>Mirrored front columns and bottom-center feet, independent of animation asset dimensions.</summary>
+    /// <summary>World-space feet own placement. The overlay only presents vitals, selection and feedback.</summary>
     internal sealed class BattleStage : IDisposable
     {
         sealed class ActorView
         {
             internal BattleUnit Unit;
-            internal RectTransform Root, Foot, Hud, Effects;
+            internal Transform Anchor, Visual;
+            internal SortingGroup Sorting;
+            internal RectTransform HitArea, Hud, Effects;
             internal Image Armor, Health;
-            internal Text Name, ActivePoints, PassivePoints, Status, Floating;
+            internal Text ActivePoints, PassivePoints, Status, Floating;
             internal Image[] Shards;
-            internal float FloatUntil, BreakUntil;
-            internal CanvasGroup Group, HudGroup;
-            internal GameObject Model;
-            internal Renderer[] Renderers;
-            internal int[] RendererOrders;
+            internal float FloatUntil, BreakUntil, HitUntil, AttackUntil;
+            internal CanvasGroup HudGroup;
+            internal MeshRenderer StandIn;
+            internal MaterialPropertyBlock Tint;
             internal IIronOathBattlePresentation[] Receivers;
-            internal Vector3 Offset, BaseScale;
-            internal Vector2 Rest;
-            internal float HitUntil, AttackUntil;
+            internal Vector3 Offset;
             internal int SortingOffset;
         }
 
+        static readonly int TintId = Shader.PropertyToID("_Color");
         readonly GameObject _world;
         readonly Camera _camera;
         readonly Canvas _canvas;
-        SpriteRenderer _backgroundRenderer;
-        readonly RectTransform _ui, _artLayer, _hudLayer, _effectsLayer;
+        readonly RectTransform _ui, _hitLayer, _hudLayer, _effectsLayer;
         readonly ActorView[] _actors;
-        readonly Sprite _backdrop;
+        readonly Transform[] _markers = new Transform[18];
+        readonly Text[] _slotLabels = new Text[18];
+        readonly List<Mesh> _meshes = new List<Mesh>(14);
+        Mesh _backdrop;
+        readonly Material _material;
+        readonly Mesh _groundMesh;
         readonly IronOathActorSkin[] _skins;
         readonly Action<int> _selected;
+        readonly int _layer;
+        MeshRenderer _backgroundRenderer;
         int _lastWidth, _lastHeight;
+        bool _disposed;
 
-        internal BattleStage(Transform parent, BattleSimulation battle, IronOathActorSkin[] skins, Action<int> selected)
+        internal Transform WorldRoot => _world != null ? _world.transform : null;
+        internal Camera WorldCamera => _camera;
+
+        internal Transform GetActorAnchor(int unitId)
         {
+            for (int i = 0; i < _actors.Length; i++)
+                if (_actors[i].Unit.Id == unitId) return _actors[i].Anchor;
+            return null;
+        }
+
+        internal BattleStage(Transform owner, Transform uiParent, BattleSimulation battle,
+            IronOathActorSkin[] skins, Action<int> selected, int layer)
+        {
+            if (owner == null) throw new ArgumentNullException(nameof(owner));
+            if (uiParent == null) throw new ArgumentNullException(nameof(uiParent));
+            if (battle == null) throw new ArgumentNullException(nameof(battle));
+            if (owner.GetComponentInParent<Canvas>() != null)
+                throw new ArgumentException("The battle world owner must be outside a Canvas.", nameof(owner));
+            if ((uint)layer > 31) throw new ArgumentOutOfRangeException(nameof(layer));
+            Shader shader = Resources.Load<Shader>("IronOath/WorldUnlit");
+            if (shader == null) throw new InvalidOperationException("Iron Oath world shader is missing. Import the complete sample.");
             _skins = skins;
-            _canvas = parent.GetComponentInParent<Canvas>();
             _selected = selected;
-            _ui = IronOathUi.Rect(parent, "Battle ground and actors", 0, 0, 1920, 1080);
-            _world = new GameObject("Iron Oath • world stage");
-            var cameraObject = new GameObject("Battle Camera", typeof(Camera));
+            _layer = layer;
+            _canvas = uiParent.GetComponentInParent<Canvas>();
+            _material = new Material(shader) { name = "Iron Oath world material" };
+            _groundMesh = IronOathWorldGeometry.Ground();
+            _meshes.Add(_groundMesh);
+            _ui = IronOathUi.Rect(uiParent, "Battle HUD", 0, 0, 1920, 1080);
+            _world = new GameObject("Iron Oath • world stage") { layer = layer };
+            _world.transform.SetParent(owner, false);
+            WarnLayerInUse();
+            var cameraObject = new GameObject("Battle Camera", typeof(Camera)) { layer = layer };
             cameraObject.transform.SetParent(_world.transform, false);
             _camera = cameraObject.GetComponent<Camera>();
-            _camera.transform.position = new Vector3(0, 0, -10);
+            _camera.transform.localPosition = new Vector3(0, 0, -10);
             _camera.orthographic = true;
-            _camera.orthographicSize = 5.4f;
             _camera.clearFlags = CameraClearFlags.SolidColor;
             _camera.backgroundColor = new Color32(24, 35, 43, 255);
             _camera.nearClipPlane = .1f;
             _camera.farClipPlane = 100;
-            _camera.depth = 0;
+            _camera.depth = 10;
+            _camera.cullingMask = 1 << layer;
             var texture = Resources.Load<Texture2D>("IronOath/Art/BlackstoneCourtyard");
             if (texture != null)
             {
-                _backdrop = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(.5f, .5f), 100);
-                var backdrop = new GameObject("Painted courtyard", typeof(SpriteRenderer));
-                backdrop.transform.SetParent(_world.transform, false);
-                backdrop.transform.position = new Vector3(0, 0, 12);
-                var renderer = backdrop.GetComponent<SpriteRenderer>();
-                renderer.sprite = _backdrop;
-                _backgroundRenderer = renderer;
-                renderer.sortingOrder = -1000;
-                float scale = Mathf.Max(19.2f / _backdrop.bounds.size.x, 10.8f / _backdrop.bounds.size.y);
-                backdrop.transform.localScale = Vector3.one * scale;
+                _backdrop = IronOathWorldGeometry.Quad(texture.width / 100f, texture.height / 100f);
+                _meshes.Add(_backdrop);
+                _backgroundRenderer = CreateMesh("Painted courtyard", _world.transform, _backdrop, Color.white, -1000);
+                _backgroundRenderer.transform.localPosition = new Vector3(0, 0, 12);
+                var block = new MaterialPropertyBlock();
+                block.SetTexture("_MainTex", texture);
+                block.SetColor(TintId, Color.white);
+                _backgroundRenderer.SetPropertyBlock(block);
             }
-            // Ground markers are spatial guides, so the three empty spaces remain readable.
             for (int side = 0; side < 2; side++)
-                for (int slot = 0; slot < 9; slot++)
+                for (int slot = 0; slot < Formation.SlotCount; slot++)
                 {
-                    Vector2 point = SlotPoint((BattleSide)side, slot);
-                    var marker = IronOathUi.Fill(_ui, "Ground slot", point.x - 67, point.y - 9, 134, 18,
-                        side == 0 ? new Color(.35f, .64f, .67f, .20f) : new Color(.75f, .39f, .30f, .20f));
-                    marker.transform.localEulerAngles = new Vector3(0, 0, side == 0 ? 6 : -6);
-                    IronOathUi.Label(_ui, (slot + 1).ToString(), point.x - 12, point.y + 10, 24, 18,
+                    int index = side * Formation.SlotCount + slot;
+                    Color color = side == 0 ? new Color(.35f, .64f, .67f, .28f) : new Color(.75f, .39f, .30f, .28f);
+                    var marker = CreateMesh("Ground slot " + side + ":" + slot, _world.transform, _groundMesh, color, -500);
+                    marker.transform.localPosition = BattleStageLayout.GetFootPoint((BattleSide)side, slot);
+                    marker.transform.localRotation = Quaternion.Euler(0, 0, side == 0 ? 6 : -6);
+                    _markers[index] = marker.transform;
+                    _slotLabels[index] = IronOathUi.Label(_ui, (slot + 1).ToString(), 0, 0, 24, 18,
                         12, new Color(1, 1, 1, .4f), TextAnchor.MiddleCenter);
                 }
-            _artLayer = IronOathUi.Rect(_ui, "Actor art • depth sorted", 0, 0, 1920, 1080);
-            _hudLayer = IronOathUi.Rect(_ui, "Vitals • always above actors", 0, 0, 1920, 1080);
+            _hitLayer = IronOathUi.Rect(_ui, "Actor inspection targets", 0, 0, 1920, 1080);
+            _hudLayer = IronOathUi.Rect(_ui, "Vitals", 0, 0, 1920, 1080);
             _effectsLayer = IronOathUi.Rect(_ui, "Damage and status effects", 0, 0, 1920, 1080);
             _actors = new ActorView[battle.UnitCount];
             for (int i = 0; i < battle.UnitCount; i++) _actors[i] = CreateActor(battle.GetUnit(i));
+            // Projection requires the actual Canvas scaler and safe-frame transform on the first frame.
+            Canvas.ForceUpdateCanvases();
             Refresh();
         }
 
-        internal static Vector2 SlotPoint(BattleSide side, int slot)
+        void WarnLayerInUse()
         {
-            int row = slot / 3, depth = slot % 3;
-            float x = side == BattleSide.Allies ? 760 - depth * 200 : 1160 + depth * 200;
-            return new Vector2(x + (row - 1) * (side == BattleSide.Allies ? -24 : 24), 390 + row * 130);
+            Renderer[] renderers = UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+            for (int i = 0; i < renderers.Length; i++)
+                if (renderers[i].gameObject.layer == _layer && !renderers[i].transform.IsChildOf(_world.transform))
+                {
+                    Debug.LogWarning("Iron Oath battle layer " + _layer + " is also used by '" + renderers[i].name +
+                        "'. Choose an unused Battle Layer on IronOathDemo for an isolated stage.", _world);
+                    return;
+                }
+        }
+
+        MeshRenderer CreateMesh(string name, Transform parent, Mesh mesh, Color tint, int order)
+        {
+            var go = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer)) { layer = _layer };
+            go.transform.SetParent(parent, false);
+            go.GetComponent<MeshFilter>().sharedMesh = mesh;
+            var renderer = go.GetComponent<MeshRenderer>();
+            renderer.sharedMaterial = _material;
+            renderer.sortingOrder = order;
+            var block = new MaterialPropertyBlock();
+            block.SetColor(TintId, tint);
+            renderer.SetPropertyBlock(block);
+            return renderer;
+        }
+
+        IronOathActorSkin FindSkin(string unitId)
+        {
+            IronOathActorSkin fallback = null;
+            if (_skins == null) return null;
+            for (int i = 0; i < _skins.Length; i++)
+            {
+                IronOathActorSkin skin = _skins[i];
+                if (skin == null || skin.prefab == null) continue;
+                if (skin.unitDefinitionId == unitId) return skin;
+                if (fallback == null && string.IsNullOrEmpty(skin.unitDefinitionId)) fallback = skin;
+            }
+            return fallback;
+        }
+
+        static void AssignLayer(Transform root, int layer)
+        {
+            root.gameObject.layer = layer;
+            for (int i = 0; i < root.childCount; i++) AssignLayer(root.GetChild(i), layer);
         }
 
         ActorView CreateActor(BattleUnit unit)
         {
             var view = new ActorView { Unit = unit };
-            view.Root = IronOathUi.Rect(_artLayer, unit.Name, 0, 0, 170, 170);
-            view.Hud = IronOathUi.Rect(_hudLayer, unit.Name + " vitals", 0, 0, 170, 71);
-            view.HudGroup = view.Hud.gameObject.AddComponent<CanvasGroup>();
-            view.Effects = IronOathUi.Rect(_effectsLayer, unit.Name + " feedback", 0, 0, 170, 250);
-            view.Group = view.Root.gameObject.AddComponent<CanvasGroup>();
-            view.Foot = IronOathUi.Rect(view.Root, "Foot pivot • attach model here", 85, 170, 0, 0);
-            IronOathActorSkin skin = null;
-            if (_skins != null)
-                for (int i = 0; i < _skins.Length; i++)
-                    if (_skins[i] != null && _skins[i].prefab != null &&
-                        (_skins[i].unitDefinitionId == unit.Definition.Id ||
-                         skin == null && string.IsNullOrEmpty(_skins[i].unitDefinitionId))) skin = _skins[i];
+            var anchor = new GameObject("Actor " + unit.Id + " • " + unit.Name, typeof(SortingGroup)) { layer = _layer };
+            anchor.transform.SetParent(_world.transform, false);
+            view.Anchor = anchor.transform;
+            view.Sorting = anchor.GetComponent<SortingGroup>();
+            var visual = new GameObject("Facing and foot offset") { layer = _layer };
+            visual.transform.SetParent(view.Anchor, false);
+            view.Visual = visual.transform;
+            var shadow = CreateMesh("Foot shadow", view.Anchor, _groundMesh, new Color(0, 0, 0, .34f), -10);
+            shadow.transform.localScale = new Vector3(.8f, .65f, 1);
+            IronOathActorSkin skin = FindSkin(unit.Definition.Id);
+            bool facesRight = unit.Side == BattleSide.Allies;
             if (skin == null)
             {
-                var figureRect = IronOathUi.Rect(view.Root, "Heraldic stand-in", 26, 0, 118, 170);
-                var figure = figureRect.gameObject.AddComponent<IronOathFigure>();
-                figure.Cloak = unit.Side == BattleSide.Allies ? new Color32(51, 101, 116, 255) : new Color32(127, 53, 48, 255);
-                figure.LightArmor = unit.Definition.MaxArmor < 65;
-                figure.raycastTarget = false;
-                if (unit.Side == BattleSide.Enemies)
-                {
-                    figureRect.pivot = new Vector2(.5f, 1);
-                    figureRect.anchoredPosition = new Vector2(85, 0);
-                    figureRect.localScale = new Vector3(-1, 1, 1);
-                }
+                Color cloak = facesRight ? new Color32(51, 101, 116, 255) : new Color32(127, 53, 48, 255);
+                Mesh mesh = IronOathWorldGeometry.Figure(unit.Definition.MaxArmor < 65, cloak);
+                _meshes.Add(mesh);
+                view.StandIn = CreateMesh("Heraldic stand-in", view.Visual, mesh, Color.white, 0);
+                view.Tint = new MaterialPropertyBlock();
+                view.Visual.localScale = new Vector3(facesRight ? 1 : -1, 1, 1);
             }
             else
             {
-                view.Model = UnityEngine.Object.Instantiate(skin.prefab, _world.transform);
-                view.Model.name = unit.Name + " • Spine foot anchor";
-                bool facesRight = unit.Side == BattleSide.Allies;
-                view.Model.transform.localScale = new Vector3(skin.worldScale * (facesRight == skin.sourceFacesRight ? 1 : -1),
-                    skin.worldScale, skin.worldScale);
-                view.BaseScale = view.Model.transform.localScale;
+                float scale = float.IsFinite(skin.worldScale) && skin.worldScale > 0 ? skin.worldScale : 1;
+                view.Visual.localScale = new Vector3(scale * (facesRight == skin.sourceFacesRight ? 1 : -1), scale, scale);
                 view.Offset = skin.footOffset;
                 view.SortingOffset = skin.sortingOffset;
-                view.Renderers = view.Model.GetComponentsInChildren<Renderer>(true);
-                view.RendererOrders = new int[view.Renderers.Length];
-                for (int i = 0; i < view.Renderers.Length; i++) view.RendererOrders[i] = view.Renderers[i].sortingOrder;
-                var behaviours = view.Model.GetComponentsInChildren<MonoBehaviour>(true);
+                // A wrapper applies facing and calibration; the prefab's authored localScale is preserved.
+                GameObject model = UnityEngine.Object.Instantiate(skin.prefab, view.Visual, false);
+                model.name = unit.Name + " • actor model";
+                model.transform.localPosition = Vector3.zero;
+                AssignLayer(model.transform, _layer);
+                // Nested groups keep their authored order, but cannot escape their actor's row group.
+                SortingGroup[] groups = model.GetComponentsInChildren<SortingGroup>(true);
+                for (int i = 0; i < groups.Length; i++) groups[i].sortAtRoot = false;
+                model.SetActive(true);
+                var behaviours = model.GetComponentsInChildren<MonoBehaviour>(true);
                 int count = 0;
                 for (int i = 0; i < behaviours.Length; i++) if (behaviours[i] is IIronOathBattlePresentation) count++;
                 view.Receivers = new IIronOathBattlePresentation[count];
@@ -150,8 +220,14 @@ namespace IronOath.Presentation
                         receiver.Bind(unit);
                     }
             }
+            view.Visual.localPosition = view.Offset;
+            view.HitArea = IronOathUi.Rect(_hitLayer, unit.Name + " inspection", 0, 0, 170, 170);
+            AddInspectButton(view.HitArea, unit.Id);
+            view.Hud = IronOathUi.Rect(_hudLayer, unit.Name + " vitals", 0, 0, 170, 71);
+            view.HudGroup = view.Hud.gameObject.AddComponent<CanvasGroup>();
+            view.Effects = IronOathUi.Rect(_effectsLayer, unit.Name + " feedback", 0, 0, 170, 250);
             IronOathUi.Fill(view.Hud, "Unit plate", 3, 0, 164, 71, new Color32(16, 24, 28, 232));
-            view.Name = IronOathUi.Label(view.Hud, unit.Name, 8, 2, 154, 23, 17, IronOathUi.Ivory, TextAnchor.MiddleCenter);
+            IronOathUi.Label(view.Hud, unit.Name, 8, 2, 154, 23, 17, IronOathUi.Ivory, TextAnchor.MiddleCenter);
             view.Armor = IronOathUi.Bar(view.Hud, "Armor", 13, 28, 144, 6, new Color32(224, 228, 221, 255));
             view.Health = IronOathUi.Bar(view.Hud, "Health", 13, 37, 144, 7, IronOathUi.Red);
             view.ActivePoints = IronOathUi.Label(view.Hud, "", 12, 48, 73, 20, 15, new Color32(236, 113, 94, 255), TextAnchor.MiddleRight);
@@ -166,71 +242,85 @@ namespace IronOath.Presentation
                 view.Shards[i].gameObject.SetActive(false);
             }
             view.Status = IronOathUi.Label(view.Effects, "", -15, -26, 200, 24, 16, IronOathUi.PaleGold, TextAnchor.MiddleCenter);
-            var hitTarget = IronOathUi.Rect(view.Root, "Inspect actor", 0, 0, 170, 170);
-            var image = hitTarget.gameObject.AddComponent<Image>();
-            image.color = Color.clear;
-            var button = hitTarget.gameObject.AddComponent<Button>();
-            button.targetGraphic = image;
-            int unitId = unit.Id;
-            button.onClick.AddListener(() => _selected(unitId));
-            var hudHit = IronOathUi.Rect(view.Hud, "Inspect vitals", 0, 0, 170, 71);
-            var hudImage = hudHit.gameObject.AddComponent<Image>();
-            hudImage.color = Color.clear;
-            var hudButton = hudHit.gameObject.AddComponent<Button>();
-            hudButton.targetGraphic = hudImage;
-            hudButton.onClick.AddListener(() => _selected(unitId));
+            AddInspectButton(IronOathUi.Rect(view.Hud, "Inspect vitals", 0, 0, 170, 71), unit.Id);
             return view;
+        }
+
+        void AddInspectButton(RectTransform parent, int unitId)
+        {
+            var image = parent.gameObject.AddComponent<Image>();
+            image.color = Color.clear;
+            var button = parent.gameObject.AddComponent<Button>();
+            button.targetGraphic = image;
+            button.onClick.AddListener(() => _selected?.Invoke(unitId));
         }
 
         internal void Refresh()
         {
-            if (_backgroundRenderer != null)
-            {
-                float worldHeight = _camera.orthographicSize * 2;
-                float scale = Mathf.Max(worldHeight * _camera.aspect / _backdrop.bounds.size.x,
-                    worldHeight / _backdrop.bounds.size.y);
-                _backgroundRenderer.transform.localScale = Vector3.one * scale;
-            }
+            if (_disposed) return;
+            UpdateCamera();
             for (int i = 0; i < _actors.Length; i++)
             {
                 ActorView actor = _actors[i];
                 BattleUnit unit = actor.Unit;
-                Vector2 point = SlotPoint(unit.Side, unit.Slot);
-                actor.Rest = new Vector2(point.x - 85, -point.y + 170);
-                actor.Root.anchoredPosition = actor.Rest;
-                actor.Hud.anchoredPosition = new Vector2(point.x - 85, -point.y - 6);
-                actor.Effects.anchoredPosition = actor.Rest;
+                actor.Anchor.localPosition = BattleStageLayout.GetFootPoint(unit.Side, unit.Slot);
+                actor.Sorting.sortingOrder = BattleStageLayout.GetRowOrder(unit.Slot, actor.SortingOffset);
                 actor.HudGroup.alpha = unit.IsAlive ? 1 : .7f;
-                actor.Group.alpha = unit.IsAlive ? 1 : .32f;
                 IronOathUi.SetBar(actor.Armor, unit.Armor, unit.MaxArmor, 142);
                 IronOathUi.SetBar(actor.Health, unit.Health, unit.MaxHealth, 142);
                 actor.ActivePoints.text = new string('●', Math.Min(unit.AP, 8));
                 actor.PassivePoints.text = new string('●', Math.Min(unit.PP, 8));
                 actor.Status.text = unit.IsAlive ? StatusName(unit.Status.ToString()) : "已倒下";
-                PositionModel(actor);
+                if (actor.StandIn != null)
+                {
+                    actor.Tint.SetColor(TintId, unit.IsAlive ? Color.white : new Color(.42f, .42f, .42f, .48f));
+                    actor.StandIn.SetPropertyBlock(actor.Tint);
+                    actor.Visual.localRotation = unit.IsAlive ? Quaternion.identity : Quaternion.Euler(0, 0,
+                        unit.Side == BattleSide.Allies ? -75 : 75);
+                }
+                PositionHud(actor);
             }
-            // Back-row art is always drawn before front-row art, independent of unit creation order.
+            // Selection hit targets use the same row order as world actors.
             for (int row = 0; row < 3; row++)
                 for (int i = 0; i < _actors.Length; i++)
-                    if (_actors[i].Unit.Slot / 3 == row) _actors[i].Root.SetAsLastSibling();
+                    if (Formation.Row(_actors[i].Unit.Slot) == row) _actors[i].HitArea.SetAsLastSibling();
+        }
+
+        void UpdateCamera()
+        {
+            if (Screen.width != _lastWidth || Screen.height != _lastHeight) Canvas.ForceUpdateCanvases();
+            _camera.orthographicSize = BattleStageLayout.GetOrthographicSize(_camera.aspect);
+            if (_backgroundRenderer != null)
+            {
+                float height = _camera.orthographicSize * 2;
+                float scale = Mathf.Max(height * _camera.aspect / _backdrop.bounds.size.x, height / _backdrop.bounds.size.y);
+                _backgroundRenderer.transform.localScale = Vector3.one * scale;
+            }
+            for (int i = 0; i < _markers.Length; i++)
+                _slotLabels[i].rectTransform.anchoredPosition = Project(_markers[i].position) + new Vector2(-12, -10);
             _lastWidth = Screen.width;
             _lastHeight = Screen.height;
         }
 
-        void PositionModel(ActorView actor)
+        Vector2 Project(Vector3 worldPoint)
         {
-            if (actor.Model == null) return;
-            Vector2 screenPoint = RectTransformUtility.WorldToScreenPoint(null, actor.Foot.position);
-            float pixelsPerWorldUnit = Screen.height / (_camera.orthographicSize * 2);
-            float fit = _canvas != null ? _canvas.scaleFactor * 100 / pixelsPerWorldUnit : 1;
-            actor.Model.transform.position = _camera.ScreenToWorldPoint(new Vector3(screenPoint.x, screenPoint.y, 10)) + actor.Offset * fit;
-            actor.Model.transform.localScale = actor.BaseScale * fit;
-            int order = actor.Unit.Slot / 3 * 100 + actor.SortingOffset;
-            for (int i = 0; i < actor.Renderers.Length; i++) actor.Renderers[i].sortingOrder = order + actor.RendererOrders[i];
+            Vector3 screen = _camera.WorldToScreenPoint(worldPoint);
+            Camera uiCamera = _canvas != null && _canvas.renderMode != RenderMode.ScreenSpaceOverlay ? _canvas.worldCamera : null;
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(_ui, screen, uiCamera, out Vector2 point);
+            return point;
+        }
+
+        void PositionHud(ActorView actor)
+        {
+            Vector2 foot = Project(actor.Anchor.position);
+            actor.Hud.anchoredPosition = foot + new Vector2(-85, -6);
+            actor.HitArea.anchoredPosition = foot + new Vector2(-85, 170);
+            actor.Effects.anchoredPosition = Project(actor.Visual.position) + new Vector2(-85, 170);
         }
 
         internal void Present(in BattleEvent evt)
         {
+            if (_disposed) return;
             for (int i = 0; i < _actors.Length; i++)
             {
                 ActorView actor = _actors[i];
@@ -262,16 +352,16 @@ namespace IronOath.Presentation
 
         internal void Tick()
         {
-            if (Screen.width != _lastWidth || Screen.height != _lastHeight) Refresh();
+            if (_disposed) return;
+            if (Screen.width != _lastWidth || Screen.height != _lastHeight) UpdateCamera();
             for (int i = 0; i < _actors.Length; i++)
             {
                 ActorView actor = _actors[i];
                 float lunge = Mathf.Clamp01((actor.AttackUntil - Time.unscaledTime) / .36f);
-                float shake = actor.HitUntil > Time.unscaledTime ? Mathf.Sin(Time.unscaledTime * 65) * 4 : 0;
+                float shake = actor.HitUntil > Time.unscaledTime ? Mathf.Sin(Time.unscaledTime * 65) * .04f : 0;
                 float direction = actor.Unit.Side == BattleSide.Allies ? 1 : -1;
-                actor.Root.anchoredPosition = actor.Rest + new Vector2(Mathf.Sin(lunge * Mathf.PI) * direction * 24 + shake, 0);
-                actor.Effects.anchoredPosition = actor.Root.anchoredPosition;
-                if (actor.Model != null) PositionModel(actor);
+                actor.Visual.localPosition = actor.Offset + new Vector3(Mathf.Sin(lunge * Mathf.PI) * direction * .24f + shake, 0, 0);
+                PositionHud(actor);
                 float floating = Mathf.Clamp01((actor.FloatUntil - Time.unscaledTime) / 1.2f);
                 actor.Floating.gameObject.SetActive(floating > 0);
                 if (floating > 0)
@@ -302,11 +392,23 @@ namespace IronOath.Presentation
                 .Replace("Exposed", "甲缝破绽").Replace(", ", " · ");
         }
 
+        internal void SetVisible(bool visible)
+        {
+            if (_disposed) return;
+            if (_world != null) _world.SetActive(visible);
+            if (_ui != null) _ui.gameObject.SetActive(visible);
+            if (visible) { Canvas.ForceUpdateCanvases(); Refresh(); }
+        }
+
         public void Dispose()
         {
-            if (_ui != null) UnityEngine.Object.Destroy(_ui.gameObject);
-            if (_world != null) UnityEngine.Object.Destroy(_world);
-            if (_backdrop != null) UnityEngine.Object.Destroy(_backdrop);
+            if (_disposed) return;
+            _disposed = true;
+            // Destroy is deferred by Unity. Deactivate now so old cameras, input and actors cannot survive a page switch.
+            if (_ui != null) { _ui.gameObject.SetActive(false); UnityEngine.Object.Destroy(_ui.gameObject); }
+            if (_world != null) { _world.SetActive(false); UnityEngine.Object.Destroy(_world); }
+            for (int i = 0; i < _meshes.Count; i++) UnityEngine.Object.Destroy(_meshes[i]);
+            if (_material != null) UnityEngine.Object.Destroy(_material);
         }
     }
 }

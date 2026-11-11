@@ -63,8 +63,10 @@ namespace IronOath.Presentation
         {
             if (_campaign.HasPendingRewards)
             {
-                CampaignResult claim = _campaign.TryClaimExpeditionRewards();
-                Save(); ShowPage(Page.Shop); Toast(claim.Message, claim.Succeeded); return;
+                ShowPage(Page.Shop);
+                _discardReward = -1;
+                ShowPendingRewards();
+                return;
             }
             if (_campaign.ActiveExpedition != null)
             {

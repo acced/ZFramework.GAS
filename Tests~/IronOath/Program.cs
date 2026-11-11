@@ -12,6 +12,7 @@ namespace IronOath.Tests
             CombatTests.Run(Check);
             CampaignTests.Run(Check);
             IntegrationTests.Run(Check);
+            PersistenceTests.Run(Check);
             Console.WriteLine($"Iron Oath: {_passed} passed, {_failed} failed.");
             return _failed == 0 ? 0 : 1;
         }

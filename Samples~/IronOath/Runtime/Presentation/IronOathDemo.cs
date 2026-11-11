@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using IronOath.Campaign;
 using IronOath.Combat;
 using UnityEngine;
@@ -18,7 +17,12 @@ namespace IronOath.Presentation
         [Header("Optional world-space Spine / actor prefabs")]
         [SerializeField] IronOathActorSkin[] actors = Array.Empty<IronOathActorSkin>();
         [SerializeField] int campaignSeed = 1701;
-        const string SaveName = "iron-oath-campaign-v1.json";
+        [Tooltip("Rendering layer used only by this battle stage. Choose an unused project layer.")]
+        [SerializeField, Range(0, 31)] int battleLayer = 30;
+        internal string SaveDirectoryOverride;
+        IronOathSaveStore _saveStore;
+        IronOathSaveStore SaveStore => _saveStore ??= new IronOathSaveStore(
+            string.IsNullOrEmpty(SaveDirectoryOverride) ? Application.persistentDataPath : SaveDirectoryOverride);
         enum Page { Shop, Formation, Dungeon, Chronicle, Battle }
         Canvas _canvas;
         RectTransform _root, _screen;
@@ -30,7 +34,7 @@ namespace IronOath.Presentation
         Page _page;
         Text _toast;
         float _toastUntil, _nextAction;
-        bool _autoplay, _practice;
+        bool _autoplay, _practice, _loadedFromBackup;
         int _speed = 1, _selectedUnit, _selectedItem;
         bool _rotateItem;
         int[] _formation;
@@ -85,7 +89,11 @@ namespace IronOath.Presentation
                 _ownedEventSystem.AddComponent<StandaloneInputModule>();
 #endif
             }
-            if (TryLoad()) ShowPage(Page.Shop);
+            if (TryLoad())
+            {
+                ShowPage(Page.Shop);
+                if (_loadedFromBackup) Toast("已从备份恢复进度。", true);
+            }
             else ShowProtagonists();
         }
 
@@ -104,6 +112,13 @@ namespace IronOath.Presentation
 
         void OnApplicationPause(bool pause) { if (pause) Save(); }
         void OnApplicationQuit() => Save();
+        void OnEnable() => _stage?.SetVisible(true);
+        void OnDisable()
+        {
+            _autoplay = false;
+            if (_battle != null && _battle.State == BattleState.Fighting) SetPlayLabel("继续");
+            _stage?.SetVisible(false);
+        }
         void OnDestroy()
         {
             _stage?.Dispose();
@@ -114,7 +129,13 @@ namespace IronOath.Presentation
         {
             _stage?.Dispose();
             _stage = null;
-            if (_screen != null) Destroy(_screen.gameObject);
+            _rewardDialog = null;
+            if (_screen != null)
+            {
+                // Destroy is deferred; retire its raycasters immediately when rebuilding a page.
+                _screen.gameObject.SetActive(false);
+                Destroy(_screen.gameObject);
+            }
             _screen = IronOathUi.Rect(_root, "Screen", 0, 0, 1920, 1080);
             _toast = null;
             _battleLog = _battleCounter = _inspectText = null;
@@ -244,126 +265,27 @@ namespace IronOath.Presentation
             _toast.transform.parent.SetAsLastSibling();
         }
 
-        [Serializable]
-        sealed class DemoSave
-        {
-            public int Version = 1;
-            public CampaignSave Campaign;
-            public bool HasCustomer, HasPendingOutcome;
-            public int[] Formation;
-            public SavedTactic[] Tactics;
-        }
-
-        [Serializable]
-        sealed class SavedTactic
-        {
-            public int Unit, Row;
-            public BattleSkillId Skill;
-            public TacticCondition Condition;
-            public TargetPriority Priority;
-            public bool Enabled;
-        }
-
         bool Save()
         {
             if (_campaign == null) return false;
-            string path = Path.Combine(Application.persistentDataPath, SaveName);
-            string temporary = path + ".tmp";
-            try
-            {
-                int count = 0;
-                for (int i = 0; i < _savedTactics.Length; i++) if (_savedTactics[i] != null) count += BattleUnit.TacticCount;
-                CampaignSave snapshot = _campaign.CaptureSave();
-                var data = new DemoSave { Campaign = snapshot, Formation = _formation,
-                    HasCustomer = snapshot.Customer != null, HasPendingOutcome = snapshot.PendingOutcome != null,
-                    Tactics = new SavedTactic[count] };
-                int savedIndex = 0;
-                for (int unit = 0; unit < _savedTactics.Length; unit++)
-                    for (int row = 0; row < BattleUnit.TacticCount; row++)
-                    {
-                        if (_savedTactics[unit] == null) continue;
-                        TacticRule rule = _savedTactics[unit][row];
-                        data.Tactics[savedIndex++] = new SavedTactic { Unit = unit, Row = row, Skill = rule.Skill,
-                            Condition = rule.Condition, Priority = rule.Priority, Enabled = rule.Enabled };
-                    }
-                Directory.CreateDirectory(Application.persistentDataPath);
-                using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
-                {
-                    using (var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false), 4096, true))
-                    { writer.Write(JsonUtility.ToJson(data)); writer.Flush(); }
-                    stream.Flush(true);
-                }
-                if (File.Exists(path)) File.Replace(temporary, path, path + ".bak", true);
-                else File.Move(temporary, path);
-                return true;
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning("Iron Oath save failed; the previous save was kept: " + exception.Message, this);
-                return false;
-            }
+            if (SaveStore.TrySave(_campaign, _formation, _savedTactics, out string error)) return true;
+            Debug.LogWarning("Iron Oath save failed; the previous save was kept: " + error, this);
+            return false;
         }
 
         bool TryLoad()
         {
-            string path = Path.Combine(Application.persistentDataPath, SaveName);
-            return TryLoadFile(path) || TryLoadFile(path + ".bak");
-        }
-
-        bool TryLoadFile(string path)
-        {
-            if (!File.Exists(path)) return false;
-            try
+            if (!SaveStore.TryLoad(out IronOathLoadedSave loaded, out string error))
             {
-                var data = JsonUtility.FromJson<DemoSave>(File.ReadAllText(path));
-                if (data == null || data.Version != 1 || data.Campaign == null) return false;
-                // Unity inline class serialization may materialize a default object for a null field.
-                // Preserve absence explicitly so an exhausted customer queue or no pending reward remains absent.
-                if (!data.HasCustomer) data.Campaign.Customer = null;
-                if (!data.HasPendingOutcome) data.Campaign.PendingOutcome = null;
-                if (!CampaignSession.TryRestore(data.Campaign, out CampaignSession restored, out string error)) return false;
-                int[] restoredFormation = null;
-                if (data.Formation != null && data.Formation.Length == 6)
-                {
-                    bool valid = true;
-                    for (int i = 0; i < 6; i++)
-                    {
-                        if (!IronOath.Combat.Formation.IsValid(data.Formation[i])) valid = false;
-                        for (int j = 0; j < i; j++) if (data.Formation[i] == data.Formation[j]) valid = false;
-                    }
-                    if (valid) restoredFormation = data.Formation;
-                }
-                var restoredTactics = new TacticRule[6][];
-                if (data.Tactics != null && data.Tactics.Length <= 24)
-                    for (int unit = 0; unit < 6; unit++)
-                    {
-                        var candidates = new TacticRule[4];
-                        int mask = 0;
-                        bool valid = true;
-                        for (int i = 0; i < data.Tactics.Length; i++)
-                        {
-                            SavedTactic row = data.Tactics[i];
-                            if (row == null || row.Unit != unit) continue;
-                            if ((uint)row.Row >= 4 || !Enum.IsDefined(typeof(BattleSkillId), row.Skill) ||
-                                !Enum.IsDefined(typeof(TacticCondition), row.Condition) ||
-                                !Enum.IsDefined(typeof(TargetPriority), row.Priority) || (mask & (1 << row.Row)) != 0)
-                            { valid = false; break; }
-                            mask |= 1 << row.Row;
-                            candidates[row.Row] = new TacticRule(row.Skill, row.Condition, row.Priority, row.Enabled);
-                        }
-                        if (valid && mask == 15) restoredTactics[unit] = candidates;
-                    }
-                // Commit only after both the domain snapshot and UI preferences were read successfully.
-                _campaign = restored;
-                _formation = restoredFormation;
-                for (int unit = 0; unit < 6; unit++) _savedTactics[unit] = restoredTactics[unit];
-                return true;
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning("Iron Oath ignored an unreadable save; current game is unchanged: " + exception.Message, this);
+                if (!string.IsNullOrEmpty(error))
+                    Debug.LogWarning("Iron Oath ignored an unreadable save: " + error, this);
                 return false;
             }
+            _campaign = loaded.Campaign;
+            _formation = loaded.Formation;
+            for (int unit = 0; unit < _savedTactics.Length; unit++) _savedTactics[unit] = loaded.Tactics[unit];
+            _loadedFromBackup = loaded.RecoveredFromBackup;
+            return true;
         }
 
         void ShowCampaignEnd()

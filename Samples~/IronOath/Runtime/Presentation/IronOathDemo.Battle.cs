@@ -20,7 +20,7 @@ namespace IronOath.Presentation
             _settlement = null;
             _logCount = 0;
             for (int i = 0; i < _log.Length; i++) _log[i] = "";
-            _stage = new BattleStage(_screen, _battle, actors, InspectUnit);
+            _stage = new BattleStage(transform, _screen, _battle, actors, InspectUnit, battleLayer);
             IronOathUi.Fill(_screen, "Battle upper shade", 0, 105, 1920, 118, new Color(0.025f, .05f, .07f, .72f));
             IronOathUi.Label(_screen, _practice ? "铁誓演武场" : _campaign.CurrentNode?.Name ?? "深渊遭遇",
                 580, 121, 760, 50, 32, IronOathUi.PaleGold, TextAnchor.MiddleCenter);

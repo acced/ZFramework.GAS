@@ -10,8 +10,8 @@ namespace IronOath.Presentation
         {
             if (_campaign.HasPendingRewards)
             {
-                IronOathUi.Button(_screen, "战利品待领取 · 腾出货架后领取", 617, 459, 614, 59,
-                    () => Apply(_campaign.TryClaimExpeditionRewards()), true);
+                IronOathUi.Button(_screen, "清点暂存战利品 · " + _campaign.PendingLootCount + " 件", 617, 459, 614, 59,
+                    () => { _discardReward = -1; ShowPendingRewards(); }, true);
             }
             else if (_campaign.ActiveExpedition != null)
             {

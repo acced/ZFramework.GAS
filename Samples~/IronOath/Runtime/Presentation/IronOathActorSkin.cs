@@ -23,7 +23,7 @@ namespace IronOath.Presentation
         public Vector3 footOffset;
         [Tooltip("True when the source art faces right. Enemies are mirrored automatically.")]
         public bool sourceFacesRight = true;
-        [Tooltip("Added to row sorting. Give every renderer in a character the same relative ordering.")]
+        [Tooltip("Added to the actor's row SortingGroup; child renderer ordering is preserved.")]
         public int sortingOffset;
     }
 }

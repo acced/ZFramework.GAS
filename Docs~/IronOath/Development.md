@@ -47,19 +47,51 @@
 | 1 | 完成 | GAS 战斗规则；19 组回归；6 场遭遇×2 主角×3 种子确定性回放；热身后 100 步 0 B。 |
 | 2 | 完成 | 经营、6×5 背包、三层 15 节点地牢与深拷贝存档；14 组回归通过。 |
 | 3 | 完成 | Unity 场景、界面、三张原创环境画、中文字体、可选 Spine 事件绑定；5 组真实战斗→经营集成回归。 |
+| 4 | 代码与本地回归完成 | 世界空间舞台、完整存档校验与备份恢复、待领战利品取舍、独立 Unity 验收工程；真实 Editor / PlayMode 验收待执行。 |
 
 ## 已完成的验证
 
 - 原有 Core：35 组 PASS，原有热身分配路径保持 0 B。
-- Iron Oath：38 组 PASS（19 战斗、14 经营、5 跨系统）。Release 构建无警告、无错误。
+- Iron Oath：47 组 PASS（19 战斗、17 经营、5 跨系统、6 文件持久化）。Release 构建无警告、无错误。
 - 六种遭遇 × 两位主角 × 三个种子的确定性回放；初始策略均能结束并胜利，首战可演示保甲遗物与碎甲魔核。
 - 两位主角分别完成真实六战、全部 15 个节点、三段线索与周日交租；奖励满包、存档恢复和重放防重纳入集成测试。
-- GAS 程序集边界与样例 metadata 通过；C# 9 / netstandard2.1 使用临时 Unity 类型桩检查样例内部接口，不冒充真实 Unity 编译。
+- GAS 程序集边界与样例 metadata 通过；C# 9 / netstandard2.1 使用临时 Unity 类型桩检查样例内部接口，分离 Game / Presentation / Editor / 可选 Spine 程序集并检查 Legacy Input、Input System Only 两条编译路径，不冒充真实 Unity 或 Spine SDK 编译。
+- 独立 Unity 工程准备脚本的 6 组 Python 回归通过：拒绝覆盖已有目录、拒绝错误编辑器版本/依赖提交，保留样例 GUID，处理带空格路径，排除可选 Spine 源码。
+- 已编写 11 个真实 Unity EditMode 用例与 5 个 PlayMode 用例；未在当前环境执行，其状态仍为待验收。
 - Unity Editor、真实场景导入、UGUI/Spine 渲染、PlayMode、IL2CPP 和手机性能尚未在本环境验证。
+
+## 2026-11-11 · 阶段 4 延续记录
+
+本轮从表现阶段提交 `0d723687a257f86159fc5eab36b56353a9d32498` 继续。未从旧战斗分支拼接代码，未修改 GAS Core 或主分支。
+
+### 世界与 UI 的职责
+
+- 默认角色从 Canvas Graphic 改为世界空间 MeshRenderer。背景、脚底阴影、站位标记与实际角色 Prefab 共用世界舞台。
+- `BattleStageLayout` 定义双方九宫格世界坐标；UGUI 投影显示血条、检查区域、编号和反馈。主角选择卡的纹章仍为 UI 装饰。
+- 角色根锚点通过 `SortingGroup` 控制行遮挡；克隆保留 Prefab 原始缩放、旋转和子 Renderer 顺序，额外 wrapper 负责朝向与校准，克隆根位移归零。
+- 专用相机只渲染可配置的 `Battle Layer`（默认 30），不改项目层设置。冲突的场景 Renderer 会被检查；其他项目相机需要排除该层。
+- 页面切换先停用旧舞台与 UI，再延迟销毁对象及自有网格/材质。首次构建前刷新 Canvas 布局；分辨率变化后更新正交视野与 HUD 投影。
+- 新增不依赖灯光的共享 Unlit Shader；用户角色的材质与可选 Spine 事件接口保持原有约定。
+
+### 战利品与持久化
+
+- 修复有效遭遇生成的奖励无法装进空背包时，远征永远无法结算的路径。可在当铺清点暂存物品、二次确认舍弃指定物品，再原子领取保留的奖励。
+- 舍弃不提前发金币、不推进节点、不触发遗物线索。舍弃全部物品后，仍可显式领取金币并完成该远征；存档恢复和重复提交结果不会补回或重复发奖。
+- 提取 `IronOathSaveStore`，保留合法 v1 文件字段与文件名。经营状态、站位和战术整体校验；损坏主档恢复后再次保存，保留原来的有效备份。
+- 编队/战术和战利品取舍立即保存；写入失败保留原主档与备份，并在运行中提示。
+- 文件持久化测试使用真实磁盘和可注入的 System.Text.Json 编解码器；Unity 自身的 JsonUtility 行为由独立 EditMode 测试验证，二者不混报。
+
+### Unity 接入与验收入口
+
+- `Tools > Iron Oath > Validate Imported Demo`：只读检查已导入场景、背景、字体字形、Shader 编译错误、Missing Script、角色 ID、Prefab 与数值配置。
+- `Validate Current Scene`：检查当前场景的未保存绑定与层冲突，不改写场景或 Prefab。
+- `Tools~/prepare_iron_oath_unity.py`：只向仓库外新目录/空目录生成验收工程，链接当前包、固定 GameplayTags、复制样例与测试并保留 metadata。
+- `Tests~/IronOath.Unity`：实际 JsonUtility、世界锚点/HUD、Prefab 缩放/排序/激活、销毁，以及 UI 点击→战斗→结算→读档和满包取舍流程。默认验收工程使用 Built-in 与 Legacy Input；URP、Input System Only 与实际 Spine 另行运行。
 
 ## 下一次继续的起点
 
 - 游戏入口：`Samples~/IronOath/Scenes/IronOathDemo.unity`，菜单 `Tools > Iron Oath > Open Demo`。
 - 已推送阶段：`1c58d41`（范围检查点）、`e3e1c32`（战斗）、`887e468`（经营），表现阶段见当前分支最新提交。
 - 现有数字以首章规则演示为目标，后续需依据实机试玩调整难度、收益、租金与内容节奏。
-- 下一步可直接在此分支进行 Unity 导入与画面验收，再接入实际角色 Prefab/Spine 动作和声音。不要从旧圣兽之王分支拼接代码，也不要把游戏规则搬入 GAS Core。
+- 下一步先生成独立 Unity 6000.3 验收工程，运行其 `ACCEPTANCE.md` 中的导入、EditMode、PlayMode 命令，再在实际 Game 视图检查 16:9 / 4:3 / 超宽屏与混合角色遮挡，并记录对应提交和截图。
+- 接入实际角色 Prefab/Spine 动作和声音后，重复绑定检查与目标项目的 URP / IL2CPP / 手机性能验证。真实动画资产、声音和设备验收仍未完成；不要从旧圣兽之王分支拼接代码，也不要把游戏规则搬入 GAS Core。

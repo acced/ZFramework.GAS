@@ -44,6 +44,7 @@ namespace IronOath.Presentation
                 if (_savedTactics[unit.Id] == null) _savedTactics[unit.Id] = new TacticRule[BattleUnit.TacticCount];
                 for (int row = 0; row < BattleUnit.TacticCount; row++) _savedTactics[unit.Id][row] = unit.GetTactic(row);
             }
+            Save();
         }
 
         BattleUnit FindUnit(int id)

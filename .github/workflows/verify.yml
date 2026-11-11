@@ -27,6 +27,11 @@ jobs:
         run: |
           python3 Tools~/verify_architecture.py
           python3 Tools~/iron_oath_metadata.py --check
+      - name: Verify isolated Unity project preparation
+        working-directory: ZFramework.GAS
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s Tests~/IronOathBootstrap -p 'test_*.py'
       - name: Compile portable core
         working-directory: ZFramework.GAS
         run: dotnet build Tests~/Core/Core.csproj -c Release -m:1 /nodeReuse:false -p:UseSharedCompilation=false

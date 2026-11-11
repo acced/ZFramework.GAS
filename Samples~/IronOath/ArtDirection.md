@@ -13,7 +13,7 @@
 | `Resources/IronOath/Art/BlackstoneMap.png` | 步进地下城地图底图 |
 | `Resources/IronOath/Fonts/IronOathSerif.otf` | 基于 Noto Serif CJK SC 的重命名字形子集；OFL 许可证在相邻文件 |
 
-没有生成 Spine 骨骼、角色切片或现成游戏角色。当前纹章式角色占位体由 `IronOathFigure` 绘制，便于检查站位和替换 Prefab。最终角色模型、动作、受击动画与声音需要项目资产接入。
+没有生成 Spine 骨骼、角色切片或现成游戏角色。战场的纹章式角色占位体由 `IronOathWorldGeometry` 生成世界空间网格，便于检查脚底站位、镜像和行遮挡；`IronOathFigure` 用于主角选择卡片的 UI 装饰。背景、脚底标记和阴影与角色一样处于世界空间，血条和反馈由 UGUI 投影显示。最终角色模型、动作、受击动画与声音需要项目资产接入。
 
 ## 生成提示词
 
