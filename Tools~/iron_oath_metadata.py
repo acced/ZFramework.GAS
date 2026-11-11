@@ -105,7 +105,7 @@ def main():
             continue
         missing.append(str(path.relative_to(ROOT)))
         if not args.check:
-            meta.write_text(metadata(path), encoding="utf-8")
+            meta.write_text("\n".join(line.rstrip() for line in metadata(path).splitlines()) + "\n", encoding="utf-8")
     if args.check and missing:
         raise SystemExit("Missing Unity metadata:\n" + "\n".join(missing))
     print("PASS: Iron Oath metadata complete." if args.check else f"Created {len(missing)} missing metadata files.")

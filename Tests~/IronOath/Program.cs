@@ -10,6 +10,7 @@ namespace IronOath.Tests
         private static int Main()
         {
             CombatTests.Run(Check);
+            CampaignTests.Run(Check);
             Console.WriteLine($"Iron Oath: {_passed} passed, {_failed} failed.");
             return _failed == 0 ? 0 : 1;
         }
