@@ -1,0 +1,7 @@
+{
+  "name": "IronOath.Unity.EditMode.Tests",
+  "rootNamespace": "IronOath.UnityTests",
+  "references": ["IronOath.Game", "IronOath.Presentation", "IronOath.Editor", "Unity.ugui"],
+  "includePlatforms": ["Editor"],
+  "optionalUnityReferences": ["TestAssemblies"]
+}

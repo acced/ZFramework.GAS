@@ -1,0 +1,6 @@
+{
+  "name": "IronOath.Unity.PlayMode.Tests",
+  "rootNamespace": "IronOath.UnityTests",
+  "references": ["IronOath.Game", "IronOath.Presentation", "Unity.ugui"],
+  "optionalUnityReferences": ["TestAssemblies"]
+}

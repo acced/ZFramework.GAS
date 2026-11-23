@@ -1,0 +1,6 @@
+{
+  "name": "IronOath.Editor",
+  "rootNamespace": "IronOath.Editor",
+  "references": ["IronOath.Presentation", "IronOath.Game"],
+  "includePlatforms": ["Editor"]
+}

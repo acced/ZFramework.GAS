@@ -1,0 +1,11 @@
+{
+  "name": "IronOath.Presentation",
+  "rootNamespace": "IronOath.Presentation",
+  "references": [
+    "IronOath.Game",
+    "ZFramework.GAS",
+    "ZFramework.GAS.Unity",
+    "ZFramework.GAS.Unity.Realtime",
+    "Unity.ugui"
+  ]
+}

@@ -1,0 +1,6 @@
+<linker>
+  <!-- Optional startup-only UI module resolution must also survive managed stripping. -->
+  <assembly fullname="Unity.InputSystem" ignoreIfMissing="1">
+    <type fullname="UnityEngine.InputSystem.UI.InputSystemUIInputModule" preserve="all" />
+  </assembly>
+</linker>
