@@ -148,12 +148,12 @@ namespace ZFramework.GAS.Editor
                     }
                     else if (TargetQuery.IsVolume(query.Kind))
                     {
-                        var shape = query.ResolveShape(values);
+                        var windowShape = query.ResolveShape(values);
                         var origin = query.EffectiveOrigin is SkillOrigin.Target or SkillOrigin.TargetPoint
                             ? source.TransformPoint(Vector3.forward * _targetDistance) : source.position;
                         var center = origin + source.rotation * window.offset;
-                        _tools.Query(shape, source, center, window.yaw);
-                        _contentBounds.Encapsulate(new Bounds(center, Vector3.one * (2f * Mathf.Max(shape.Radius, shape.HalfExtents.magnitude))));
+                        _tools.Query(windowShape, source, center, window.yaw);
+                        _contentBounds.Encapsulate(new Bounds(center, Vector3.one * (2f * Mathf.Max(windowShape.Radius, windowShape.HalfExtents.magnitude))));
                     }
                 }
                 catch (Exception error) { _rangeNote ??= error.Message; }
