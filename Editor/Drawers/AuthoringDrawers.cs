@@ -61,12 +61,18 @@ namespace ZFramework.GAS.Editor
             var fold = new Foldout { text = "数值：" + Summary(property), value = true }; root.Add(fold);
             void Build()
             {
-                fold.Clear(); fold.text = "数值：" + Summary(property);
+                if (property == null || property.serializedObject == null || property.serializedObject.targetObject == null) return;
+                property.serializedObject.UpdateIfRequiredOrScript();
+                fold.Unbind(); fold.Clear(); fold.text = "数值：" + Summary(property);
                 var kind = property.FindPropertyRelative("kind"); var type = new PropertyField(kind, "来源类型"); fold.Add(type); type.BindProperty(kind);
                 string[] paths = Fields((MagnitudeKind)kind.intValue);
-                foreach (var path in paths) { var field = new PropertyField(property.FindPropertyRelative(path)); fold.Add(field); field.BindProperty(property.FindPropertyRelative(path)); }
+                foreach (var path in paths) { var child = property.FindPropertyRelative(path); var field = new PropertyField(child); fold.Add(field); field.BindProperty(child); }
                 type.RegisterCallback<SerializedPropertyChangeEvent>(_ => root.schedule.Execute(Build));
             }
+            fold.RegisterCallback<SerializedPropertyChangeEvent>(_ =>
+            {
+                if (property?.serializedObject?.targetObject != null) fold.text = "数值：" + Summary(property);
+            });
             Build(); return root;
         }
         private static string[] Fields(MagnitudeKind kind) => kind switch
@@ -93,8 +99,15 @@ namespace ZFramework.GAS.Editor
     [CustomPropertyDrawer(typeof(ModifierAsset))]
     public sealed class ModifierDrawer : PropertyDrawer
     {
-        public static string Summary(SerializedProperty p) => AttributeCatalog.Name(p.FindPropertyRelative("targetAttributeId").intValue) + " " +
-            p.FindPropertyRelative("operation").enumDisplayNames[p.FindPropertyRelative("operation").enumValueIndex] + " " + MagnitudeDrawer.Summary(p.FindPropertyRelative("magnitude"));
+        public static string Summary(SerializedProperty p)
+        {
+            var op = p.FindPropertyRelative("operation");
+            string opName = op.enumValueIndex >= 0 && op.enumValueIndex < op.enumDisplayNames.Length
+                ? op.enumDisplayNames[op.enumValueIndex]
+                : ((ModifierOperation)op.intValue).ToString();
+            return AttributeCatalog.Name(p.FindPropertyRelative("targetAttributeId").intValue) + " " +
+                opName + " " + MagnitudeDrawer.Summary(p.FindPropertyRelative("magnitude"));
+        }
         public override VisualElement CreatePropertyGUI(SerializedProperty p)
         {
             var fold = new Foldout { text = Summary(p), value = true };

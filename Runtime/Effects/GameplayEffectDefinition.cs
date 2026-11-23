@@ -3,98 +3,51 @@ using System;
 
 namespace ZFramework.GAS
 {
-    public enum EffectDurationPolicy
-    {
-        /// <summary>立即结算并结束，直接改写 BaseValue，不授予标签。</summary>
-        Instant,
-        /// <summary>持续固定时长后自动过期。</summary>
-        Duration,
-        /// <summary>持续到被显式移除。</summary>
-        Infinite,
-    }
+    public enum EffectDurationPolicy { Instant, Duration, Infinite }
+    public enum EffectStacking { None, AggregateByTarget, AggregateBySource }
+    public enum StackOverflowPolicy { Deny, RemoveExisting }
+    public enum StackDurationRefreshPolicy { RefreshOnApply = 0, NeverRefresh = 1 }
+    public enum StackPeriodResetPolicy { KeepProgress = 0, ResetOnApply = 1 }
+    public enum MagnitudeKind { Fixed, AttributeScaled, Parameter = 3, LevelTable, Calculation }
+    public enum MagnitudeCapture { Source, Target }
+    public enum EffectTrigger { Applied, Periodic, Removed }
 
-    public enum EffectStacking
-    {
-        None,
-        /// <summary>同一目标上的同定义效果合并堆叠，不论来源。</summary>
-        AggregateByTarget,
-        /// <summary>同一来源施加的同定义效果才合并堆叠。</summary>
-        AggregateBySource,
-    }
-
-    public enum StackOverflowPolicy
-    {
-        /// <summary>已达上限时拒绝新应用，仅刷新既有效果。</summary>
-        Deny,
-        /// <summary>已达上限时移除既有效果，由调用方决定后续（如触发溢出分支）。</summary>
-        RemoveExisting,
-    }
-
-    public enum MagnitudeKind
-    {
-        Fixed,
-        /// <summary><c>Constant + Coefficient × 属性当前值</c>。</summary>
-        AttributeScaled,
-        Parameter = 3,
-        LevelTable,
-        Calculation,
-    }
-
-    public enum MagnitudeCapture
-    {
-        Source,
-        Target,
-    }
-
-    /// <summary>
-    /// 数值来源。**不解析字符串公式**——公式应在编辑期编译成本结构，运行期只做算术。
-    ///
-    /// 实测旧资产中出现的全部公式形态（<c>Caster.Attack * 1.5</c>、<c>1 - Caster.SlowRate</c>、
-    /// <c>Target.Health * 0.3</c>）都可由 <c>Constant + Coefficient × 属性</c> 表达。
-    /// </summary>
+    /// <summary>数值来源：编辑期配置为结构，运行期只做算术。</summary>
     public readonly struct EffectMagnitude
     {
         public readonly MagnitudeKind Kind;
-        public readonly float Constant;
-        public readonly float Coefficient;
+        public readonly float Constant, Coefficient;
         public readonly AttributeId CaptureAttribute;
         public readonly MagnitudeCapture CaptureFrom;
         public readonly string ParameterId;
         internal readonly float[] Levels;
         internal readonly IEffectCalculation Calculation;
 
-        private EffectMagnitude(
-            MagnitudeKind kind, float constant, float coefficient,
+        private EffectMagnitude(MagnitudeKind kind, float constant, float coefficient,
             AttributeId captureAttribute, MagnitudeCapture captureFrom, string parameterId,
             float[] levels = null, IEffectCalculation calculation = null)
         {
-            if (!float.IsFinite(constant) || !float.IsFinite(coefficient)) throw new ArgumentException("Effect magnitude must be finite.");
-            if (levels != null) foreach (float value in levels) if (!float.IsFinite(value)) throw new ArgumentException("Effect level table must be finite.");
-            Kind = kind;
-            Constant = constant;
-            Coefficient = coefficient;
-            CaptureAttribute = captureAttribute;
-            CaptureFrom = captureFrom;
-            ParameterId = parameterId;
-            Levels = levels;
-            Calculation = calculation;
+            if (!float.IsFinite(constant) || !float.IsFinite(coefficient))
+                throw new ArgumentException("Effect magnitude must be finite.");
+            if (levels != null)
+                for (int i = 0; i < levels.Length; i++)
+                    if (!float.IsFinite(levels[i])) throw new ArgumentException("Effect level table must be finite.");
+
+            Kind = kind; Constant = constant; Coefficient = coefficient;
+            CaptureAttribute = captureAttribute; CaptureFrom = captureFrom;
+            ParameterId = parameterId; Levels = levels; Calculation = calculation;
         }
 
-        public static EffectMagnitude Fixed(float value)
-            => new(MagnitudeKind.Fixed, value, 0f, default, default, null);
-
-        public static EffectMagnitude FromAttribute(
-            AttributeId attribute, float coefficient, MagnitudeCapture captureFrom, float constant = 0f)
+        public static EffectMagnitude Fixed(float value) => new(MagnitudeKind.Fixed, value, 0f, default, default, null);
+        public static EffectMagnitude FromAttribute(AttributeId attribute, float coefficient, MagnitudeCapture captureFrom, float constant = 0f)
             => new(MagnitudeKind.AttributeScaled, constant, coefficient, attribute, captureFrom, null);
-
-        public static EffectMagnitude FromParameter(string id, float coefficient = 1, float constant = 0)
-            => new(MagnitudeKind.Parameter, constant, coefficient, default, default,
-                id ?? throw new ArgumentNullException(nameof(id)));
+        public static EffectMagnitude FromParameter(string id, float coefficient = 1f, float constant = 0f)
+            => new(MagnitudeKind.Parameter, constant, coefficient, default, default, id ?? throw new ArgumentNullException(nameof(id)));
         public static EffectMagnitude ByLevel(params float[] values)
-            => new(MagnitudeKind.LevelTable, 0, 0, default, default, null,
+            => new(MagnitudeKind.LevelTable, 0f, 0f, default, default, null,
                 values != null && values.Length > 0 ? (float[])values.Clone() : throw new ArgumentException("Empty level table."));
         public static EffectMagnitude FromCalculation(IEffectCalculation calculation)
-            => new(MagnitudeKind.Calculation, 0, 0, default, default, null, null,
+            => new(MagnitudeKind.Calculation, 0f, 0f, default, default, null, null,
                 calculation ?? throw new ArgumentNullException(nameof(calculation)));
     }
 
@@ -106,73 +59,44 @@ namespace ZFramework.GAS
 
         public EffectModifier(AttributeId target, ModifierOperation operation, in EffectMagnitude magnitude)
         {
-            Target = target;
-            Operation = operation;
-            Magnitude = magnitude;
+            Target = target; Operation = operation; Magnitude = magnitude;
         }
     }
 
-    /// <summary>效果涉及的五组标签，作为一个整体随定义传递。</summary>
     public readonly struct EffectTags
     {
-        /// <summary>效果生效期间授予目标的标签（Instant 效果不授予）。</summary>
-        public readonly GameplayTagSet Granted;
-        /// <summary>目标必须全部拥有，否则无法应用。</summary>
-        public readonly GameplayTagSet ApplicationRequired;
-        /// <summary>目标拥有其中任一即免疫本效果。</summary>
-        public readonly GameplayTagSet ApplicationBlocked;
-        /// <summary>生效期间目标获得其中任一，本效果立即移除。</summary>
-        public readonly GameplayTagSet OngoingBlocked;
-        /// <summary>应用成功时，移除目标身上授予了其中任一标签的其他效果。</summary>
-        public readonly GameplayTagSet RemoveEffectsWith;
+        public readonly GameplayTagSet Granted, ApplicationRequired, ApplicationBlocked, OngoingBlocked, RemoveEffectsWith, OngoingRequired;
 
         public EffectTags(
             GameplayTagSet granted = default,
             GameplayTagSet applicationRequired = default,
             GameplayTagSet applicationBlocked = default,
             GameplayTagSet ongoingBlocked = default,
-            GameplayTagSet removeEffectsWith = default)
+            GameplayTagSet removeEffectsWith = default,
+            GameplayTagSet ongoingRequired = default)
         {
-            Granted = granted;
-            ApplicationRequired = applicationRequired;
-            ApplicationBlocked = applicationBlocked;
-            OngoingBlocked = ongoingBlocked;
-            RemoveEffectsWith = removeEffectsWith;
+            Granted = granted; ApplicationRequired = applicationRequired; ApplicationBlocked = applicationBlocked;
+            OngoingBlocked = ongoingBlocked; RemoveEffectsWith = removeEffectsWith; OngoingRequired = ongoingRequired;
         }
     }
 
     public readonly struct EffectStackingRule
     {
         public readonly EffectStacking Mode;
-        /// <summary>层数上限；<c>&lt;= 0</c> 表示不限。</summary>
         public readonly int Limit;
         public readonly StackOverflowPolicy Overflow;
+        public readonly StackDurationRefreshPolicy DurationRefresh;
+        public readonly StackPeriodResetPolicy PeriodReset;
 
-        public EffectStackingRule(EffectStacking mode, int limit = 0, StackOverflowPolicy overflow = StackOverflowPolicy.Deny)
+        public EffectStackingRule(EffectStacking mode, int limit = 0,
+            StackOverflowPolicy overflow = StackOverflowPolicy.Deny,
+            StackDurationRefreshPolicy durationRefresh = StackDurationRefreshPolicy.RefreshOnApply,
+            StackPeriodResetPolicy periodReset = StackPeriodResetPolicy.KeepProgress)
         {
-            Mode = mode;
-            Limit = limit;
-            Overflow = overflow;
+            Mode = mode; Limit = limit; Overflow = overflow; DurationRefresh = durationRefresh; PeriodReset = periodReset;
         }
     }
 
-    /// <summary>子效果的触发时机。</summary>
-    public enum EffectTrigger
-    {
-        /// <summary>父效果成功应用时（Instant 结算完毕、或持续效果开始生效）。</summary>
-        Applied,
-        /// <summary>父效果每次周期跳动时。</summary>
-        Periodic,
-        /// <summary>父效果被移除时（到期、被清除、被覆盖）。</summary>
-        Removed,
-    }
-
-    /// <summary>
-    /// 挂在父效果上的子效果：在指定时机施加到**同一目标**，来源沿用父效果的来源。
-    ///
-    /// 这取代了旧实现中「效果节点的六个图端口连出子节点」的机制——
-    /// 子效果自身的 <c>ApplicationRequired/Blocked</c> 标签就是条件判定，无需独立的条件节点。
-    /// </summary>
     public readonly struct ConditionalEffect
     {
         public readonly GameplayEffectDefinition Effect;
@@ -180,46 +104,30 @@ namespace ZFramework.GAS
 
         public ConditionalEffect(GameplayEffectDefinition effect, EffectTrigger trigger)
         {
-            Effect = effect ?? throw new ArgumentNullException(nameof(effect));
-            Trigger = trigger;
+            Effect = effect ?? throw new ArgumentNullException(nameof(effect)); Trigger = trigger;
         }
     }
 
-    /// <summary>
-    /// 效果**定义**：不可变的配置，多个目标共享同一实例。
-    /// 对应 UE 的 <c>UGameplayEffect</c>（CDO）——定义本身不持有任何运行时状态。
-    ///
-    /// 堆叠身份即定义的引用相等：同一个定义实例施加的效果才可能相互堆叠。
-    /// </summary>
+    /// <summary>不可变效果定义；堆叠身份按定义引用判定。</summary>
     public sealed class GameplayEffectDefinition
     {
         private readonly EffectModifier[] _modifiers;
         private readonly ConditionalEffect[] _conditionalEffects;
+        private readonly GameplayTagRequirements _applicationRequirements;
+        private readonly GameplayTagRequirements _ongoingRequirements;
 
         public EffectDurationPolicy DurationPolicy { get; }
-        /// <summary>仅 <see cref="EffectDurationPolicy.Duration"/> 有效，单位秒。</summary>
         public float Duration { get; }
         public EffectMagnitude? DurationMagnitude { get; }
         public EffectMagnitude? PeriodMagnitude { get; }
-        /// <summary>周期间隔秒；<c>&lt;= 0</c> 表示非周期效果。</summary>
         public float Period { get; }
-        /// <summary>应用当帧是否立即结算一次周期。</summary>
         public bool ExecutePeriodicOnApplication { get; }
         public ReadOnlySpan<EffectModifier> Modifiers => _modifiers;
         public EffectTags Tags { get; }
-        private readonly GameplayTagRequirements _applicationRequirements;
-        private readonly GameplayTagRequirements _ongoingRequirements;
         public ref readonly GameplayTagRequirements ApplicationRequirements => ref _applicationRequirements;
         public ref readonly GameplayTagRequirements OngoingRequirements => ref _ongoingRequirements;
         public EffectStackingRule Stacking { get; }
-
-        /// <summary>
-        /// 表现层标签。Instant 应用与每次周期跳动派发 <see cref="GameplayCueEvent.Executed"/>；
-        /// 持续效果生效与移除分别派发 <c>OnActive</c> 与 <c>Removed</c>。
-        /// </summary>
         public GameplayTagSet CueTags { get; }
-
-        /// <summary>在本效果的特定时机施加到同一目标的子效果。</summary>
         public ReadOnlySpan<ConditionalEffect> ConditionalEffects => _conditionalEffects;
 
         public GameplayEffectDefinition(
@@ -235,22 +143,18 @@ namespace ZFramework.GAS
             EffectMagnitude? durationMagnitude = null,
             EffectMagnitude? periodMagnitude = null)
         {
-            if (!float.IsFinite(duration) || duration < 0 || !float.IsFinite(period) || period < 0)
+            if (!float.IsFinite(duration) || duration < 0f || !float.IsFinite(period) || period < 0f)
                 throw new ArgumentOutOfRangeException(nameof(duration), "Effect duration/period must be finite and nonnegative.");
-            DurationPolicy = durationPolicy;
-            Duration = duration;
-            DurationMagnitude = durationMagnitude;
-            PeriodMagnitude = periodMagnitude;
-            _modifiers = modifiers.ToArray();
+
+            DurationPolicy = durationPolicy; Duration = duration;
+            DurationMagnitude = durationMagnitude; PeriodMagnitude = periodMagnitude;
+            Period = period; ExecutePeriodicOnApplication = executePeriodicOnApplication;
+            _modifiers = modifiers.IsEmpty ? Array.Empty<EffectModifier>() : modifiers.ToArray();
             Tags = tags;
-            _applicationRequirements = GameplayTagRequirements.Create(
-                tags.ApplicationBlocked.AsSpan(), tags.ApplicationRequired.AsSpan());
-            _ongoingRequirements = GameplayTagRequirements.Create(tags.OngoingBlocked.AsSpan(), default);
-            Stacking = stacking;
-            Period = period;
-            ExecutePeriodicOnApplication = executePeriodicOnApplication;
-            CueTags = cueTags;
-            _conditionalEffects = conditionalEffects.ToArray();
+            _applicationRequirements = GameplayTagRequirements.Create(tags.ApplicationBlocked.AsSpan(), tags.ApplicationRequired.AsSpan());
+            _ongoingRequirements = GameplayTagRequirements.Create(tags.OngoingBlocked.AsSpan(), tags.OngoingRequired.AsSpan());
+            Stacking = stacking; CueTags = cueTags;
+            _conditionalEffects = conditionalEffects.IsEmpty ? Array.Empty<ConditionalEffect>() : conditionalEffects.ToArray();
         }
     }
 }

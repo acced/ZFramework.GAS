@@ -25,7 +25,7 @@ namespace ZFramework.GAS.Editor
             [typeof(AnimationClip)] = new UnityClipEditor()
         };
 
-        public static void Register(IAnimationClipEditor editor) => Editors.Add(editor.AssetType, editor);
+        public static void Register(IAnimationClipEditor editor) => Editors[editor.AssetType] = editor;
 
         public static bool TryGet(Object clip, out IAnimationClipEditor editor)
         {

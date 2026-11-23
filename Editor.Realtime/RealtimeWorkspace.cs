@@ -23,7 +23,7 @@ namespace ZFramework.GAS.Editor
             _previewField.RegisterValueChangedCallback(e =>
             {
                 _doc.PreviewPrefab = e.newValue as GameObject; _doc.Layout.PreviewPrefab = _doc.PreviewPrefab; _doc.Layout.Save();
-                _preview.Load(); SyncToolbar(); _doc.Notify(new ChangeSet(_doc.Root, true));
+                _preview.Load(); SyncToolbar();
             }); context.Add(_previewField);
             _preview.Load();
         }

@@ -11,13 +11,13 @@ namespace ZFramework.GAS.Editor
         public override VisualElement CreatePropertyGUI(SerializedProperty property)
         {
             var root = new VisualElement();
-            foreach (string name in new[] { "start", "end", "effect", "targets" })
+            foreach (string name in new[] { "start", "end", "effect", "hitInterval", "targets" })
                 root.Add(new PropertyField(property.FindPropertyRelative(name)));
             var placement = new VisualElement(); root.Add(placement);
             placement.Add(new PropertyField(property.FindPropertyRelative("offset")));
             placement.Add(new PropertyField(property.FindPropertyRelative("yaw")));
             var kind = property.FindPropertyRelative("targets.kind");
-            void Refresh(SerializedProperty p) => placement.style.display = TargetQuery.IsVolume((TargetQueryKind)p.enumValueIndex) ? DisplayStyle.Flex : DisplayStyle.None;
+            void Refresh(SerializedProperty p) => placement.style.display = TargetQuery.IsVolume((TargetQueryKind)p.intValue) ? DisplayStyle.Flex : DisplayStyle.None;
             Refresh(kind); root.TrackPropertyValue(kind, Refresh);
             return root;
         }

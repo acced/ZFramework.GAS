@@ -29,7 +29,7 @@ namespace ZFramework.GAS.Editor
         internal static IEnumerable<SkillFlowEntry> Entries(SerializedObject asset) =>
             asset != null && Supports(asset.targetObject) ? Timeline.Entries(asset) : Array.Empty<SkillFlowEntry>();
         internal static IEnumerable<SkillTimelineEffectSlot> EffectSlots(SerializedObject asset) =>
-            Supports(asset.targetObject) && Timeline is ISkillTimelineEffectSlots slots ? slots.EffectSlots(asset) : Array.Empty<SkillTimelineEffectSlot>();
+            asset != null && Supports(asset.targetObject) && Timeline is ISkillTimelineEffectSlots slots ? slots.EffectSlots(asset) : Array.Empty<SkillTimelineEffectSlot>();
     }
 
     public interface ISkillTimelineEditor

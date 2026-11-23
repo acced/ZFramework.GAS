@@ -45,10 +45,12 @@ namespace ZFramework.GAS.Editor
                 Active = spec.IsActive; OnCooldown = spec.IsOnCooldown;
                 TagGatePassed = spec.Definition.ActivationRequirements.Matches(spec.Owner.OwnedTags);
                 Level = spec.IsActive ? spec.EvaluationContext?.Level ?? spec.Level : spec.Level; CooldownRemaining = spec.CooldownRemaining;
-                ActivationCheck = spec.Owner.CheckActivation(spec);
+                try { ActivationCheck = spec.Owner.CheckActivation(spec); }
+                catch (Exception ex) { ActivationCheck = new AbilityActivationCheck(AbilityActivationResult.InvalidConfiguration, ex.Message); }
                 var parameters = new List<KeyValuePair<string, SkillParameterValue>>();
                 spec.EvaluationContext?.Parameters.CopyTo(parameters); Parameters = parameters.AsReadOnly();
-                CooldownDuration = spec.CooldownDuration;
+                try { CooldownDuration = spec.CooldownDuration; }
+                catch (Exception) { CooldownDuration = 0f; }
             }
         }
         // Frozen common data for runtime follow; the provider owns the optional detail strip.

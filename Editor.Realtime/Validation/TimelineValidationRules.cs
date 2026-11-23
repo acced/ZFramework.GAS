@@ -50,6 +50,7 @@ namespace ZFramework.GAS.Editor
         public void Validate(ValidationContext c, ScriptableObject asset, List<Issue> issues)
         {
             if (asset is not SkillAnimationAsset animation) return;
+            if (!float.IsFinite(animation.Duration) || animation.Duration <= 0f) return;
             if (!float.IsFinite(animation.BlendIn) || animation.BlendIn < 0 || animation.BlendIn > animation.Duration)
                 c.Add(issues, Id, asset, "blendIn", "混入时长须在 0 到时间轴时长之间。",
                     fix: c.Edit(asset, "修复混入时长", so => so.FindProperty("blendIn").floatValue =

@@ -72,6 +72,8 @@ namespace ZFramework.GAS.Editor
             _instance.hideFlags = HideFlags.HideAndDontSave;
             foreach (var behaviour in _instance.GetComponentsInChildren<Behaviour>(true))
                 if (behaviour != null) behaviour.enabled = false;
+            foreach (var ps in _instance.GetComponentsInChildren<ParticleSystem>(true))
+                if (ps != null) ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
             if (_clip != null)
             {
                 try
@@ -101,7 +103,8 @@ namespace ZFramework.GAS.Editor
             if (_instance == null) return;
             _error = _samplerError;
             var animation = _doc.Root?.Animation();
-            void Pose(float time) => _sampler?.Sample(animation != null ? time / animation.Duration : 0);
+            float duration = animation != null && float.IsFinite(animation.Duration) && animation.Duration > 0f ? animation.Duration : 0f;
+            void Pose(float time) => _sampler?.Sample(duration > 0f ? time / duration : 0f);
             try
             {
                 if (_samplerError == null)
@@ -127,16 +130,33 @@ namespace ZFramework.GAS.Editor
                 _contentBounds.Encapsulate(new Bounds(center, Vector3.one * (2 * Mathf.Max(shape.Radius, shape.HalfExtents.magnitude))));
             }
             var animation = _doc.Root?.Animation();
-            if (animation == null) return;
-            var values = new EffectEvaluationContext(_level, _doc.Root.ResolveParameters(_level));
+            if (animation == null || animation.hitWindows == null) return;
+            EffectEvaluationContext values;
+            try { values = new EffectEvaluationContext(_level, _doc.Root.ResolveParameters(_level)); }
+            catch (Exception error) { _rangeNote ??= error.Message; return; }
+            var hitboxes = _instance.GetComponent<SkillHitboxes>();
             foreach (var window in animation.hitWindows)
             {
-                if (_doc.Playback.Time < window.start || _doc.Playback.Time >= window.end) continue;
-                var query = window.targets.Build();
-                if (query.Kind == TargetQueryKind.Hitbox && SkillColliderVolume.TryRead(_instance.GetComponent<SkillHitboxes>()?.Find(query.SourceKey), out var weapon))
-                    _tools.Hitbox(weapon);
-                else if (TargetQuery.IsVolume(query.Kind) && query.EffectiveOrigin == SkillOrigin.Caster)
-                    _tools.Query(query.ResolveShape(values), source, source.position + source.rotation * window.offset, window.yaw);
+                if (window == null || _doc.Playback.Time < window.start || _doc.Playback.Time >= window.end) continue;
+                try
+                {
+                    var query = window.targets.Build();
+                    if (query.Kind == TargetQueryKind.Hitbox && SkillColliderVolume.TryRead(hitboxes?.Find(query.SourceKey), out var weapon))
+                    {
+                        _tools.Hitbox(weapon);
+                        _contentBounds.Encapsulate(new Bounds(weapon.Center, weapon.IsBox ? weapon.HalfSize * 2f : Vector3.one * (2f * (weapon.Radius + weapon.Axis.magnitude))));
+                    }
+                    else if (TargetQuery.IsVolume(query.Kind))
+                    {
+                        var shape = query.ResolveShape(values);
+                        var origin = query.EffectiveOrigin is SkillOrigin.Target or SkillOrigin.TargetPoint
+                            ? source.TransformPoint(Vector3.forward * _targetDistance) : source.position;
+                        var center = origin + source.rotation * window.offset;
+                        _tools.Query(shape, source, center, window.yaw);
+                        _contentBounds.Encapsulate(new Bounds(center, Vector3.one * (2f * Mathf.Max(shape.Radius, shape.HalfExtents.magnitude))));
+                    }
+                }
+                catch (Exception error) { _rangeNote ??= error.Message; }
             }
         }
         private void Draw()
@@ -146,9 +166,9 @@ namespace ZFramework.GAS.Editor
             var evt = Event.current;
             if (rect.Contains(evt.mousePosition))
             {
-                if (evt.type == EventType.MouseDrag && evt.button == 0) { _orbit += evt.delta * .6f; evt.Use(); _viewport.MarkDirtyRepaint(); }
+                if (evt.type == EventType.MouseDrag && evt.button == 0) { _orbit = new Vector2(_orbit.x + evt.delta.x * .6f, Mathf.Clamp(_orbit.y + evt.delta.y * .6f, -89f, 89f)); evt.Use(); _viewport.MarkDirtyRepaint(); }
                 if (evt.type == EventType.ScrollWheel) { _distance = Mathf.Clamp(_distance * (1 + evt.delta.y * .05f), .2f, 100); evt.Use(); _viewport.MarkDirtyRepaint(); }
-                if (evt.type == EventType.MouseDown && evt.clickCount == 2) { _distance = Mathf.Max(1, _bounds.size.magnitude * 1.7f); evt.Use(); }
+                if (evt.type == EventType.MouseDown && evt.clickCount == 2) { _distance = Mathf.Max(1, _bounds.size.magnitude * 1.7f); evt.Use(); _viewport.MarkDirtyRepaint(); }
             }
             if (evt.type != EventType.Repaint) return;
             _preview.BeginPreview(rect, GUIStyle.none); _tools.Draw(_preview);

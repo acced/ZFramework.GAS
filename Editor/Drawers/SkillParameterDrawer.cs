@@ -25,7 +25,8 @@ namespace ZFramework.GAS.Editor
                 tooltip = "参数 ID：" + property.FindPropertyRelative("id").stringValue };
             fold.AddToClassList("skill-parameter");
             foreach (var field in Fields) fold.Add(new PropertyField(property.FindPropertyRelative(field.path), field.label));
-            fold.TrackPropertyValue(property.FindPropertyRelative("displayName"), _ => fold.text = Title(property));
+            var displayName = property.FindPropertyRelative("displayName");
+            fold.TrackPropertyValue(displayName, p => fold.text = string.IsNullOrWhiteSpace(p.stringValue) ? "未命名参数" : p.stringValue);
             return fold;
         }
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)

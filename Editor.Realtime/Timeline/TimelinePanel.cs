@@ -16,6 +16,7 @@ namespace ZFramework.GAS.Editor
         private readonly VisualElement _tracks, _ruler, _head;
         private readonly Label _clock;
         private readonly Button _play;
+        private readonly ToolbarToggle _loopToggle;
         private readonly List<ElementView> _elements = new();
         private readonly List<RowView> _rows = new();
         private readonly HashSet<string> _foldedCues = new();
@@ -32,6 +33,7 @@ namespace ZFramework.GAS.Editor
         private (string track, string id)[] _copyIds;
         private float _copyOrigin;
         private readonly VisualElement _clipRow;
+        private FloatField _blendInField, _blendOutField, _fpsField;
         private Label _clipCaption;
         private Label _tail;
         private BlendRamps _ramps;
@@ -59,7 +61,7 @@ namespace ZFramework.GAS.Editor
             toolbar.Add(new ToolbarButton(() => Seek(0)) { text = "|◀", tooltip = "跳到开始 Home" });
             _play = new ToolbarButton(TogglePlay) { text = "▶", tooltip = "播放 / 暂停 Space" }; toolbar.Add(_play);
             toolbar.Add(new ToolbarButton(() => Seek(doc.PlaybackDuration)) { text = "▶|", tooltip = "跳到末尾 End" });
-            var loop = new ToolbarToggle { text = "循环", value = doc.Playback.Loop }; loop.RegisterValueChangedCallback(e => doc.Playback.Loop = e.newValue); toolbar.Add(loop);
+            _loopToggle = new ToolbarToggle { text = "循环", value = doc.Playback.Loop }; _loopToggle.RegisterValueChangedCallback(e => doc.Playback.Loop = e.newValue); toolbar.Add(_loopToggle);
             _clock = new Label(); _clock.AddToClassList("timeline-clock"); toolbar.Add(_clock);
             var speed = new PopupField<string>(new List<string> { "×0.5", "×1.0", "×1.5", "×2.0", "×3.0" }, 1) { tooltip = "攻速预览；虚影显示实际触发时间" };
             speed.style.width = 72; speed.RegisterValueChangedCallback(e => { doc.Playback.Speed = float.Parse(e.newValue.Substring(1), System.Globalization.CultureInfo.InvariantCulture); Rebuild(new ChangeSet(doc.Root)); }); toolbar.Add(speed);
@@ -76,15 +78,16 @@ namespace ZFramework.GAS.Editor
             _marquee.AddToClassList("timeline-marquee");
             _ruler.RegisterCallback<PointerDownEvent>(e => { if (e.button != 0) return; _scrub = true; Focus(); _ruler.CapturePointer(e.pointerId); Seek(TimeAt(e.localPosition.x)); });
             _ruler.RegisterCallback<PointerMoveEvent>(e => { if (_scrub) Seek(TimeAt(e.localPosition.x)); });
-            _ruler.RegisterCallback<PointerUpEvent>(e => { _scrub = false; _ruler.ReleasePointer(e.pointerId); });
+            _ruler.RegisterCallback<PointerUpEvent>(e => { if (_scrub) { _scrub = false; _ruler.ReleasePointer(e.pointerId); } });
+            _ruler.RegisterCallback<PointerCaptureOutEvent>(_ => { _scrub = false; });
             RegisterCallback<WheelEvent>(e =>
             {
-                if (!e.ctrlKey && !_ruler.worldBound.Contains(e.mousePosition)) return;
+                if (!e.actionKey && !_ruler.worldBound.Contains(e.mousePosition)) return;
                 float local = e.mousePosition.x - worldBound.x - HeaderWidth;
                 float time = TimeAt(local); _zoom = Mathf.Clamp(_zoom * (e.delta.y < 0 ? 1.15f : .87f), 30, 4000);
                 _offset = Mathf.Max(0, time * _zoom - local); PackRows(); PositionElements(); DrawRuler(); e.StopPropagation();
             }, TrickleDown.TrickleDown);
-            _ruler.tooltip = "滚轮缩放 · 轨道区滚轮上下滚动 · Ctrl + 滚轮缩放 · 中键平移";
+            _ruler.tooltip = "滚轮缩放 · 轨道区滚轮上下滚动 · Ctrl/Cmd + 滚轮缩放 · 中键平移";
             _tracks.RegisterCallback<PointerDownEvent>(e => { if (e.button == 2) { _pan = true; _panX = e.position.x; _tracks.CapturePointer(e.pointerId); e.StopPropagation(); } });
             _tracks.RegisterCallback<PointerMoveEvent>(e => { if (_pan) { _offset = Mathf.Max(0, _offset - (e.position.x - _panX)); _panX = e.position.x; PositionElements(); DrawRuler(); } });
             _tracks.RegisterCallback<PointerUpEvent>(e => { if (_pan) { _pan = false; _tracks.ReleasePointer(e.pointerId); } });
@@ -92,7 +95,7 @@ namespace ZFramework.GAS.Editor
             {
                 if (e.button != 0 || e.clickCount != 1 || e.target is not VisualElement target || !target.ClassListContains("track-lane")) return;
                 _selectionStart = _tracks.WorldToLocal(e.position); _selecting = true;
-                _selectionBefore = e.ctrlKey || e.shiftKey ? new HashSet<string>(_selected) : new HashSet<string>();
+                _selectionBefore = e.actionKey || e.shiftKey ? new HashSet<string>(_selected) : new HashSet<string>();
                 _tracks.CapturePointer(e.pointerId);
             });
             _tracks.RegisterCallback<PointerMoveEvent>(e =>
@@ -119,7 +122,7 @@ namespace ZFramework.GAS.Editor
                 var last = _elements.LastOrDefault(x => _selected.Contains(x.Key));
                 _doc.Selection.Select(_doc.Root?.Animation(), last?.Track.PropertyPath, last?.Id);
             });
-            _tracks.RegisterCallback<PointerCaptureOutEvent>(_ => { _selecting = false; _marquee.style.display = DisplayStyle.None; });
+            _tracks.RegisterCallback<PointerCaptureOutEvent>(_ => { _pan = false; _selecting = false; _marquee.style.display = DisplayStyle.None; });
             RegisterCallback<KeyDownEvent>(OnKey);
             RegisterCallback<GeometryChangedEvent>(_ => { DrawRuler(); PositionElements(); });
             doc.Changed += Rebuild; doc.Selection.Changed += SelectionChanged; doc.Playback.Changed += PlaybackChanged;
@@ -127,7 +130,7 @@ namespace ZFramework.GAS.Editor
         }
         private float Duration => ValidPositive(_doc.Root?.Animation()?.Duration ?? 1, 1);
         private float Fps => ValidPositive(_doc.Root?.Animation()?.FrameRate ?? 30, 30);
-        private static float ValidPositive(float value, float fallback) => value > 0 && !float.IsInfinity(value) ? value : fallback;
+        private static float ValidPositive(float value, float fallback) => value > 0 && float.IsFinite(value) ? value : fallback;
         private float TimeAt(float x) => TimelineMath.Time(x, _zoom, _offset);
         private void Seek(float time) { if (!_doc.Playback.Live) _doc.Playback.Seek(time, _doc.PlaybackDuration); }
         public void TogglePlay() { if (_doc.Playback.Live) return; _doc.Playback.Playing = !_doc.Playback.Playing; if (_doc.Playback.Time >= _doc.PlaybackDuration) Seek(0); PlaybackChanged(); }
@@ -154,14 +157,18 @@ namespace ZFramework.GAS.Editor
                     if (!regroup)
                     {
                         if (_clipCaption != null) _clipCaption.text = (_animation.Clip != null ? _animation.Clip.name : "时间轴") + $" · {_animation.Duration:0.##}s";
-                        _ramps?.MarkDirtyRepaint(); UpdateFrameData(_tracks.Q<Label>("frame-data")); PackRows(); PositionElements(); DrawRuler(); SelectionChanged(); PlaybackChanged(); return;
+                        _blendInField?.SetValueWithoutNotify(_animation.BlendIn);
+                        _blendOutField?.SetValueWithoutNotify(_animation.BlendOut);
+                        _fpsField?.SetValueWithoutNotify(_animation.FrameRate);
+                        _ramps?.SyncFromAsset(); UpdateFrameData(_tracks.Q<Label>("frame-data")); PackRows(); PositionElements(); DrawRuler(); SelectionChanged(); PlaybackChanged(); return;
                     }
                 }
             }
             _rebuildPending = false;
             _elements.Clear(); _rows.Clear(); _tracks.Clear(); _clipRow.Clear(); _ramps = null; _clipCaption = null;
+            _blendInField = null; _blendOutField = null; _fpsField = null;
             var animation = _doc.Root?.Animation();
-            if (_animation != animation) { _foldedCues.Clear(); _selected.Clear(); _animation = animation; }
+            if (_animation != animation) { _foldedCues.Clear(); _selected.Clear(); _rangeStartId = null; _animation = animation; }
             if (animation == null)
             {
                 var empty = new Button(() =>
@@ -320,18 +327,19 @@ namespace ZFramework.GAS.Editor
             _clipRow.Add(picker);
             var sync = new Button(() => SetClip(animation.Clip, animation)) { text = "同步时长" };
             sync.SetEnabled(animation.Clip != null); _clipRow.Add(sync);
-            BlendField(animation, "混入", "blendIn", "从当前姿势线性过渡到技能动画的秒数；0 为硬切。", animation.BlendIn);
-            BlendField(animation, "混出", "blendOut", "结束或被打断后线性退出技能动画的秒数；0 为硬切。", animation.BlendOut);
-            var fps = new FloatField { value = animation.FrameRate, isDelayed = true, tooltip = "帧率 / 吸附单位", style = { width = 50 } };
-            fps.RegisterValueChangedCallback(e => EditCommand.Run(_doc, "修改吸附帧率", animation, so => so.FindProperty("frameRate").floatValue = Mathf.Max(1, e.newValue)));
-            _clipRow.Add(fps); _clipRow.Add(new Label("fps"));
+            _blendInField = BlendField(animation, "混入", "blendIn", "从当前姿势线性过渡到技能动画的秒数；0 为硬切。", animation.BlendIn);
+            _blendOutField = BlendField(animation, "混出", "blendOut", "结束或被打断后线性退出技能动画的秒数；0 为硬切。", animation.BlendOut);
+            _fpsField = new FloatField { value = animation.FrameRate, isDelayed = true, tooltip = "帧率 / 吸附单位", style = { width = 50 } };
+            _fpsField.RegisterValueChangedCallback(e => EditCommand.Run(_doc, "修改吸附帧率", animation, so => so.FindProperty("frameRate").floatValue = Mathf.Max(1, e.newValue)));
+            _clipRow.Add(_fpsField); _clipRow.Add(new Label("fps"));
         }
-        private void BlendField(SkillAnimationAsset animation, string label, string property, string tooltip, float value)
+        private FloatField BlendField(SkillAnimationAsset animation, string label, string property, string tooltip, float value)
         {
             _clipRow.Add(new Label(label) { tooltip = tooltip });
             var field = new FloatField { value = value, isDelayed = true, tooltip = tooltip, style = { width = 46 } };
             field.RegisterValueChangedCallback(e => SetBlend(animation, property, e.newValue));
             _clipRow.Add(field);
+            return field;
         }
 
         private void SetBlend(SkillAnimationAsset animation, string property, float value)
@@ -365,6 +373,13 @@ namespace ZFramework.GAS.Editor
                 Layout();
             }
 
+            public void SyncFromAsset()
+            {
+                _blendIn = _animation.BlendIn;
+                _blendOut = _animation.BlendOut;
+                Layout();
+            }
+
             public void Layout()
             {
                 float zoom = _owner._zoom;
@@ -385,7 +400,7 @@ namespace ZFramework.GAS.Editor
                 handle.RegisterCallback<PointerDownEvent>(e =>
                 {
                     if (e.button != 0) return;
-                    dragging = true; handle.CapturePointer(e.pointerId); _owner.Focus(); e.StopPropagation();
+                    dragging = true; _owner._dragging = true; handle.CapturePointer(e.pointerId); _owner.Focus(); e.StopPropagation();
                 });
                 handle.RegisterCallback<PointerMoveEvent>(e =>
                 {
@@ -398,8 +413,16 @@ namespace ZFramework.GAS.Editor
                 handle.RegisterCallback<PointerUpEvent>(e =>
                 {
                     if (!dragging) return;
-                    dragging = false; handle.ReleasePointer(e.pointerId); e.StopPropagation();
+                    dragging = false; _owner._dragging = false; handle.ReleasePointer(e.pointerId); e.StopPropagation();
                     _owner.SetBlend(_animation, property, property == "blendIn" ? _blendIn : _blendOut);
+                    _owner.FinishDrag();
+                });
+                handle.RegisterCallback<PointerCaptureOutEvent>(_ =>
+                {
+                    if (!dragging) return;
+                    dragging = false; _owner._dragging = false;
+                    SyncFromAsset();
+                    _owner.FinishDrag();
                 });
                 Add(handle);
                 return handle;
@@ -438,7 +461,8 @@ namespace ZFramework.GAS.Editor
             {
                 so.FindProperty("clip").objectReferenceValue = clip;
                 if (clip == null) return;
-                float ratio = duration / Mathf.Max(.001f, animation.Duration);
+                float currentDuration = ValidPositive(animation.Duration, duration);
+                float ratio = duration / Mathf.Max(.001f, currentDuration);
                 foreach (var track in TrackTypeRegistry.Types)
                 {
                     var list = so.FindProperty(track.PropertyPath); if (list == null) continue;
@@ -461,8 +485,8 @@ namespace ZFramework.GAS.Editor
             element.View.RegisterCallback<PointerDownEvent>(e =>
             {
                 if (e.button != 0 || !float.IsFinite(e.position.x)) return; Focus();
-                if (!e.ctrlKey && !e.shiftKey && !_selected.Contains(element.Key)) _selected.Clear();
-                if (e.ctrlKey && _selected.Contains(element.Key))
+                if (!e.actionKey && !e.shiftKey && !_selected.Contains(element.Key)) _selected.Clear();
+                if (e.actionKey && _selected.Contains(element.Key))
                 {
                     _selected.Remove(element.Key);
                     var last = _elements.LastOrDefault(x => _selected.Contains(x.Key));
@@ -575,6 +599,7 @@ namespace ZFramework.GAS.Editor
         {
             _head.EnableInClassList("live-playhead", _doc.Playback.Live);
             _play.SetEnabled(!_doc.Playback.Live);
+            _loopToggle.SetValueWithoutNotify(_doc.Playback.Loop);
             _clock.text = (_doc.Playback.Live ? "运行时 · " : "") + $"{_doc.Playback.Time:0.00}s / {Mathf.Max(Duration,_doc.PreviewEnd):0.00}s · {Mathf.RoundToInt(_doc.Playback.Time * Fps)}f";
             _play.text = _doc.Playback.Playing ? "Ⅱ" : "▶";
             // 用刚算出的位置判断：resolvedStyle 要等下一次布局才更新，读它会让平移后的显隐慢一拍。
@@ -586,7 +611,12 @@ namespace ZFramework.GAS.Editor
         }
         private void SelectionChanged()
         {
-            if (_doc.Selection.Track != null && _doc.Selection.ElementId != null) _selected.Add(_doc.Selection.Track + "/" + _doc.Selection.ElementId);
+            if (_doc.Selection.Track != null && _doc.Selection.ElementId != null)
+            {
+                string key = _doc.Selection.Track + "/" + _doc.Selection.ElementId;
+                if (!_selected.Contains(key)) { _selected.Clear(); _selected.Add(key); }
+            }
+            else if (!_dragging) _selected.Clear();
             foreach (var item in _elements) item.View.EnableInClassList("selected-element", _selected.Contains(item.Key));
             var selected = _elements.FirstOrDefault(e => e.Id == _doc.Selection.ElementId && e.Track.PropertyPath == _doc.Selection.Track);
             if (selected == null || _dragging) return;
@@ -633,7 +663,11 @@ namespace ZFramework.GAS.Editor
                         var track = TrackTypeRegistry.Get(item.track); var span = track.ReadSpan(from); var array = so.FindProperty(item.track);
                         int index = array.arraySize++; var to = array.GetArrayElementAtIndex(index); to.boxedValue = from.boxedValue;
                         to.FindPropertyRelative("id").stringValue = Guid.NewGuid().ToString("N");
-                        if (item.track == "markers") to.FindPropertyRelative("key").stringValue = "";
+                        if (item.track == "markers")
+                        {
+                            to.FindPropertyRelative("key").stringValue = "";
+                            RenewActionIds(to.FindPropertyRelative("actions"));
+                        }
                         float start = Mathf.Clamp(span.start - _copyOrigin + _doc.Playback.Time, 0, Duration);
                         track.WriteSpan(to, start, span.end < 0 ? -1 : Mathf.Min(Duration, start + span.end - span.start));
                     }
@@ -641,16 +675,36 @@ namespace ZFramework.GAS.Editor
             }
             finally { UnityEngine.Object.DestroyImmediate(temp); }
         }
+        private static void RenewActionIds(SerializedProperty actions)
+        {
+            if (actions == null) return;
+            var iter = actions.Copy();
+            var end = actions.GetEndProperty();
+            bool enterChildren = true;
+            while (iter.Next(enterChildren) && !SerializedProperty.EqualContents(iter, end))
+            {
+                enterChildren = iter.propertyType != SerializedPropertyType.String;
+                if (iter.propertyType == SerializedPropertyType.String && iter.name == "id")
+                    iter.stringValue = Guid.NewGuid().ToString("N");
+            }
+        }
+        private static bool IsTextInputTarget(object target)
+        {
+            if (target is TextElement) return true;
+            for (var v = target as VisualElement; v != null; v = v.parent)
+                if (v is TextField || v is FloatField || v is IntegerField) return true;
+            return false;
+        }
         private void OnKey(KeyDownEvent e)
         {
-            if (e.target is TextElement || e.target is TextField || _doc.Root?.Animation() == null) return;
+            if (IsTextInputTarget(e.target) || _doc.Root?.Animation() == null) return;
             switch (e.keyCode)
             {
                 case KeyCode.Space: TogglePlay(); break;
                 case KeyCode.Comma: Seek(_doc.Playback.Time - 1 / Fps); break;
                 case KeyCode.Period: Seek(_doc.Playback.Time + 1 / Fps); break;
                 case KeyCode.Home: Seek(0); break;
-                  case KeyCode.End: Seek(_doc.PlaybackDuration); break;
+                case KeyCode.End: Seek(_doc.PlaybackDuration); break;
                 case KeyCode.L: _doc.Playback.Loop = !_doc.Playback.Loop; break;
                 case KeyCode.M: Add(TrackTypeRegistry.Get("markers")); break;
                 case KeyCode.R:
@@ -658,8 +712,8 @@ namespace ZFramework.GAS.Editor
                     else { EditCommand.Run(_doc, "设置区间终点", _doc.Root.Animation(), so => { var p = TimelineCommands.Find(so, "cueRegions", _rangeStartId); if (p != null) p.FindPropertyRelative("end").floatValue = Mathf.Max(p.FindPropertyRelative("start").floatValue, _doc.Playback.Time); }); _rangeStartId = null; }
                     break;
                 case KeyCode.Delete: case KeyCode.Backspace: DeleteSelection(); break;
-                case KeyCode.C: if (e.ctrlKey) Copy(); else return; break;
-                case KeyCode.V: if (e.ctrlKey) Paste(); else return; break;
+                case KeyCode.C: if (e.actionKey) Copy(); else return; break;
+                case KeyCode.V: if (e.actionKey) Paste(); else return; break;
                 default: return;
             }
             e.StopPropagation();

@@ -195,5 +195,49 @@ namespace ZFramework.GAS.Editor.Tests
             }
             finally { player.Dispose(); Object.DestroyImmediate(asset); Object.DestroyImmediate(animation); }
         }
+        private sealed class RecordingTrack : RuntimeTrackDefinition
+        {
+            public readonly List<string> Events = new();
+            private readonly GameplayTag _tag;
+            public RecordingTrack(string id, float start, float end, GameplayTag tag) : base(id, start, end) => _tag = tag;
+            public override IRuntimeTrackHandler Create(SkillExecutionContext context) => new Handler(this, context);
+            private sealed class Handler : IRuntimeTrackHandler
+            {
+                private readonly RecordingTrack _owner; private readonly SkillExecutionContext _context;
+                public Handler(RecordingTrack owner, SkillExecutionContext context) { _owner = owner; _context = context; }
+                public void Enter() => _owner.Events.Add("Enter:" + _context.Source.OwnedTags.HasTag(_owner._tag));
+                public void Sample(float localTime, float normalizedTime) => _owner.Events.Add("Sample:" + localTime.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+                public void Exit() => _owner.Events.Add("Exit:" + _context.Source.OwnedTags.HasTag(_owner._tag));
+                public void Cancel() => _owner.Events.Add("Cancel");
+            }
+        }
+        [Test]
+        public void TimeScaleZeroFreezesTimelineAndSpeedScalesPlayback()
+        {
+            var owner = new AbilitySystemComponent(); var execution = Activate(owner); int hits = 0;
+            var definition = new SkillAnimationDefinition(null, 1, markers: new[] { new AnimationMarker(.4f) });
+            var task = new AnimationTask(definition, null, execution, (_, __) => hits++);
+            owner.StartTask(execution.Ability, task);
+            task.TimeScale = 0; owner.Tick(.5f);
+            Assert.AreEqual(0, task.ElapsedTime, .0001f); Assert.AreEqual(0, hits);
+            task.TimeScale = 2; owner.Tick(.25f);
+            Assert.AreEqual(.5f, task.ElapsedTime, .0001f); Assert.AreEqual(1, hits);
+            execution.TimeScale = 0; owner.Tick(1);
+            Assert.AreEqual(.5f, task.ElapsedTime, .0001f);
+            owner.EndAbility(execution.Ability);
+        }
+        [Test]
+        public void SameTimeTagWindowOpensBeforeTrackAndLargeTickDoesNotTunnelTrack()
+        {
+            var owner = new AbilitySystemComponent(); var execution = Activate(owner);
+            var track = new RecordingTrack("t1", .2f, .5f, _window);
+            var definition = new SkillAnimationDefinition(null, 1,
+                tagWindows: new[] { new AnimationTagWindow(.2f, .5f, new GameplayTagSet(_window)) },
+                runtimeTracks: new RuntimeTrackDefinition[] { track });
+            owner.StartTask(execution.Ability, new AnimationTask(definition, null, execution));
+            owner.Tick(1);
+            CollectionAssert.AreEqual(new[] { "Enter:True", "Sample:0", "Exit:True" }, track.Events);
+            Assert.IsFalse(owner.OwnedTags.HasTag(_window));
+        }
     }
 }

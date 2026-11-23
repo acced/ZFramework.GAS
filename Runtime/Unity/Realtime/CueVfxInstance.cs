@@ -84,6 +84,14 @@ namespace ZFramework.GAS.Unity
             foreach (var ps in _particles) if (ps != null) ps.Stop(false, ParticleSystemStopBehavior.StopEmitting);
         }
 
+        /// <summary>标记为一次性爆发特效：播放完成后按粒子存活或 tailSeconds 自动回收，不立即销毁。</summary>
+        internal void MarkOneShot()
+        {
+            if (Root == null || _stopping) return;
+            _stopping = true;
+            foreach (var behaviour in _behaviours) if (behaviour != null) behaviour.OnCueStop();
+        }
+
         /// <summary>从零采样，支持任意前后拖动。停止发射模式在区间结束后继续模拟已有粒子。</summary>
         public void SamplePreview(float elapsed, float duration)
         {

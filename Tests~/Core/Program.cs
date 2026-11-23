@@ -37,6 +37,7 @@ internal static class Program
         Run(nameof(DebugReadback), DebugReadback);
         SkillExecutionTests.Run();
         ArchitectureRegressionTests.Run();
+        RefactorRegressionTests.Run();
         HotPath();
     }
 

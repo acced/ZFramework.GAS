@@ -61,7 +61,8 @@ namespace ZFramework.GAS.Editor
             // Show may construct the view before Unity dispatches its first CreateGUI callback.
             if (_doc != null && rootVisualElement.Q<SkillGraphView>() != null) return;
             Cleanup(); rootVisualElement.Clear(); rootVisualElement.AddToClassList("gas-editor");
-            string path = "Packages/com.acced.zframework.gas/Editor/Window/";
+            string scriptDir = System.IO.Path.GetDirectoryName(AssetDatabase.GetAssetPath(MonoScript.FromScriptableObject(this)))?.Replace('\\', '/');
+            string path = !string.IsNullOrEmpty(scriptDir) ? scriptDir + "/" : "Packages/com.acced.zframework.gas/Editor/Window/";
             var tree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(path + "SkillEditorWindow.uxml");
             var sheet = AssetDatabase.LoadAssetAtPath<StyleSheet>(path + "SkillEditor.uss");
             if (tree != null) tree.CloneTree(rootVisualElement);
@@ -187,7 +188,7 @@ namespace ZFramework.GAS.Editor
                 if(_doc.Root!=null)
                 {
                     _documents.Add(new ToolbarButton(()=>{var asset=_doc.Root;openTabs.Remove(asset);Show(openTabs.Count>0?openTabs[openTabs.Count-1]:null);}){text="×",tooltip="关闭当前文档"});
-                    _documents.Add(new ToolbarButton(()=>{var window=CreateInstance<SkillEditorWindow>();window.Show();window.Show(_doc.Root);}){text="并排查看",tooltip="打开独立窗口，可拖至另一侧停靠"});
+                    _documents.Add(new ToolbarButton(() => { var window = CreateInstance<SkillEditorWindow>(); window.minSize = new Vector2(780, 520); window.Show(); window.Show(_doc.Root); }) { text = "并排查看", tooltip = "打开独立窗口，可拖至另一侧停靠" });
                 }
             }
             _rootField.SetValueWithoutNotify(_doc.Root);
@@ -278,6 +279,7 @@ namespace ZFramework.GAS.Editor
         }
         private void RuntimeModeChanged(PlayModeStateChange state)
         {
+            if (state == PlayModeStateChange.ExitingEditMode && _doc != null) _doc.Playback.Playing = false;
             _followRuntime?.SetEnabled(state == PlayModeStateChange.EnteredPlayMode);
             if (state == PlayModeStateChange.ExitingPlayMode || state == PlayModeStateChange.EnteredEditMode) SetFollowRuntime(false);
         }
@@ -309,6 +311,7 @@ namespace ZFramework.GAS.Editor
         private void Cleanup()
         {
             if (_validation != null) _validation.Changed -= ValidationChanged;
+            _settings?.Unbind();
             _flow?.Dispose();
             _presentation?.Dispose(); _presentation = null; _graph?.Dispose(); _details?.Dispose(); _library?.Dispose(); _messages?.Dispose(); _validation?.Dispose();
             _doc?.Dispose(); _doc = null;

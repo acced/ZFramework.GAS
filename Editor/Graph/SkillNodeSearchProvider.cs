@@ -47,7 +47,6 @@ namespace ZFramework.GAS.Editor
             else asset = SkillAssetFactory.Create(_doc, item.Type, item.Name, item.Policy, _parent, _port);
             if (_parent == null) _graph?.SuggestPosition(asset, _position);
             _doc.Selection.Select(asset);
-            _doc.Notify(new ChangeSet(asset, true));
             DestroyImmediate(this); return true;
         }
     }

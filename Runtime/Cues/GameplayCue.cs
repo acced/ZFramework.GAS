@@ -1,166 +1,151 @@
 using GameplayTags;
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace ZFramework.GAS
 {
-    /// <summary>Cue 的触发时机，对应 UE 的 <c>EGameplayCueEvent</c>。</summary>
-    public enum GameplayCueEvent
-    {
-        /// <summary>瞬时结算：Instant 效果应用、或周期效果的一次跳动。</summary>
-        Executed,
-        /// <summary>持续效果开始生效。</summary>
-        OnActive,
-        /// <summary>持续效果被移除。</summary>
-        Removed,
-    }
+    public enum GameplayCueEvent { Executed, OnActive, Removed }
 
     public readonly struct GameplayCueParameters
     {
         public readonly GameplayTag CueTag;
         public readonly GameplayCueEvent Event;
-        /// <summary>Cue 作用的实体，由 <see cref="AbilitySystemComponent"/> 在构造时提供；可为 null。</summary>
         public readonly object Target;
-        /// <summary>效果来源；可为 null。</summary>
         public readonly object Source;
         public readonly int StackCount;
 
         public GameplayCueParameters(GameplayTag cueTag, GameplayCueEvent cueEvent, object target, object source, int stackCount)
         {
-            CueTag = cueTag;
-            Event = cueEvent;
-            Target = target;
-            Source = source;
-            StackCount = stackCount;
+            CueTag = cueTag; Event = cueEvent; Target = target; Source = source; StackCount = stackCount;
         }
     }
 
-    /// <summary>
-    /// 按标签把 Cue 事件路由给处理器。库只负责路由，**不做任何表现**——
-    /// 播粒子、放音效、飘字都由使用方在处理器里实现。
-    ///
-    /// 不是单例：由宿主创建（通常一场战斗一个），构造 <see cref="AbilitySystemComponent"/> 时传入。
-    /// 因此不存在跨场景悬挂的全局状态。
-    ///
-    /// 标签匹配是层级的：注册在 <c>"Cue.Damage"</c> 上的处理器会收到 <c>"Cue.Damage.Fire"</c> 的事件。
-    /// </summary>
+    /// <summary>按标签层级与可选目标分桶索引的 Cue 路由器，O(depth) 零分配派发。</summary>
     public sealed class GameplayCueRouter
     {
-        private readonly List<GameplayTag> _tags = new();
-        private readonly List<Action<GameplayCueParameters>> _handlers = new();
-        /// <summary>派发嵌套深度。用计数而非布尔：Cue 处理器施加的效果会再派发 Cue，
-        /// 内层退出时若把布尔复位，外层剩下的注销就又会走真删除、跳过后面的处理器。</summary>
-        private int _dispatchDepth;
+        private struct Entry { public Action<GameplayCueParameters> Handler; public int Version; }
+
+        private readonly struct Key : IEquatable<Key>
+        {
+            public readonly object Target;
+            public readonly int TagIndex;
+            public Key(object target, int tagIndex) { Target = target; TagIndex = tagIndex; }
+            public bool Equals(Key other) => TagIndex == other.TagIndex && ReferenceEquals(Target, other.Target);
+            public override bool Equals(object obj) => obj is Key other && Equals(other);
+            public override int GetHashCode() => (RuntimeHelpers.GetHashCode(Target) * 397) ^ TagIndex;
+        }
+
+        private readonly Dictionary<Key, List<Entry>> _buckets = new();
+        private List<Key> _emptyKeys;
+        private int _handlerCount, _globalCount, _dispatchDepth, _sequence;
         private bool _needsCompaction;
 
-        public int HandlerCount => _handlers.Count;
+        public int HandlerCount => _handlerCount;
 
         public void Register(GameplayTag cueTag, Action<GameplayCueParameters> handler)
-        {
-            if (!cueTag.IsValid)
-            {
-                throw new ArgumentException("Cue tag is not valid.", nameof(cueTag));
-            }
+            => Add(cueTag, null, handler);
 
-            _tags.Add(cueTag);
-            _handlers.Add(handler ?? throw new ArgumentNullException(nameof(handler)));
-        }
+        public void Register(GameplayTag cueTag, object target, Action<GameplayCueParameters> handler)
+            => Add(cueTag, target ?? throw new ArgumentNullException(nameof(target)), handler);
 
         public bool Unregister(GameplayTag cueTag, Action<GameplayCueParameters> handler)
-        {
-            for (int i = 0; i < _handlers.Count; i++)
-            {
-                if (_tags[i] != cueTag || _handlers[i] != handler)
-                {
-                    continue;
-                }
+            => Remove(cueTag, null, handler);
 
-                if (_dispatchDepth > 0)
-                {
-                    // 派发途中直接删会让后面的处理器整个被跳过（索引前移）。
-                    // 一次性 Cue 在自己的处理器里注销自己是常见用法，必须扛住。
-                    _handlers[i] = null;
-                    _needsCompaction = true;
-                }
-                else
-                {
-                    _tags.RemoveAt(i);
-                    _handlers.RemoveAt(i);
-                }
+        public bool Unregister(GameplayTag cueTag, object target, Action<GameplayCueParameters> handler)
+            => target != null && Remove(cueTag, target, handler);
 
-                return true;
-            }
-
-            return false;
-        }
-
-        /// <summary>派发给所有注册标签能匹配 <c>parameters.CueTag</c> 的处理器，返回被调用的处理器数量。</summary>
         public int Dispatch(in GameplayCueParameters parameters)
         {
             GasDebugHooks.NotifyCue(parameters);
-            int dispatched = 0;
+            if (_handlerCount == 0 || !parameters.CueTag.IsValid) return 0;
+
+            int dispatched = 0, snapshot = ++_sequence;
+            bool hasGlobal = _globalCount > 0, hasTargeted = parameters.Target != null && _handlerCount > _globalCount;
             _dispatchDepth++;
             try
             {
-                // 只派发进入时已注册的处理器：派发途中新注册的等下一次，
-                // 与效果容器「本帧只推进进入时已存在的效果」一致。
-                int count = _handlers.Count;
-                for (int i = 0; i < count && i < _handlers.Count; i++)
+                ReadOnlySpan<GameplayTag> hierarchy = parameters.CueTag.HierarchyTags;
+                for (int h = 0; h < hierarchy.Length; h++)
                 {
-                    Action<GameplayCueParameters> handler = _handlers[i];
-                    if (handler == null || !(_tags[i] == parameters.CueTag || _tags[i].IsParentOf(parameters.CueTag)))
-                    {
-                        continue;
-                    }
-
-                    handler.Invoke(parameters);
-                    dispatched++;
+                    int tagIndex = hierarchy[h].RuntimeIndex;
+                    if (hasGlobal && _buckets.TryGetValue(new Key(null, tagIndex), out var global))
+                        dispatched += DispatchBucket(global, in parameters, snapshot);
+                    if (hasTargeted && _buckets.TryGetValue(new Key(parameters.Target, tagIndex), out var targeted))
+                        dispatched += DispatchBucket(targeted, in parameters, snapshot);
                 }
             }
             finally
             {
-                // 即使处理器抛异常也必须递减，否则此后所有注销都只置空不生效。
-                // 压缩只在最外层做——中途压缩会让外层循环的索引错位。
-                _dispatchDepth--;
-                if (_dispatchDepth == 0)
-                {
-                    Compact();
-                }
+                if (--_dispatchDepth == 0 && _needsCompaction) Compact();
             }
-
             return dispatched;
         }
 
         public void Clear()
         {
-            if (_dispatchDepth > 0)
-            {
-                for (int i = 0; i < _handlers.Count; i++) _handlers[i] = null;
-                _needsCompaction = true;
-                return;
-            }
-            _tags.Clear();
-            _handlers.Clear();
-            _needsCompaction = false;
+            _handlerCount = _globalCount = 0;
+            if (_dispatchDepth == 0) { _buckets.Clear(); _needsCompaction = false; return; }
+            foreach (var list in _buckets.Values)
+                for (int i = 0; i < list.Count; i++) list[i] = default;
+            _needsCompaction = true;
         }
 
-        /// <summary>清掉派发期间置空的槽位。</summary>
+        private void Add(GameplayTag cueTag, object target, Action<GameplayCueParameters> handler)
+        {
+            if (!cueTag.IsValid) throw new ArgumentException("Cue tag is not valid.", nameof(cueTag));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            var key = new Key(target, cueTag.RuntimeIndex);
+            if (!_buckets.TryGetValue(key, out var list)) _buckets.Add(key, list = new List<Entry>(1));
+            list.Add(new Entry { Handler = handler, Version = _sequence });
+            _handlerCount++;
+            if (target == null) _globalCount++;
+        }
+
+        private bool Remove(GameplayTag cueTag, object target, Action<GameplayCueParameters> handler)
+        {
+            if (!cueTag.IsValid || handler == null) return false;
+            var key = new Key(target, cueTag.RuntimeIndex);
+            if (!_buckets.TryGetValue(key, out var list)) return false;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i].Handler != handler) continue;
+                _handlerCount--;
+                if (target == null) _globalCount--;
+                if (_dispatchDepth > 0) { list[i] = default; _needsCompaction = true; }
+                else { list.RemoveAt(i); if (list.Count == 0) _buckets.Remove(key); }
+                return true;
+            }
+            return false;
+        }
+
+        private static int DispatchBucket(List<Entry> list, in GameplayCueParameters parameters, int snapshot)
+        {
+            int dispatched = 0, count = list.Count;
+            for (int i = 0; i < count && i < list.Count; i++)
+            {
+                Entry e = list[i];
+                if (e.Handler == null || e.Version >= snapshot) continue;
+                e.Handler.Invoke(parameters);
+                dispatched++;
+            }
+            return dispatched;
+        }
+
         private void Compact()
         {
-            if (!_needsCompaction)
-            {
-                return;
-            }
-
             _needsCompaction = false;
-            for (int i = _handlers.Count - 1; i >= 0; i--)
+            _emptyKeys?.Clear();
+            foreach (var pair in _buckets)
             {
-                if (_handlers[i] == null)
-                {
-                    _handlers.RemoveAt(i);
-                    _tags.RemoveAt(i);
-                }
+                List<Entry> list = pair.Value;
+                for (int i = list.Count - 1; i >= 0; i--)
+                    if (list[i].Handler == null) list.RemoveAt(i);
+                if (list.Count == 0) (_emptyKeys ??= new List<Key>()).Add(pair.Key);
             }
+            if (_emptyKeys == null) return;
+            for (int i = 0; i < _emptyKeys.Count; i++) _buckets.Remove(_emptyKeys[i]);
+            _emptyKeys.Clear();
         }
     }
 }

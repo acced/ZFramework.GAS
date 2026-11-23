@@ -56,21 +56,26 @@ var runner = new SkillRunner(owner, new SkillUnitServices {
 });
 var spec = runner.Grant(skill, level: 1);
 
-var check = runner.TryCast(skill, new SkillCastTarget(targetAsc, targetTransform));
-if (!check.Succeeded)
-    UnityEngine.Debug.Log(check.Message);
+// 施放前预检（UI 置灰 / AI 决策），不触发激活或副作用；支持方向技 SkillCastTarget.Directional。
+if (runner.CanCast(skill).Succeeded)
+{
+    var check = runner.TryCast(skill, new SkillCastTarget(targetAsc, targetTransform));
+    if (!check.Succeeded)
+        UnityEngine.Debug.Log(check.Message);
+}
 
 // 主项目决定 Update、FixedUpdate 或自己的模拟时钟。
 owner.Tick(deltaTime);
 
-// 状态与取消直接使用同一份 spec。
+// 状态、冷却缩减与取消直接使用同一份 spec / ASC。
 bool active = spec.IsActive;
 float remaining = spec.CooldownRemaining;
-owner.EndAbility(spec);
+owner.Effects.ModifyRemainingTimeWithAnyTag(new GameplayTagSet("Cooldown.Attack"), -1f);
+owner.CancelAbility(spec); // 或自然结束 owner.EndAbility(spec)
 runner.Revoke(skill);
 ```
 
-纯逻辑目标可使用 `new SkillCastTarget(targetAsc)`，并省略物理 Searcher、Transform 和 Scene。调用 `Clear()` 后，旧授权失效；再次使用前显式 `Grant`。
+纯逻辑目标可使用 `new SkillCastTarget(targetAsc)`，指向技/双摇杆可使用 `SkillCastTarget.Directional(direction)`，并可省略物理 Searcher、Transform 和 Scene。`GameplayAttribute.PreBaseValueChange` 可在数值生效前完成 HP/能量上下限钳制；`GameplayEffectContainer` 提供 `RemoveStacks`、`ModifyRemainingTime` 与 `OnEffect*` / `ASC.OnAbility*` 生命周期事件，适配 ARPG、MOBA、回合制、卡牌与肉鸽等多种战斗规则。调用 `Clear()` 后，旧授权失效；再次使用前显式 `Grant`。
 
 ### 参数先解析，施放时复用
 
@@ -93,12 +98,14 @@ var check = runner.TryCast(skill, new SkillCastTarget(targetAsc), values);
 
 ```csharp
 using var presentation = new SkillTimelinePlayer(
-    runner, new PlayableAnimationDriver(animator));
+    runner,
+    new PlayableAnimationDriver(animator, avatarMask: upperBodyMask, syncPoseOnAdvance: true));
 
 // 仍然只调用 runner.TryCast。presentation 不提供另一套 Cast API。
+// 攻速、顿帧（0）与慢动作可通过 execution.TimeScale 或 presentation.ActiveTask.TimeScale 实时调节。
 ```
 
-技能表现资产保留一个 `clip` 资源字段，类型为 `UnityEngine.Object`。主包支持 AnimationClip，可选 Spine 包支持官方 AnimationReferenceAsset；留空时只执行时间轴。时长由时间轴定义，GAS Tick 推进玩法边界，驱动接收归一化位置。结束单位前先结束 ASC 工作并释放 presentation。
+技能表现资产保留一个 `clip` 资源字段，类型为 `UnityEngine.Object`。主包支持 AnimationClip（`PlayableAnimationDriver` 支持 `AvatarMask` 上下半身分离、FootIK、`sortingOrder`、空闲自动暂停 Graph 与可选 `syncPoseOnAdvance` 同步骨骼采样），可选 Spine 包支持官方 AnimationReferenceAsset；留空时只执行时间轴。时长由时间轴定义，GAS Tick 按统一边界序（`TagOpen -> CueOpen -> TrackEnter -> Marker -> TrackExit -> TagClose -> CueClose`）在进入轨道和 Marker 前先同步驱动进度，大帧步长保证命中窗口零穿透。命中窗口支持 `hitInterval`（0 单次命中 / >0 多段间隔命中）；`CueVfxPlayer` 采用目标分桶 O(1) 注册，同时支持持续区间与 `Executed` 瞬发特效。结束单位前先结束 ASC 工作并释放 presentation。
 
 `IAnimationDriver.Play(Object clip, float blendIn)` 在播放入口解释自己的资源类型；`Advance(normalizedTime)`、`Stop(blendOut)`、`Dispose()` 保持原有职责。资源类型由编辑器在 F7 / 构建时校验，运行时由项目明确绑定匹配的角色和驱动。
 
@@ -111,7 +118,7 @@ using var presentation = new SkillTimelinePlayer(
     runner, new SpineAnimationDriver(skeletonAnimation));
 ```
 
-Spine 适配独占一个技能轨道（默认 1），GAS 控制技能片段进度，宿主负责基础动画和混合。项目应让 GAS Tick 先于 Spine 的正常更新。当前时间轴保留原有边界处理顺序，不承诺 Marker 对应时刻的同步骨骼命中。
+Spine 适配独占一个技能轨道（默认 1），GAS 控制技能片段进度，宿主负责基础动画和混合。项目应让 GAS Tick 先于 Spine 的正常更新。
 
 ### 显式提交
 
@@ -135,6 +142,8 @@ var check = owner.CommitAbility(spec, capturedActivationVersion);
 ## 性能与生命周期
 
 - Player 在 Grant/准备阶段构建并缓存定义与动作，施放不扫描资产或使用反射。
+- `AttributeSet` 常规 ID（0..127）直查数组 O(1)；`GameplayCueRouter` 与 `GameplayEventChannel` 按标签层级与目标分桶索引 O(depth) 派发；周期效果缓存目标 `GameplayAttribute` 引用；`SkillExecutionContext.QueryTargets` 提供零分配 `ref struct` 作用域。
+- `PlayableAnimationDriver` 空闲自动暂停 Graph，零待机动画图开销；`SkillTargetResults` 维护有界 Top-K 最近邻有序缓冲。
 - Core 的任务和效果支持取消、清空、对象池代际与回调重入。
 - 查询缓冲复用；结果携带目标 generation，项目过滤回调前后检查身份。
 - Editor 的资源反查与调试通知不进入普通发布版热路径。

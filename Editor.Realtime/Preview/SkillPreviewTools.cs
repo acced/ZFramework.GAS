@@ -14,6 +14,8 @@ namespace ZFramework.GAS.Editor
         private readonly Material _material;
         private readonly List<Vector3> _vertices = new();
         private readonly List<Color> _colors = new();
+        private readonly List<int> _indices = new();
+        private readonly MaterialPropertyBlock _propertyBlock = new();
         private readonly SkillPreviewAudio _audio = new();
         public SkillPreviewTools()
         {
@@ -35,10 +37,11 @@ namespace ZFramework.GAS.Editor
             }
             pose(doc.Playback.Time);
             drawRanges();
-            if(_vertices.Count==0)return; // Draw skips the previous line mesh when this frame has no geometry.
+            if (_vertices.Count == 0) return; // Draw skips the previous line mesh when this frame has no geometry.
             _lines.Clear(); _lines.SetVertices(_vertices); _lines.SetColors(_colors);
-            var indices = new int[_vertices.Count]; for (int i = 0; i < indices.Length; i++) indices[i] = i;
-            _lines.SetIndices(indices, MeshTopology.Lines, 0); _lines.RecalculateBounds();
+            if (_indices.Count > _vertices.Count) _indices.RemoveRange(_vertices.Count, _indices.Count - _vertices.Count);
+            while (_indices.Count < _vertices.Count) _indices.Add(_indices.Count);
+            _lines.SetIndices(_indices, MeshTopology.Lines, 0); _lines.RecalculateBounds();
         }
         private void Capture(GameObject instance, Action<float> pose, float time, Color color)
         {
@@ -47,11 +50,17 @@ namespace ZFramework.GAS.Editor
             {
                 if (!renderer.enabled || renderer.GetComponentInParent<CueVfxBehaviour>() != null || renderer is ParticleSystemRenderer || renderer is TrailRenderer) continue;
                 if (renderer is SkinnedMeshRenderer skin)
-                { var mesh = new Mesh { hideFlags = HideFlags.HideAndDontSave }; skin.BakeMesh(mesh); _ghosts.Add((mesh, skin.localToWorldMatrix, color)); }
-                else if (renderer.TryGetComponent<MeshFilter>(out var filter) && filter.sharedMesh != null) {
+                {
+                    var mesh = new Mesh { hideFlags = HideFlags.HideAndDontSave };
+                    skin.BakeMesh(mesh);
+                    // BakeMesh already bakes lossyScale into vertices; omit scale from the draw matrix to avoid double-scaling.
+                    _ghosts.Add((mesh, Matrix4x4.TRS(skin.transform.position, skin.transform.rotation, Vector3.one), color));
+                }
+                else if (renderer.TryGetComponent<MeshFilter>(out var filter) && filter.sharedMesh != null)
+                {
                     // Freeze the ghost before sampling the next pose.
-                    var mesh=UnityEngine.Object.Instantiate(filter.sharedMesh); mesh.hideFlags=HideFlags.HideAndDontSave;
-                    _ghosts.Add((mesh,renderer.localToWorldMatrix,color));
+                    var mesh = UnityEngine.Object.Instantiate(filter.sharedMesh); mesh.hideFlags = HideFlags.HideAndDontSave;
+                    _ghosts.Add((mesh, renderer.localToWorldMatrix, color));
                 }
             }
         }
@@ -61,15 +70,21 @@ namespace ZFramework.GAS.Editor
             float radius = shape.Radius, angle = shape.Angle;
             var center = origin + Vector3.up * .04f;
             var forward = source.rotation * Quaternion.Euler(0, yaw, 0) * Vector3.forward;
-            var right = Quaternion.LookRotation(forward) * Vector3.right;
+            if (forward.sqrMagnitude < 1e-6f) forward = Vector3.forward;
+            else forward.Normalize();
+            var orientation = Quaternion.LookRotation(forward);
+            var right = orientation * Vector3.right;
+            var upAxis = orientation * Vector3.up;
             var color = SkillColors.Cue;
             if (shape.Kind == TargetQueryKind.Line)
             {
                 float half = shape.HalfExtents.x, height = shape.HalfExtents.y;
                 var a = center - right * half; var b = center + right * half;
-                foreach (float y in new[] { -height, height })
-                { var up = Vector3.up * y; Line(a + up, b + up, color); Line(a + up, a + up + forward * radius, color); Line(b + up, b + up + forward * radius, color); Line(a + up + forward * radius, b + up + forward * radius, color); }
-                foreach (var p in new[] { a, b, a + forward * radius, b + forward * radius }) Line(p - Vector3.up * height, p + Vector3.up * height, color);
+                var aEnd = a + forward * radius; var bEnd = b + forward * radius;
+                var up = upAxis * height;
+                Line(a - up, b - up, color); Line(a - up, aEnd - up, color); Line(b - up, bEnd - up, color); Line(aEnd - up, bEnd - up, color);
+                Line(a + up, b + up, color); Line(a + up, aEnd + up, color); Line(b + up, bEnd + up, color); Line(aEnd + up, bEnd + up, color);
+                Line(a - up, a + up, color); Line(b - up, b + up, color); Line(aEnd - up, aEnd + up, color); Line(bEnd - up, bEnd + up, color);
                 return;
             }
             Vector3 At(float degrees) => center + Quaternion.AngleAxis(degrees, Vector3.up) * forward * radius;
@@ -114,8 +129,8 @@ namespace ZFramework.GAS.Editor
             if (_material == null) return;
             foreach (var ghost in _ghosts)
             {
-                var block = new MaterialPropertyBlock(); block.SetColor("_Color", ghost.color);
-                for (int i = 0; i < ghost.mesh.subMeshCount; i++) preview.DrawMesh(ghost.mesh, ghost.matrix, _material, i, block);
+                _propertyBlock.SetColor("_Color", ghost.color);
+                for (int i = 0; i < ghost.mesh.subMeshCount; i++) preview.DrawMesh(ghost.mesh, ghost.matrix, _material, i, _propertyBlock);
             }
             if (_vertices.Count > 0) preview.DrawMesh(_lines, Matrix4x4.identity, _material, 0);
         }

@@ -5,53 +5,21 @@ namespace ZFramework.GAS
 {
     public enum AbilityActivationResult
     {
-        Activated,
-        /// <summary>标签门禁未通过。</summary>
-        Blocked,
-        /// <summary>冷却中。</summary>
-        OnCooldown,
-        /// <summary>消耗不足。</summary>
-        CannotAfford,
-        /// <summary>该能力已处于激活状态。</summary>
-        AlreadyActive,
-        InvalidConfiguration,
-        /// <summary>The activation ended, its grant was revoked, or a delayed commit used an old version.</summary>
-        Inactive,
+        Activated, Blocked, OnCooldown, CannotAfford, AlreadyActive, InvalidConfiguration, Inactive
     }
 
-    /// <summary>
-    /// 能力**定义**：不可变配置，多个持有者共享同一实例。对应 UE 的 <c>UGameplayAbility</c>（CDO）。
-    ///
-    /// 消耗与冷却都是普通的 <see cref="GameplayEffectDefinition"/>：
-    /// 消耗是 Instant 效果，冷却是授予冷却标签的 Duration 效果——
-    /// 「是否在冷却」即「持有者是否拥有该冷却标签」，与 UE 一致。
-    /// </summary>
+    /// <summary>不可变能力定义；消耗为 Instant 效果，冷却为授予标签的 Duration 效果。</summary>
     public sealed class GameplayAbilityDefinition
     {
-        /// <summary>本能力的标识标签，供 <see cref="CancelAbilitiesWithTags"/> 之类的匹配使用。</summary>
-        public GameplayTagSet AbilityTags { get; }
-
-        /// <summary>持有者必须全部拥有才可激活。</summary>
-        public GameplayTagSet ActivationRequiredTags { get; }
-
-        /// <summary>持有者拥有任一即不可激活。</summary>
-        public GameplayTagSet ActivationBlockedTags { get; }
-
         private readonly GameplayTagRequirements _activationRequirements;
 
-        /// <summary>构造时预计算，以只读引用匹配持有者的整数标签存储。</summary>
+        public GameplayTagSet AbilityTags { get; }
+        public GameplayTagSet ActivationRequiredTags { get; }
+        public GameplayTagSet ActivationBlockedTags { get; }
         public ref readonly GameplayTagRequirements ActivationRequirements => ref _activationRequirements;
-
-        /// <summary>激活期间授予持有者，结束时移除。</summary>
         public GameplayTagSet ActivationOwnedTags { get; }
-
-        /// <summary>激活成功时，取消持有者身上带有其中任一标签的其他能力。</summary>
         public GameplayTagSet CancelAbilitiesWithTags { get; }
-
-        /// <summary>消耗，应为 Instant 效果；可为 null。</summary>
         public GameplayEffectDefinition Cost { get; }
-
-        /// <summary>冷却，应为授予冷却标签的 Duration 效果；可为 null。</summary>
         public GameplayEffectDefinition Cooldown { get; }
 
         public GameplayAbilityDefinition(
@@ -64,22 +32,14 @@ namespace ZFramework.GAS
             GameplayEffectDefinition cooldown = null)
         {
             if (cost != null && cost.DurationPolicy != EffectDurationPolicy.Instant)
-            {
                 throw new ArgumentException("Ability cost must be an Instant effect.", nameof(cost));
-            }
-
             if (cooldown != null && cooldown.Tags.Granted.IsEmpty)
-            {
-                throw new ArgumentException(
-                    "Ability cooldown must grant at least one tag; the granted tag is what marks the ability as on cooldown.",
-                    nameof(cooldown));
-            }
+                throw new ArgumentException("Ability cooldown must grant at least one tag.", nameof(cooldown));
 
             AbilityTags = abilityTags;
             ActivationRequiredTags = activationRequiredTags;
             ActivationBlockedTags = activationBlockedTags;
-            _activationRequirements = GameplayTagRequirements.Create(
-                activationBlockedTags.AsSpan(), activationRequiredTags.AsSpan());
+            _activationRequirements = GameplayTagRequirements.Create(activationBlockedTags.AsSpan(), activationRequiredTags.AsSpan());
             ActivationOwnedTags = activationOwnedTags;
             CancelAbilitiesWithTags = cancelAbilitiesWithTags;
             Cost = cost;
@@ -87,82 +47,88 @@ namespace ZFramework.GAS
         }
     }
 
-    /// <summary>
-    /// 已授予的能力实例：定义 + 持有者 + 等级 + 激活状态。对应 UE 的 <c>FGameplayAbilitySpec</c>。
-    /// 只由 <see cref="AbilitySystemComponent.GrantAbility"/> 创建。
-    /// </summary>
+    /// <summary>已授予的能力实例（由 <see cref="AbilitySystemComponent.GrantAbility"/> 创建）。</summary>
     public sealed class GameplayAbilitySpec
     {
+        private EffectEvaluationContext _levelContext;
+
         public GameplayAbilityDefinition Definition { get; internal set; }
         public AbilitySystemComponent Owner { get; }
         public int ActivationVersion { get; internal set; }
-        internal GameplayEffectDefinition CommittedCooldown;
-
-        /// <summary>下一次施放的等级；执行中的求值上下文不随此值改变。</summary>
         public int Level { get; set; }
-        private EffectEvaluationContext _levelContext;
+        public EffectEvaluationContext EvaluationContext { get; internal set; }
+        public bool IsActive { get; internal set; }
+        public bool IsCommitted { get; internal set; }
+        public bool IsGranted { get; internal set; } = true;
+
+        internal GameplayEffectDefinition CommittedCooldown;
+        internal EffectEvaluationContext PreparedDefaultContext;
+        internal int OwnedTagCount;
+        internal bool Committing;
+
         internal EffectEvaluationContext DefaultContext
         {
             get
             {
                 int level = Math.Max(1, Level);
+                if (PreparedDefaultContext != null && PreparedDefaultContext.Level == level) return PreparedDefaultContext;
                 if (_levelContext == null || _levelContext.Level != level) _levelContext = EffectEvaluationContext.Live(level, Owner.Attributes);
                 return _levelContext;
             }
         }
-        public EffectEvaluationContext EvaluationContext { get; internal set; }
-
-        public bool IsActive { get; internal set; }
-        public bool IsCommitted { get; internal set; }
-        internal int OwnedTagCount;
-        internal bool Committing;
-        public bool IsGranted { get; internal set; } = true;
 
         internal GameplayAbilitySpec(GameplayAbilityDefinition definition, AbilitySystemComponent owner, int level)
         {
-            Definition = definition;
-            Owner = owner;
-            Level = level;
+            Definition = definition; Owner = owner; Level = level;
         }
 
-        /// <summary>持有者是否拥有本能力冷却效果所授予的标签。</summary>
         public bool IsOnCooldown
         {
             get
             {
                 GameplayEffectDefinition cooldown = Definition.Cooldown;
-                return cooldown != null && cooldown.Tags.Granted.HasAny(Owner.OwnedTags)
-                    || CommittedCooldown != null && CommittedCooldown.Tags.Granted.HasAny(Owner.OwnedTags);
+                if (cooldown != null && cooldown.Tags.Granted.HasAny(Owner.OwnedTags)) return true;
+                GameplayEffectDefinition committed = CommittedCooldown;
+                if (committed == null || ReferenceEquals(committed, cooldown)) return false;
+                if (Owner.Effects.Find(committed).IsValid) return committed.Tags.Granted.HasAny(Owner.OwnedTags);
+                CommittedCooldown = null;
+                return false;
             }
         }
 
-        /// <summary>冷却剩余秒数；不在冷却或冷却为无限时长时返回 0。</summary>
-        public float CooldownRemaining
-        {
-            get
-            {
-                GameplayEffectDefinition cooldown = Definition.Cooldown;
-                if (cooldown == null && CommittedCooldown == null)
-                {
-                    return 0f;
-                }
+        public float CooldownRemaining => TryGetActiveCooldown(out float remaining, out _) ? remaining : 0f;
 
-                ActiveGameplayEffectHandle handle = Owner.Effects.Find(CommittedCooldown ?? cooldown);
-                return Owner.Effects.TryGetInfo(handle, out var info)
-                    ? Math.Max(0f, info.RemainingTime)
-                    : 0f;
-            }
-        }
         public float CooldownDuration
         {
             get
             {
-                var definition = CommittedCooldown ?? Definition.Cooldown;
-                if (definition == null) return 0;
-                if (Owner.Effects.TryGetInfo(Owner.Effects.Find(definition), out var info)) return info.Duration;
-                return definition.DurationMagnitude.HasValue && EvaluationContext != null
-                    ? new GameplayEffectSpec(definition, context: EvaluationContext).Resolve(definition.DurationMagnitude.Value, Owner.Attributes) : definition.Duration;
+                if (TryGetActiveCooldown(out _, out float active)) return active;
+                GameplayEffectDefinition d = Definition.Cooldown;
+                if (d == null) return 0f;
+                return d.DurationMagnitude.HasValue
+                    ? new GameplayEffectSpec(d, Owner.Attributes, Owner, context: EvaluationContext ?? DefaultContext).ResolveDuration(Owner.Attributes)
+                    : d.Duration;
             }
+        }
+
+        private bool TryGetActiveCooldown(out float remaining, out float duration)
+        {
+            remaining = duration = 0f;
+            GameplayEffectDefinition d = Definition.Cooldown;
+            bool found = d != null && d.Tags.Granted.HasAny(Owner.OwnedTags) &&
+                Owner.Effects.TryGetLongestRemainingWithAnyTag(d.Tags.Granted, out remaining, out duration);
+
+            GameplayEffectDefinition committed = CommittedCooldown;
+            if (committed != null && !ReferenceEquals(committed, d))
+            {
+                if (Owner.Effects.TryGetInfo(Owner.Effects.Find(committed), out var info))
+                {
+                    float r = Math.Max(0f, info.RemainingTime);
+                    if (!found || r > remaining) { remaining = r; duration = info.Duration; found = true; }
+                }
+                else CommittedCooldown = null;
+            }
+            return found;
         }
     }
 }

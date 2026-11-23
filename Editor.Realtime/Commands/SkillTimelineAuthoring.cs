@@ -16,7 +16,8 @@ namespace ZFramework.GAS.Editor
         {
             using var so = new SerializedObject(asset);
             write(new SkillTimelineAuthoring(so));
-            if (recordUndo) so.ApplyModifiedProperties(); else so.ApplyModifiedPropertiesWithoutUndo();
+            if (recordUndo) so.ApplyModifiedProperties();
+            else { so.ApplyModifiedPropertiesWithoutUndo(); asset.InvalidateDefinition(); }
         }
 
         public void Clip(UnityEngine.Object clip, float duration, float frameRate = 30, float blendIn = .12f, float blendOut = .18f)

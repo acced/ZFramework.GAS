@@ -22,6 +22,7 @@ namespace ZFramework.GAS.Editor
         private SkillHistory _history;
         private readonly List<SkillTrace> _frozen=new();
         private int _page, _kind=-1;
+        private bool _scrubbingTrace;
         private long _lastSequence = -1;
         private ScrollView _scroll;
         private readonly List<Row> _abilities = new(), _tasks = new(), _tags = new(), _attributes = new(), _effects = new(), _actions = new();
@@ -111,10 +112,25 @@ namespace ZFramework.GAS.Editor
             foreach(TraceKind type in Enum.GetValues(typeof(TraceKind)))kinds.menu.AppendAction(type.ToString(),_=>SelectKind((int)type));
             _traceFilter=new ToolbarSearchField {tooltip="按技能名或内容搜索"}; filters.Add(_traceFilter); traceHost.Add(filters);
             _trace=new ListView(_traceItems,20,()=>new Label(),(el,i)=>{var e=_traceItems[i]; ((Label)el).text=$"帧 {e.Frame} · {e.Kind} · {(e.Skill!=null?e.Skill.name:"")}  {e.Label}";});
-            _lanes=new SkillTraceLanes(_traceItems,i=>{var picked=_traceItems[i]; _freeze.value=true;
-                int at=_traceItems.FindIndex(e=>e.Serial==picked.Serial); if(at>=0){_trace.SetSelection(at);_trace.ScrollToItem(at);} });traceHost.Add(_lanes);
-            _trace.style.height=155; traceHost.Add(_trace);
-            _trace.selectionChanged+=items=>{foreach(SkillTrace e in items) if(e.Skill!=null)
+            _lanes = new SkillTraceLanes(_traceItems, i =>
+            {
+                var picked = _traceItems[i];
+                _freeze.value = true;
+                int at = _traceItems.FindIndex(e => e.Serial == picked.Serial);
+                if (at >= 0)
+                {
+                    _scrubbingTrace = true;
+                    try { _trace.SetSelection(at); _trace.ScrollToItem(at); }
+                    finally { _scrubbingTrace = false; }
+                }
+            });
+            traceHost.Add(_lanes);
+            _trace.style.height = 155;
+            traceHost.Add(_trace);
+            _trace.selectionChanged += items =>
+            {
+                if (_scrubbingTrace) return;
+                foreach (SkillTrace e in items) if (e.Skill != null)
             {
                 var w=SkillEditorWindow.Open();w.Show(e.Skill);
                 if (e.Kind == TraceKind.标记 && SkillEditorExtensions.Asset(e.Skill) is { } presentation)
@@ -125,7 +141,8 @@ namespace ZFramework.GAS.Editor
                         if (entry.Id == e.ActionId && !w.Document.Playback.Live) { w.Document.Playback.Seek(entry.Time, editor.Duration(presentation)); break; }
                 }
                 else if(SkillActionNavigation.Select(w.Document,e.ActionId))w.Document.OpenFlow();
-            }};
+            }
+            };
             _traceFilter.RegisterValueChangedCallback(_=>{_lastSequence=-1; RefreshTrace(RuntimeDebugSession.Current);});
             _watch=new Label{style={whiteSpace=WhiteSpace.Normal}}; Section("断点监视","debug-watch").Add(_watch);
             _freeze.RegisterValueChangedCallback(e=>{

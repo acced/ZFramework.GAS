@@ -115,7 +115,7 @@ namespace ZFramework.GAS.Editor
         { if (_parameters) RefreshParameters();
           if (change.Structure || change.Paths.Any(p => p == "m_Name" || p.Contains("displayName") || p.Contains("cue"))) RefreshOutline(); }
         public void Refresh()
-        { RefreshList(); if (!_parameters) RefreshOutline(); }
+        { RefreshList(); RefreshOutline(); }
         private void RefreshList()
         {
             _paramView.style.display = _parameters ? DisplayStyle.Flex : DisplayStyle.None;
@@ -131,10 +131,10 @@ namespace ZFramework.GAS.Editor
         private void RefreshParameters()
         {
             _paramView.Clear(); var owner = _doc.Root;
-            if (owner == null) return;
+            if (owner == null || owner.parameters == null) return;
             foreach (var p in owner.parameters.Where(p => p != null))
             {
-                if (!string.IsNullOrEmpty(_search.value) && p.displayName?.IndexOf(_search.value, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (!string.IsNullOrEmpty(_search.value) && (string.IsNullOrEmpty(p.displayName) || p.displayName.IndexOf(_search.value, StringComparison.OrdinalIgnoreCase) < 0)) continue;
                 int index = Array.IndexOf(owner.parameters, p);
                 var button = new Button(() => _doc.Selection.Select(owner, "@field", $"parameters.Array.data[{index}]"))
                 { text = p.displayName + " · " + p.kind, tooltip = "点击编辑声明，拖到数值字段以绑定", userData = p };

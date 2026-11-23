@@ -31,8 +31,8 @@ namespace ZFramework.GAS.Editor
         public void Dispose(){if(_undo!=null) UnityEngine.Object.DestroyImmediate(_undo);}
         internal bool RestoreUndo()
         {
-            if(_undo==null || _undo.json==_lastSaved || string.IsNullOrEmpty(_undo.json))return false;
-            _data=JsonUtility.FromJson<Data>(_undo.json);_lastSaved=_undo.json;_dirty=true;Save();return true;
+            if (_undo == null || _undo.json == _lastSaved || string.IsNullOrEmpty(_undo.json)) return false;
+            _data = JsonUtility.FromJson<Data>(_undo.json); _lastSaved = _undo.json; _dirty = true; Save(recordUndo: false); return true;
         }
         public List<string> LooseAssets => _data.looseAssets;
         public GameObject PreviewPrefab

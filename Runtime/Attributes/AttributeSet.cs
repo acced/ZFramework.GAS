@@ -1,62 +1,85 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace ZFramework.GAS
 {
-    /// <summary>
-    /// 一个实体持有的固定属性表。初始化时添加，ASC.Clear 保留这些属性供复用。
-    /// 属性对象在实体创建时分配，运行期的读取、修改与聚合均无分配。
-    /// </summary>
+    /// <summary>实体持有的固定属性表；常规 ID（0..127）直查数组 O(1)，ASC.Clear 保留结构供复用。</summary>
     public sealed class AttributeSet
     {
-        private readonly Dictionary<AttributeId, GameplayAttribute> _attributes;
-        private readonly Action<GameplayAttribute, float, float> _forwardChanged;
+        private const int FastLookupLimit = 128;
 
-        /// <summary>集合内任一属性的 CurrentValue 变化时触发。</summary>
+        private readonly Dictionary<AttributeId, GameplayAttribute> _attributes;
+        private readonly List<GameplayAttribute> _list;
+        private readonly Action<GameplayAttribute, float, float> _forwardChanged;
+        private GameplayAttribute[] _fast = Array.Empty<GameplayAttribute>();
+
         public event Action<GameplayAttribute, float, float> OnAttributeChanged;
+        public int Count => _list.Count;
 
         public AttributeSet(int capacity = 0)
         {
             _attributes = new Dictionary<AttributeId, GameplayAttribute>(capacity);
-            // 缓存转发委托：否则每次 Add 订阅都会新建一个委托对象。
-            _forwardChanged = (attribute, previous, current) => { OnAttributeChanged?.Invoke(attribute, previous, current); };
+            _list = new List<GameplayAttribute>(capacity);
+            _forwardChanged = (a, prev, cur) => OnAttributeChanged?.Invoke(a, prev, cur);
         }
 
-        public int Count => _attributes.Count;
         internal Dictionary<AttributeId, float> CaptureValues()
         {
-            var values = new Dictionary<AttributeId, float>(_attributes.Count);
-            foreach (var pair in _attributes) values.Add(pair.Key, pair.Value.CurrentValue);
+            var values = new Dictionary<AttributeId, float>(_list.Count);
+            for (int i = 0; i < _list.Count; i++) values.Add(_list[i].Id, _list[i].CurrentValue);
             return values;
         }
 
-        /// <summary>清空并填充调用方列表。列表容量足够时不分配；返回的是属性对象的引用。</summary>
         public void CopyTo(List<GameplayAttribute> results)
         {
             results.Clear();
-            foreach (var pair in _attributes) results.Add(pair.Value);
+            for (int i = 0; i < _list.Count; i++) results.Add(_list[i]);
         }
 
-        /// <summary>
-        /// 新增属性。重复添加视为配置错误直接抛出——静默返回旧值会让重复初始化难以定位。
-        /// 需要「有则改、无则建」的调用方请显式使用 <see cref="TryGet"/>。
-        /// </summary>
         public GameplayAttribute Add(AttributeId id, float baseValue = 0f)
         {
             var attribute = new GameplayAttribute(id, baseValue);
-            attribute.OnCurrentValueChanged += _forwardChanged;
             _attributes.Add(id, attribute);
+            attribute.OnCurrentValueChanged += _forwardChanged;
+            _list.Add(attribute);
+            uint index = (uint)id.Value;
+            if (index < FastLookupLimit)
+            {
+                if (index >= (uint)_fast.Length) Array.Resize(ref _fast, (int)index + 1);
+                _fast[index] = attribute;
+            }
             return attribute;
         }
 
-        public bool TryGet(AttributeId id, out GameplayAttribute attribute) => _attributes.TryGetValue(id, out attribute);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryGet(AttributeId id, out GameplayAttribute attribute)
+        {
+            uint index = (uint)id.Value;
+            GameplayAttribute[] fast = _fast;
+            if (index < (uint)fast.Length)
+            {
+                attribute = fast[index];
+                return attribute != null;
+            }
+            return _attributes.TryGetValue(id, out attribute);
+        }
 
-        /// <summary>取属性；不存在返回 null。需要订阅变化事件时用这个。</summary>
-        public GameplayAttribute Get(AttributeId id) => _attributes.TryGetValue(id, out GameplayAttribute attribute) ? attribute : null;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public GameplayAttribute Get(AttributeId id) => TryGet(id, out var a) ? a : null;
 
-        /// <summary>读取当前值。属性不存在时返回 <paramref name="fallback"/>，该默认值在调用处可见。</summary>
-        public float GetCurrent(AttributeId id, float fallback = 0f)
-            => _attributes.TryGetValue(id, out GameplayAttribute attribute) ? attribute.CurrentValue : fallback;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public float GetCurrent(AttributeId id, float fallback = 0f) => TryGet(id, out var a) ? a.CurrentValue : fallback;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public float GetBase(AttributeId id, float fallback = 0f) => TryGet(id, out var a) ? a.BaseValue : fallback;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool SetBase(AttributeId id, float value)
+        {
+            if (!TryGet(id, out var a)) return false;
+            a.BaseValue = value;
+            return true;
+        }
     }
 }

@@ -20,7 +20,7 @@ namespace ZFramework.GAS.Editor
                     using var so = new SerializedObject(asset); var p = so.GetIterator();
                     while (!string.IsNullOrEmpty(actionId) && p.Next(true))
                         if (p.name == "id" && p.propertyType == SerializedPropertyType.String && p.stringValue == actionId)
-                        { path = p.propertyPath.Substring(0, p.propertyPath.LastIndexOf('.')); break; }
+                        { int dotIndex = p.propertyPath.LastIndexOf('.'); path = dotIndex > 0 ? p.propertyPath.Substring(0, dotIndex) : ""; break; }
                     context.Add(issues, id, asset, path, error.Message, track: path.Length > 0 ? "@field" : null, elementId: path);
                 }
             }
@@ -57,14 +57,14 @@ namespace ZFramework.GAS.Editor
                 }
                 if(asset is GameplayEffectAsset)continue;
                 if (field.propertyType != SerializedPropertyType.String || string.IsNullOrEmpty(field.stringValue)) continue;
-                if (field.name != "parameterId" && field.name != "booleanParameterId" && field.name!="indexParameterId" && field.name!="scaleParameterId") continue;
+                if (field.name != "parameterId" && field.name != "booleanParameterId") continue;
                 int dot = field.propertyPath.LastIndexOf('.');
                 var parent = dot >= 0 ? serialized.FindProperty(field.propertyPath.Substring(0, dot)) : null;
                 var kind = parent?.FindPropertyRelative("kind");
                 // Magnitude fields are inactive for fixed/source-only values.
                 if (parent?.FindPropertyRelative("captureAttributeId") != null && kind != null && (MagnitudeKind)kind.intValue != MagnitudeKind.Parameter) continue;
                 known.TryGetValue(field.stringValue, out var declared);
-                var required = field.name switch { "booleanParameterId" => SkillParameterKind.Bool, "indexParameterId" => SkillParameterKind.Int, "scaleParameterId" => SkillParameterKind.Float, _ => (SkillParameterKind?)null };
+                var required = field.name == "booleanParameterId" ? SkillParameterKind.Bool : (SkillParameterKind?)null;
                 if (declared != null && required.HasValue && declared.kind != required)
                     context.Add(issues, Id, asset, field.propertyPath, "此处需要 " + required + " 参数。", track:"@field", elementId:field.propertyPath);
                 if (declared == null) context.Add(issues, Id, asset, field.propertyPath, "引用的技能参数未声明。请重新绑定。", track:"@field", elementId:field.propertyPath);

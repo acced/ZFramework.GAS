@@ -4,10 +4,6 @@ using UnityEngine;
 
 namespace ZFramework.GAS.Unity
 {
-    /// <summary>
-    /// 数值来源的可序列化镜像。运行期类型 <see cref="EffectMagnitude"/> 是 readonly struct，
-    /// Unity 不序列化只读字段，因此授权侧需要这一层。
-    /// </summary>
     [Serializable]
     public sealed class MagnitudeAsset
     {
@@ -23,8 +19,7 @@ namespace ZFramework.GAS.Unity
         public EffectMagnitude Build() => kind switch
         {
             MagnitudeKind.Fixed => EffectMagnitude.Fixed(constant),
-            MagnitudeKind.AttributeScaled => EffectMagnitude.FromAttribute(
-                new AttributeId(captureAttributeId), coefficient, captureFrom, constant),
+            MagnitudeKind.AttributeScaled => EffectMagnitude.FromAttribute(new AttributeId(captureAttributeId), coefficient, captureFrom, constant),
             MagnitudeKind.Parameter => EffectMagnitude.FromParameter(parameterId, coefficient, constant),
             MagnitudeKind.LevelTable => EffectMagnitude.ByLevel(levels),
             MagnitudeKind.Calculation => EffectMagnitude.FromCalculation(calculation),
@@ -39,8 +34,7 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private ModifierOperation operation = ModifierOperation.Add;
         [SerializeField] private MagnitudeAsset magnitude = new();
 
-        public EffectModifier Build()
-            => new(new AttributeId(targetAttributeId), operation, magnitude.Build());
+        public EffectModifier Build() => new(new AttributeId(targetAttributeId), operation, magnitude.Build());
     }
 
     [Serializable]
@@ -49,25 +43,16 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private GameplayTag[] granted = Array.Empty<GameplayTag>();
         [SerializeField] private GameplayTag[] applicationRequired = Array.Empty<GameplayTag>();
         [SerializeField] private GameplayTag[] applicationBlocked = Array.Empty<GameplayTag>();
+        [SerializeField] private GameplayTag[] ongoingRequired = Array.Empty<GameplayTag>();
         [SerializeField] private GameplayTag[] ongoingBlocked = Array.Empty<GameplayTag>();
         [SerializeField] private GameplayTag[] removeEffectsWith = Array.Empty<GameplayTag>();
 
         public EffectTags Build() => new(
-            TagAssetUtility.ToSet(granted),
-            TagAssetUtility.ToSet(applicationRequired),
-            TagAssetUtility.ToSet(applicationBlocked),
-            TagAssetUtility.ToSet(ongoingBlocked),
-            TagAssetUtility.ToSet(removeEffectsWith));
+            TagAssetUtility.ToSet(granted), TagAssetUtility.ToSet(applicationRequired),
+            TagAssetUtility.ToSet(applicationBlocked), TagAssetUtility.ToSet(ongoingBlocked),
+            TagAssetUtility.ToSet(removeEffectsWith), TagAssetUtility.ToSet(ongoingRequired));
     }
 
-    /// <summary>
-    /// 效果定义的授权资产。在 Inspector 里配置，运行期经 <see cref="Definition"/> 得到不可变定义。
-    ///
-    /// 与 UE 一致：GameplayEffect 本身就是数据资产，不需要节点图。
-    ///
-    /// <see cref="Definition"/> **缓存并复用同一个实例**——堆叠身份按定义引用判定，
-    /// 每次返回新实例会让同一资产施加的效果互不堆叠。
-    /// </summary>
     [CreateAssetMenu(menuName = "ZFramework GAS/Gameplay Effect", fileName = "NewGameplayEffect")]
     public sealed class GameplayEffectAsset : ScriptableObject, IDefinitionAsset
     {
@@ -92,52 +77,43 @@ namespace ZFramework.GAS.Unity
         [SerializeField] private EffectStacking stackingMode = EffectStacking.None;
         [SerializeField] private int stackLimit;
         [SerializeField] private StackOverflowPolicy overflowPolicy = StackOverflowPolicy.Deny;
+        [SerializeField] private StackDurationRefreshPolicy stackDurationRefresh = StackDurationRefreshPolicy.RefreshOnApply;
+        [SerializeField] private StackPeriodResetPolicy stackPeriodReset = StackPeriodResetPolicy.KeepProgress;
 
         [Header("子效果")]
         [SerializeField] private ConditionalEffectAsset[] conditionalEffects = Array.Empty<ConditionalEffectAsset>();
 
         [NonSerialized] private GameplayEffectDefinition _definition;
+        [NonSerialized] private bool _building;
 
-        /// <summary>构建（并缓存）运行期定义。同一资产始终返回同一实例。</summary>
-        private bool _building;
         public GameplayEffectDefinition Definition
         {
             get
             {
                 if (_definition != null) return _definition;
                 if (_building) throw new InvalidOperationException(name + ": 效果循环引用。");
-                _building = true; try { return _definition = Build(); } finally { _building = false; }
+                _building = true;
+                try { return _definition = Build(); } finally { _building = false; }
             }
         }
 
         private GameplayEffectDefinition Build()
         {
-            var builtModifiers = new EffectModifier[modifiers.Length];
-            for (int i = 0; i < modifiers.Length; i++)
-            {
-                builtModifiers[i] = modifiers[i].Build();
-            }
-
-            var children = new ConditionalEffect[conditionalEffects.Length];
+            var mods = modifiers.Length == 0 ? Array.Empty<EffectModifier>() : new EffectModifier[modifiers.Length];
+            for (int i = 0; i < mods.Length; i++) mods[i] = modifiers[i].Build();
+            var children = conditionalEffects.Length == 0 ? Array.Empty<ConditionalEffect>() : new ConditionalEffect[conditionalEffects.Length];
             for (int i = 0; i < children.Length; i++) children[i] = conditionalEffects[i].Build(this);
 
-            var definition = new GameplayEffectDefinition(
-                durationPolicy,
-                duration,
-                builtModifiers,
-                tags.Build(),
-                new EffectStackingRule(stackingMode, stackLimit, overflowPolicy),
-                period,
-                executePeriodicOnApplication,
-                TagAssetUtility.ToSet(cueTags),
-                children,
+            var def = new GameplayEffectDefinition(
+                durationPolicy, duration, mods, tags.Build(),
+                new EffectStackingRule(stackingMode, stackLimit, overflowPolicy, stackDurationRefresh, stackPeriodReset),
+                period, executePeriodicOnApplication, TagAssetUtility.ToSet(cueTags), children,
                 useDurationMagnitude ? durationMagnitude.Build() : null,
                 usePeriodMagnitude ? periodMagnitude.Build() : null);
-            DefinitionSource.Register(definition, this);
-            return definition;
+            DefinitionSource.Register(def, this);
+            return def;
         }
 
-        /// <summary>编辑期修改后清掉缓存，避免继续用旧定义。</summary>
         public void InvalidateDefinition() { _definition = null; DefinitionSource.InvalidateDependents(this); }
         private void OnValidate() => InvalidateDefinition();
     }
@@ -150,6 +126,7 @@ namespace ZFramework.GAS.Unity
 
         public ConditionalEffect Build(GameplayEffectAsset owner)
         {
+            if (effect == null) throw new InvalidOperationException(owner.name + ": 子效果缺少效果资产。");
             DefinitionSource.DependsOn(owner, effect);
             return new ConditionalEffect(effect.Definition, trigger);
         }

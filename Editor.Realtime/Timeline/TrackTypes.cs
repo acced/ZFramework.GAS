@@ -116,13 +116,21 @@ namespace ZFramework.GAS.Editor
         public override string Label(SerializedProperty element) => element.managedReferenceValue switch {
             AudioSkillTrack audio => audio.clip != null ? audio.clip.name : "音效", null => "未配置", var track => track.GetType().Name };
         public override void InitializeNew(SerializedProperty element, float time, Object dropped)
-        { element.managedReferenceValue = new AudioSkillTrack { start = time, end = time + .25f }; base.InitializeNew(element, time, dropped); element.FindPropertyRelative("end").floatValue = time + .25f; }
+        {
+            float duration = ((SkillAnimationAsset)element.serializedObject.targetObject).Duration;
+            float start = Mathf.Clamp(time, 0f, Mathf.Max(0f, duration));
+            float end = Mathf.Min(duration, start + .25f);
+            element.managedReferenceValue = new AudioSkillTrack { start = start, end = end };
+            base.InitializeNew(element, start, dropped);
+            element.FindPropertyRelative("end").floatValue = end;
+        }
     }
     public static class TrackTypeRegistry
     {
         public static readonly IReadOnlyList<ITrackType> Types = TypeCache.GetTypesDerivedFrom<ITrackType>()
             .Where(t => !t.IsAbstract && !t.IsInterface && t.GetConstructor(Type.EmptyTypes) != null)
-            .OrderBy(t => t == typeof(EventTrack) ? 0 : t == typeof(CueRegionTrack) ? 1 : t == typeof(TagWindowTrack) ? 2 : 3)
+            .OrderBy(t => t == typeof(EventTrack) ? 0 : t == typeof(CueRegionTrack) ? 1 : t == typeof(TagWindowTrack) ? 2 : t == typeof(HitWindowTrack) ? 3 : t == typeof(RuntimeTrack) ? 4 : 5)
+            .ThenBy(t => t.FullName, StringComparer.Ordinal)
             .Select(t => (ITrackType)Activator.CreateInstance(t)).ToArray();
         public static ITrackType Get(string path) => Types.FirstOrDefault(t => t.PropertyPath == path);
     }

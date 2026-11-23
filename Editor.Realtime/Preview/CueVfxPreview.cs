@@ -39,10 +39,16 @@ namespace ZFramework.GAS.Editor
         /// <param name="samplePose">输入授权动画时间。固定在世界的特效使用区间开始时的挂点姿势。</param>
         public void Sample(SkillAnimationAsset animation, float time, Action<float> samplePose)
         {
+            if (_library == null || animation == null)
+            {
+                if (_instances.Count > 0) Dispose();
+                return;
+            }
+
             _used.Clear();
+            bool poseMoved = false;
             try
             {
-                if (_library == null || animation == null) return;
                 using var so = new SerializedObject(animation);
                 var regions = so.FindProperty("cueRegions");
                 for (int index = 0; index < _library.bindings.Length; index++)
@@ -72,18 +78,18 @@ namespace ZFramework.GAS.Editor
                         _used.Add(key);
                         if (!_instances.TryGetValue(key, out var instance))
                         {
-                            samplePose(binding.follow ? time : range.start);
+                            if (!binding.follow) { samplePose(range.start); poseMoved = true; }
                             instance = new CueVfxInstance(binding, _owner.transform, true);
                             _instances.Add(key, instance);
+                            if (poseMoved) { samplePose(time); poseMoved = false; }
                         }
-                        samplePose(time);
                         instance.SamplePreview(time - range.start, range.end - range.start);
                     }
                 }
             }
             finally
             {
-                samplePose(time);
+                if (poseMoved) samplePose(time);
                 _remove.Clear();
                 foreach (var pair in _instances) if (!_used.Contains(pair.Key)) _remove.Add(pair.Key);
                 foreach (var key in _remove) { _instances[key].Dispose(); _instances.Remove(key); }

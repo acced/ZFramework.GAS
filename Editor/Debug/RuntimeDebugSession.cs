@@ -38,7 +38,7 @@ namespace ZFramework.GAS.Editor
         private static void SelectionChanged() { if (FollowSelection) Refresh(); }
         private static void Update()
         {
-            if (!EditorApplication.isPlaying || EditorApplication.isCompiling) return;
+            if (Changed == null || !EditorApplication.isPlaying || EditorApplication.isCompiling) return;
             double now = EditorApplication.timeSinceStartup;
             if (now < _nextCapture) return;
             _nextCapture = now + .1;
@@ -55,15 +55,18 @@ namespace ZFramework.GAS.Editor
         {
             Units.Clear(); Names.Clear();
             if (!EditorApplication.isPlaying) return;
+            var labels = new Dictionary<MonoBehaviour, string>();
             foreach (var component in UnityEngine.Object.FindObjectsByType<MonoBehaviour>(FindObjectsInactive.Include, FindObjectsSortMode.None))
             {
                 if (component == null || component is not IAbilitySystemProvider provider ||
                     !component.gameObject.scene.IsValid() || !component.gameObject.scene.isLoaded ||
                     EditorUtility.IsPersistent(component) || (component.hideFlags & HideFlags.DontSave) != 0) continue;
                 Units.Add(component);
-                if (provider.AbilitySystem != null) Names[provider.AbilitySystem] = UnitLabel(component);
+                string label = UnitLabel(component);
+                labels[component] = label;
+                if (provider.AbilitySystem != null) Names[provider.AbilitySystem] = label;
             }
-            Units.Sort((a, b) => string.CompareOrdinal(UnitLabel(a), UnitLabel(b)));
+            Units.Sort((a, b) => string.CompareOrdinal(labels[a], labels[b]));
             _nextScan = EditorApplication.timeSinceStartup + 1;
         }
         public static string UnitLabel(MonoBehaviour unit)

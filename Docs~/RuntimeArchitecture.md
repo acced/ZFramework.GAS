@@ -22,11 +22,11 @@
 
 ## 激活与提交
 
-Core 只有 `TryActivateAbility` 和带版本的 `CommitAbility`；Unity 资产施放只有 `SkillRunner.TryCast`。两者不是平行的宿主入口：Runner 负责资产准备和动作执行，内部调用 Core 生命周期。
+Core 提供 `CheckActivation`、`TryActivateAbility`、带版本的 `CommitAbility`、`EndAbility` 与 `CancelAbility`，以及便捷效果施加入口 `ApplyEffectToSelf` / `ApplyEffectToTarget`（统一经 `GameplayEffectContainer.Apply` 结算）；Unity 资产施放提供 `SkillRunner.CanCast` 预检与 `SkillRunner.TryCast` 唯一执行入口。两者不是平行的宿主入口：Runner 负责资产准备和动作执行，内部调用 Core 生命周期。
 
-自动提交先检查标签、消耗与共享冷却。延迟提交在激活时检查可启动条件，实际提交时重新检查资源与冷却。消耗与冷却仍为普通 Effect。提交幂等，同版本重复提交不会支付第二次；旧版本提交返回 Inactive。回调导致能力结束时，返回最终 check，不依赖额外历史字段。
+自动提交先检查标签、净值消耗与共享冷却。延迟提交在激活时检查可启动条件，实际提交时重新检查资源与冷却。消耗与冷却仍为普通 Effect；`GameplayAbilitySpec.CooldownRemaining` / `CooldownDuration` 支持跨定义共享冷却标签（GCD / 技能组冷却）。提交幂等，同版本重复提交不会支付第二次；旧版本提交返回 Inactive。回调导致能力结束时，返回最终 check，不依赖额外历史字段。
 
-Spec 是状态查询入口。Runner 不再复制 IsActive、CooldownRemaining、CooldownDuration、Cancel 等 API；按资产查询只保留 GetSpec。
+Spec 是状态查询入口；`ASC.OnAbilityActivated/Committed/Ended` 与 `Effects.OnEffectAdded/Removed/StackChanged` 提供零侵入运行期事件钩子。Runner 不复制 IsActive、CooldownRemaining、CooldownDuration、Cancel 等状态读取 API；按资产查询保留 `GetSpec` 与预检 `CanCast`。
 
 ## 参数
 
@@ -48,11 +48,11 @@ SelectTargets 只负责按查询结果执行分支。目标上限来自 TargetQu
 
 ## 表现
 
-Realtime 保留一条技能时间轴和一个 UnityEngine.Object 片段引用。主包的 Playables 驱动解释 AnimationClip，可选 Spine 包的驱动解释 AnimationReferenceAsset；公共时间轴不识别后端。Marker、Cue、标签窗口、命中窗口与音效都以定义的秒数推进。AnimationTask 必须接收现有 SkillExecutionContext，不推测目标、创建备用上下文或重写时长。
+Realtime 保留一条技能时间轴和一个 UnityEngine.Object 片段引用。主包的 Playables 驱动解释 AnimationClip，可选 Spine 包的驱动解释 AnimationReferenceAsset；公共时间轴不识别后端。Marker、Cue、标签窗口、命中窗口与音效都以定义的秒数推进，并支持通过 `SkillExecutionContext.TimeScale` / `AnimationTask.TimeScale` 实现攻速、顿帧（0）与慢动作。AnimationTask 必须接收现有 SkillExecutionContext，不推测目标、创建备用上下文或重写时长。
 
-IAnimationDriver 只有 Play(Object, blendIn)、Advance(normalizedTime)、Stop(blendOut)、Dispose。主包的 Playables 实现负责线性混入混出；Spine 4.3 驱动由可选包提供。Locomotion、角色动画状态机和 RootMotion 策略由项目管理。技能结束和表现资源释放有独立且明确的时机。
+IAnimationDriver 只有 Play(Object, blendIn)、Advance(normalizedTime)、Stop(blendOut)、Dispose。主包的 `PlayableAnimationDriver` 负责线性混入混出、可选 `AvatarMask` 上下半身遮罩、FootIK、图层排序与空闲暂停；Spine 4.3 驱动由可选包提供。Locomotion、角色动画状态机和 RootMotion 策略由项目管理。技能结束和表现资源释放有独立且明确的时机。
 
-驱动定位技能片段，表现宿主推进混合；混出可在任务结束后继续。Spine 的原生事件不驱动 GAS 业务。现有 AnimationTask 先处理边界再定位驱动，Playables 也由其图稍后求值，因此不能把 Marker 中读取到的骨骼当作该边界的同步采样结果。骨骼精确命中需要公共采样与挂点同步约定，不属于当前动画适配范围。
+`AnimationTask` 在构造时将所有边界合并排序，同时间点按 `TagOpen < CueOpen < TrackEnter < Marker < TrackExit < TagClose < CueClose` 确定性执行；进入轨道与触发 Marker 前先调用 `IAnimationDriver.Advance` 同步到该边界时刻，单帧跨过整个轨道区间时在退出前于起点补采一次以防命中窗口穿透。若需在武器碰撞体/骨骼挂点命中时同步求值动画姿势，可在构造 `PlayableAnimationDriver` 时开启 `syncPoseOnAdvance: true` 或按需调用 `SyncPose()`。Spine 的原生事件不驱动 GAS 业务。
 
 ## 准备与热路径
 

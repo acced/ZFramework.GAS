@@ -68,7 +68,11 @@ namespace ZFramework.GAS.Editor
                     _body.Add(new Button(() =>
                     {
                         string path = embedded ? EditorUtility.SaveFilePanelInProject("外置效果", asset.name, "asset", "选择独立资产的位置") : null;
-                        if (!embedded || !string.IsNullOrEmpty(path)) SkillAssetFactory.Convert(_doc, child, !embedded, path);
+                        if (!embedded || !string.IsNullOrEmpty(path))
+                        {
+                            try { SkillAssetFactory.Convert(_doc, child, !embedded, path); }
+                            catch (Exception ex) { _doc.Report(ex.Message); }
+                        }
                     }) { text = embedded ? "外置为共享资产…" : "复制为内嵌资产" });
                 }
                 AddInspector(so);
@@ -110,6 +114,7 @@ namespace ZFramework.GAS.Editor
             {
                 try
                 {
+                    so.UpdateIfRequiredOrScript();
                     var owned = new GameplayTagCountContainer(); var unknown = new List<string>();
                     foreach (var name in e.newValue.Split(new[] { ',', '，', '\n', ';' }, StringSplitOptions.RemoveEmptyEntries))
                     { var tag = GameplayTagManager.RequestTag(name.Trim()); if (tag.IsValid) owned.AddTag(tag); else unknown.Add(name.Trim()); }

@@ -45,25 +45,32 @@ namespace ZFramework.GAS.Editor
         }
         private static void Subscribe()
         {
-            bool need=EditorApplication.isPlaying && (_next||SkillBreakpoints.instance.Any);if(need==_subscribed)return; _subscribed=need;
-            if(need){SkillActionDebug.Boundary+=Boundary;SkillActionDebug.PointReached+=Point;SkillActionDebug.TargetsSelected+=Query;}
-            else {SkillActionDebug.Boundary-=Boundary;SkillActionDebug.PointReached-=Point;SkillActionDebug.TargetsSelected-=Query;}
+            bool need = (EditorApplication.isPlaying || EditorApplication.isPlayingOrWillChangePlaymode) && (_next || SkillBreakpoints.instance.Any);
+            if (need == _subscribed) return;
+            _subscribed = need;
+            if (need) { SkillActionDebug.Boundary += Boundary; SkillActionDebug.PointReached += Point; SkillActionDebug.TargetsSelected += Query; }
+            else { SkillActionDebug.Boundary -= Boundary; SkillActionDebug.PointReached -= Point; SkillActionDebug.TargetsSelected -= Query; }
         }
-        private static void Point(SkillExecutionContext c,string id,string label){if(c!=null && Has(id)) Pause(c,id,label);}
+        private static void Point(SkillExecutionContext c, string id, string label) { if (c != null && Has(id)) Pause(c, id, label); }
         static SkillActionDebugger()
         {
-            EditorApplication.delayCall+=Subscribe;
-            EditorApplication.playModeStateChanged += _ => { PausedActionId = null; PauseNext = false; Frame=null; };
+            EditorApplication.delayCall += Subscribe;
+            EditorApplication.playModeStateChanged += state =>
+            {
+                if (state == PlayModeStateChange.ExitingEditMode) { Subscribe(); return; }
+                if (state == PlayModeStateChange.EnteredEditMode || state == PlayModeStateChange.ExitingPlayMode)
+                { PausedActionId = null; PauseNext = false; Frame = null; Subscribe(); }
+            };
         }
         public static void Toggle(string actionId)
-        {SkillBreakpoints.instance.Toggle(actionId);Subscribe();}
+        { SkillBreakpoints.instance.Toggle(actionId); Subscribe(); }
         private static void Boundary(SkillExecutionContext context, SkillActionDefinition action)
-        =>Pause(context,action.Id,action.Label);
-        private static void Pause(SkillExecutionContext context,string id,string label)
+        => Pause(context, action.Id, action.Label);
+        private static void Pause(SkillExecutionContext context, string id, string label)
         {
             if (!EditorApplication.isPlaying || EditorApplication.isPaused) return;
             if (!PauseNext && !Has(id)) return;
-            Frame=new PausedFrame(context,id,label);
+            Frame = new PausedFrame(context, id, label);
             PauseNext = false; PausedActionId = id;
             EditorApplication.isPaused = true;
         }

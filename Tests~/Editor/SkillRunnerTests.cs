@@ -111,5 +111,27 @@ namespace ZFramework.GAS.Editor.Tests
             runner.Grant(skill); runner.TryCast(skill); Assert.AreEqual(1, owner.GrantedAbilityCount);
             Assert.IsTrue(runner.Revoke(skill)); Assert.AreEqual(0, owner.GrantedAbilityCount);
         }
+        [Test]
+        public void CanCastDirectionalTargetAndRevokedEventWorkTogether()
+        {
+            var owner = new AbilitySystemComponent(); var driver = new Driver();
+            var runner = new SkillRunner(owner); var timeline = new SkillTimelinePlayer(runner, driver);
+            var skill = Skill(animated: true, cooldown: true);
+            try
+            {
+                Assert.AreEqual(AbilityActivationResult.Inactive, runner.CanCast(skill).Result);
+                runner.Grant(skill);
+                Assert.IsTrue(runner.CanCast(skill).Succeeded);
+                Vector3 seenForward = default;
+                runner.CastStarted += ctx => seenForward = ctx.Forward;
+                Assert.IsTrue(runner.TryCast(skill, SkillCastTarget.Directional(new Vector3(3, 0, 4))).Succeeded);
+                Assert.AreEqual(.6f, seenForward.x, .001f); Assert.AreEqual(.8f, seenForward.z, .001f);
+                Assert.IsNotNull(timeline.ActiveTask);
+                int revoked = 0; runner.Revoked += a => { if (a == skill) revoked++; };
+                Assert.IsTrue(runner.Revoke(skill));
+                Assert.AreEqual(1, revoked); Assert.IsNull(timeline.ActiveTask);
+            }
+            finally { timeline.Dispose(); }
+        }
     }
 }

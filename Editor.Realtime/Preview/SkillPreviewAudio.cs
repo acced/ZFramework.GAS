@@ -40,9 +40,9 @@ namespace ZFramework.GAS.Editor
                 {
                     if (track.loop && track.clip.length > 0) local %= track.clip.length;
                     Source.Stop(); SeekCount++; _lastStart=now;
-                    if (local < track.clip.length)
+                    if (local < track.clip.length && track.clip.samples > 0)
                     {
-                        Source.timeSamples = Mathf.Min(track.clip.samples - 1, (int)(local * track.clip.frequency));
+                        Source.timeSamples = Mathf.Clamp((int)(local * track.clip.frequency), 0, track.clip.samples - 1);
                         Source.Play();
                     }
                 }
@@ -59,8 +59,13 @@ namespace ZFramework.GAS.Editor
         private SkillAnimationAsset _animation;
         private int _seekVersion;
         private float _time;
-        private static readonly Action UpdateAudio = (Action)typeof(AudioImporter).Assembly.GetType("UnityEditor.AudioUtil")
-            .GetMethod("UpdateAudio", BindingFlags.Public | BindingFlags.Static).CreateDelegate(typeof(Action));
+        private static readonly Action UpdateAudio = ResolveUpdateAudio();
+        private static Action ResolveUpdateAudio()
+        {
+            var method = typeof(AudioImporter).Assembly.GetType("UnityEditor.AudioUtil")
+                ?.GetMethod("UpdateAudio", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
+            return method != null ? (Action)Delegate.CreateDelegate(typeof(Action), method, false) : null;
+        }
         private static Scene CreateAudioScene()
         {
             // Unity 6's public NewPreviewScene disables audio sources. Use the editor's
@@ -78,11 +83,11 @@ namespace ZFramework.GAS.Editor
             bool seek = animation != _animation || seekVersion != _seekVersion || time < _time;
             if (animation != _animation) Clear();
             _active.Clear();
-            if (enabled && animation != null)
+            if (enabled && animation != null && animation.runtimeTracks != null)
                 foreach (var track in animation.runtimeTracks)
-                    if (track is AudioSkillTrack audio && audio.clip != null && time >= audio.start && time < audio.end)
+                    if (track is AudioSkillTrack audio && audio.clip != null && !string.IsNullOrEmpty(audio.Id) && time >= audio.start && time < audio.end)
                     {
-                        _active.Add(audio.Id);
+                        if (!_active.Add(audio.Id)) continue;
                         if (_channels.TryGetValue(audio.Id, out var channel) && !channel.Matches(audio))
                         { channel.Dispose(); _channels.Remove(audio.Id); channel = null; }
                         bool created = channel == null;
@@ -97,7 +102,7 @@ namespace ZFramework.GAS.Editor
             foreach (var item in _channels) if (!_active.Contains(item.Key)) _removed.Add(item.Key);
             foreach (var id in _removed) { _channels[id].Dispose(); _channels.Remove(id); }
             _time = time; _seekVersion = seekVersion; _animation = animation;
-            if (_channels.Count > 0) UpdateAudio();
+            if (_channels.Count > 0) UpdateAudio?.Invoke();
         }
         private void Clear() { foreach (var channel in _channels.Values) channel.Dispose(); _channels.Clear(); }
         public void Dispose()

@@ -74,7 +74,7 @@ namespace ZFramework.GAS.Editor
         }
         public static void Release()
         {
-            if(--_clients!=0) return;
+            if (_clients <= 0 || --_clients != 0) return;
             SkillActionDebug.Boundary-=Begin; SkillActionDebug.ActionFinished-=End;
             SkillActionDebug.BranchSelected-=Branch; SkillActionDebug.PointReached-=Point;
             GasDebugHooks.Applied-=Applied; GasDebugHooks.Removed-=Removed; GasDebugHooks.Refreshed-=Refreshed; GasDebugHooks.Stacked-=Stack; GasDebugHooks.PeriodExecuted-=Period;

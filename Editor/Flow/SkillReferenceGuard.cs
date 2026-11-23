@@ -16,7 +16,7 @@ namespace ZFramework.GAS.Editor
             var targets=new HashSet<Object>(objects);if(targets.Count==0)return null;
             foreach(string path in Files()) {
                 if(skip==null && path==targetFile)continue;
-                if(path!=targetFile && !AssetDatabase.GetDependencies(path).Contains(targetFile))continue;
+                if (path != targetFile && !AssetDatabase.GetDependencies(path, recursive: false).Contains(targetFile)) continue;
                 foreach(var owner in AssetDatabase.LoadAllAssetsAtPath(path)) {
                     if(owner==null || skip?.Contains(owner)==true)continue;
                     using var so=new SerializedObject(owner);using var p=so.GetIterator();

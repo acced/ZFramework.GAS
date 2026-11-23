@@ -198,5 +198,14 @@ namespace ZFramework.GAS.Editor.Tests
             Cue(GameplayCueEvent.OnActive); Assert.AreEqual(2, Instances().Length);
             _player.Bind(null); Assert.IsEmpty(Instances());
         }
+
+        [Test]
+        public void ExecutedCueSpawnsOneShotBurstEvenWithImmediateStopMode()
+        {
+            Particles(); _library.bindings[0].stopMode = CueVfxStopMode.Immediate;
+            Cue(GameplayCueEvent.Executed);
+            Assert.AreEqual(1, Instances().Length);
+            _player.Bind(null); Assert.IsEmpty(Instances());
+        }
     }
 }

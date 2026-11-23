@@ -61,6 +61,7 @@ namespace ZFramework.GAS.Editor
 
         public void Dispose()
         {
+            if (_renderer == null || _skeleton == null) return;
             _skeleton.Time = 0;
             _skeleton.SetupPose();
             RefreshMesh();

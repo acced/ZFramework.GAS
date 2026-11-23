@@ -5,27 +5,24 @@ using System.Collections.Generic;
 
 namespace ZFramework.GAS
 {
-    /// <summary>
-    /// 一个实体的 GAS 门面：属性、标签、生效效果、已授予能力的聚合体。
-    ///
-    /// 宿主自行持有实例并调用 <see cref="Tick"/>。标签词表在域内注册一次后冻结，
-    /// 标签入参由调用方保证已经解析；没有隐式 tick 源。
-    /// </summary>
+    /// <summary>实体的 GAS 门面：属性、标签、生效效果、已授予能力与任务的统一入口。</summary>
     public sealed class AbilitySystemComponent
     {
         private readonly List<GameplayAbilitySpec> _abilities = new();
         private readonly GameplayTaskHost _tasks = new();
         private bool _clearing, _ticking;
+
         public AttributeSet Attributes { get; }
         public GameplayTagCountContainer OwnedTags { get; }
         public GameplayEffectContainer Effects { get; }
-        public GameplayEventChannel Events { get; } = new GameplayEventChannel();
-        /// <summary>Changes when a pooled owner is cleared; delayed work must not target its next incarnation.</summary>
+        public GameplayEventChannel Events { get; } = new();
         public int Generation { get; private set; }
         public AbilitySourceIdentity SourceIdentity { get; private set; }
-
-        /// <summary>构造时传入的 Cue 路由；可为 null。效果之外的表现时机（动画时间轴的区间等）据此派发。</summary>
         public GameplayCueRouter CueRouter { get; }
+
+        public event Action<GameplayAbilitySpec> OnAbilityActivated;
+        public event Action<GameplayAbilitySpec> OnAbilityCommitted;
+        public event Action<GameplayAbilitySpec, bool> OnAbilityEnded;
 
         public AbilitySystemComponent(int attributeCapacity = 0, GameplayCueRouter cueRouter = null)
         {
@@ -36,13 +33,9 @@ namespace ZFramework.GAS
             Effects = new GameplayEffectContainer(Attributes, OwnedTags, cueRouter, this);
         }
 
-        /// <summary>
-        /// 推进本实体的时间。这是整个系统唯一的 tick 入口，由宿主显式驱动。
-        /// 先推进效果再推进任务：任务观察到的冷却与增益状态是本帧最新的。
-        /// </summary>
         public void Tick(float deltaTime)
         {
-            if (_ticking) throw new InvalidOperationException("ASC.Tick cannot be called reentrantly. Advance each owner once from the host loop.");
+            if (_ticking) throw new InvalidOperationException("ASC.Tick cannot be called reentrantly.");
             _ticking = true;
             try
             {
@@ -53,12 +46,12 @@ namespace ZFramework.GAS
             finally { _ticking = false; }
         }
 
-        /// <summary>When a task throws during Tick, the host can end just that cast.</summary>
         public GameplayAbilityTask CurrentTask => _tasks.CurrentTask;
         public int ActiveTaskCount => _tasks.Count;
         public GameplayAbilityTask GetActiveTask(int index) => _tasks[index];
+        public int GrantedAbilityCount => _abilities.Count;
+        public GameplayAbilitySpec GetGrantedAbility(int index) => _abilities[index];
 
-        /// <summary>The task belongs to this activation and is cancelled when it ends.</summary>
         public void StartTask(GameplayAbilitySpec spec, GameplayAbilityTask task)
         {
             GasAssert.That(ReferenceEquals(spec.Owner, this) && spec.IsGranted, "Unknown grant.");
@@ -66,56 +59,49 @@ namespace ZFramework.GAS
             _tasks.Start(spec, task);
         }
 
-        public int GrantedAbilityCount => _abilities.Count;
-
-        public GameplayAbilitySpec GetGrantedAbility(int index) => _abilities[index];
-
         public GameplayAbilitySpec GrantAbility(GameplayAbilityDefinition definition, int level = 1)
         {
-            if (definition == null)
-            {
-                throw new ArgumentNullException(nameof(definition));
-            }
-
-            var spec = new GameplayAbilitySpec(definition, this, level);
+            var spec = new GameplayAbilitySpec(definition ?? throw new ArgumentNullException(nameof(definition)), this, level);
             _abilities.Add(spec);
             return spec;
         }
 
         public bool RemoveAbility(GameplayAbilitySpec spec)
         {
-            if (spec == null || !_abilities.Remove(spec))
-            {
-                return false;
-            }
-
+            if (spec == null || !_abilities.Remove(spec)) return false;
             spec.IsGranted = false;
-            DeactivateInternal(spec);
+            DeactivateInternal(spec, cancelled: true);
             return true;
         }
 
-        /// <summary>Refresh an inactive grant after authoring changes. Existing effects keep their original definitions.</summary>
         public void UpdateAbilityDefinition(GameplayAbilitySpec spec, GameplayAbilityDefinition definition)
         {
-            if (spec == null || !ReferenceEquals(spec.Owner, this) || !_abilities.Contains(spec)) throw new ArgumentException("Unknown grant.", nameof(spec));
+            if (spec == null || !ReferenceEquals(spec.Owner, this) || !_abilities.Contains(spec))
+                throw new ArgumentException("Unknown grant.", nameof(spec));
             if (spec.IsActive) throw new InvalidOperationException("Cannot replace an executing definition.");
             spec.Definition = definition ?? throw new ArgumentNullException(nameof(definition));
+            if (spec.CommittedCooldown != null && !ReferenceEquals(spec.CommittedCooldown, spec.Definition.Cooldown) && !Effects.Find(spec.CommittedCooldown).IsValid)
+                spec.CommittedCooldown = null;
         }
 
-        /// <summary>Activate after checking tags, cooldown and cost. Set autoCommit to false for aiming or charging.</summary>
-        public AbilityActivationCheck TryActivateAbility(GameplayAbilitySpec spec,
-            EffectEvaluationContext context = null, bool autoCommit = true)
+        public EffectApplicationResult ApplyEffectToSelf(GameplayEffectDefinition definition, EffectEvaluationContext context = null)
+            => Effects.Apply(new GameplayEffectSpec(definition, Attributes, this, context));
+
+        public EffectApplicationResult ApplyEffectToTarget(AbilitySystemComponent target, GameplayEffectDefinition definition, EffectEvaluationContext context = null)
+            => target.Effects.Apply(new GameplayEffectSpec(definition, Attributes, this, context));
+
+        public AbilityActivationCheck TryActivateAbility(GameplayAbilitySpec spec, EffectEvaluationContext context = null, bool autoCommit = true)
         {
             context ??= spec.DefaultContext;
             if (autoCommit) return Commit(spec, context, activate: true);
-            var check = CheckActivation(spec, context);
+
+            AbilityActivationCheck check = CheckActivation(spec, context);
             if (!check.Succeeded) return check;
             spec.Committing = true;
             try { return Activate(spec, context) ? default : new AbilityActivationCheck(AbilityActivationResult.Inactive, "技能在激活期间结束"); }
             finally { spec.Committing = false; }
         }
 
-        /// <summary>Delayed work passes its captured version so an old task cannot commit a later activation.</summary>
         public AbilityActivationCheck CommitAbility(GameplayAbilitySpec spec, int activationVersion)
             => spec.ActivationVersion == activationVersion
                 ? Commit(spec, spec.EvaluationContext, activate: false)
@@ -123,52 +109,62 @@ namespace ZFramework.GAS
 
         public AbilityActivationCheck CheckActivation(GameplayAbilitySpec spec, EffectEvaluationContext context = null)
         {
-            var check = CheckGates(spec);
+            AbilityActivationCheck check = CheckGates(spec);
             return check.Succeeded ? CheckCost(spec.Definition.Cost, context ?? spec.DefaultContext) : check;
         }
 
         public AbilityActivationCheck CheckCommit(GameplayAbilitySpec spec)
         {
-            var check = CheckCommitGates(spec);
+            AbilityActivationCheck check = CheckCommitGates(spec);
             return check.Succeeded && !spec.IsCommitted ? CheckCost(spec.Definition.Cost, spec.EvaluationContext) : check;
         }
 
         private AbilityActivationCheck Commit(GameplayAbilitySpec spec, EffectEvaluationContext context, bool activate)
         {
-            var check = activate ? CheckGates(spec) : CheckCommitGates(spec);
-            if (!check.Succeeded || !activate && spec.IsCommitted) return check;
-            var definition = spec.Definition;
-            var cost = definition.Cost;
-            var cooldown = definition.Cooldown;
-            int costCount = cost == null ? 0 : cost.Modifiers.Length;
-            int cooldownCount = cooldown == null ? 0 : cooldown.Modifiers.Length;
+            AbilityActivationCheck check = activate ? CheckGates(spec) : CheckCommitGates(spec);
+            if (!check.Succeeded || (!activate && spec.IsCommitted)) return check;
+
+            GameplayEffectDefinition cost = spec.Definition.Cost, cooldown = spec.Definition.Cooldown;
+            if (cost == null && cooldown == null)
+            {
+                spec.Committing = true;
+                try
+                {
+                    if (activate && !Activate(spec, context)) return CompleteCommit(spec, spec.ActivationVersion);
+                    spec.IsCommitted = true;
+                    int version = spec.ActivationVersion;
+                    OnAbilityCommitted?.Invoke(spec);
+                    return CompleteCommit(spec, version);
+                }
+                finally { spec.Committing = false; }
+            }
+
+            int costCount = cost?.Modifiers.Length ?? 0, cdCount = cooldown?.Modifiers.Length ?? 0, total = costCount + cdCount;
             float[] rented = null;
-            Span<float> values = costCount + cooldownCount <= 128 ? stackalloc float[costCount + cooldownCount]
-                : (rented = ArrayPool<float>.Shared.Rent(costCount + cooldownCount));
+            Span<float> values = total <= 128 ? stackalloc float[total] : (rented = ArrayPool<float>.Shared.Rent(total));
             try
             {
-                var costSpec = cost == null ? default : new GameplayEffectSpec(cost, Attributes, this, context: context);
-                var cooldownSpec = cooldown == null ? default : new GameplayEffectSpec(cooldown, Attributes, this, context: context);
-                var costValues = values.Slice(0, costCount);
-                var cooldownValues = values.Slice(costCount, cooldownCount);
+                GameplayEffectSpec costSpec = cost == null ? default : new GameplayEffectSpec(cost, Attributes, this, context: context);
+                GameplayEffectSpec cdSpec = cooldown == null ? default : new GameplayEffectSpec(cooldown, Attributes, this, context: context);
+                Span<float> costValues = values.Slice(0, costCount), cdValues = values.Slice(costCount, cdCount);
+
                 for (int i = 0; i < costCount; i++) costValues[i] = costSpec.Resolve(cost.Modifiers[i].Magnitude, Attributes);
                 check = CheckCost(cost, costValues);
                 if (!check.Succeeded) return check;
-                for (int i = 0; i < cooldownCount; i++) cooldownValues[i] = cooldownSpec.Resolve(cooldown.Modifiers[i].Magnitude, Attributes);
-                float duration = cooldown != null ? cooldownSpec.ResolveDuration(Attributes) : 0;
-                float period = cooldown != null ? cooldownSpec.ResolvePeriod(Attributes) : 0;
+
+                for (int i = 0; i < cdCount; i++) cdValues[i] = cdSpec.Resolve(cooldown.Modifiers[i].Magnitude, Attributes);
+                float duration = cooldown != null ? cdSpec.ResolveDuration(Attributes) : 0f;
+                float period = cooldown != null ? cdSpec.ResolvePeriod(Attributes) : 0f;
+
                 spec.Committing = true;
                 if (activate && !Activate(spec, context)) return CompleteCommit(spec, spec.ActivationVersion);
                 spec.IsCommitted = true;
-                int version = spec.ActivationVersion;
-                int generation = Generation;
-                if (cost != null) Effects.ApplyResolved(costSpec, costValues, 0, 0);
+                int version = spec.ActivationVersion, generation = Generation;
+                if (cost != null) Effects.ApplyResolved(costSpec, costValues, 0f, 0f);
                 if (generation != Generation) return CompleteCommit(spec, version);
-                if (cooldown != null)
-                {
-                    spec.CommittedCooldown = cooldown;
-                    Effects.ApplyResolved(cooldownSpec, cooldownValues, duration, period);
-                }
+                if (cooldown != null) { spec.CommittedCooldown = cooldown; Effects.ApplyResolved(cdSpec, cdValues, duration, period); }
+                if (generation == Generation && spec.ActivationVersion == version && spec.IsActive && spec.IsGranted)
+                    OnAbilityCommitted?.Invoke(spec);
                 return CompleteCommit(spec, version);
             }
             finally
@@ -179,8 +175,8 @@ namespace ZFramework.GAS
         }
 
         private static AbilityActivationCheck CompleteCommit(GameplayAbilitySpec spec, int version)
-            => spec.ActivationVersion == version && spec.IsActive && spec.IsGranted ? default
-                : new AbilityActivationCheck(AbilityActivationResult.Inactive, "技能在提交期间结束");
+            => spec.ActivationVersion == version && spec.IsActive && spec.IsGranted
+                ? default : new AbilityActivationCheck(AbilityActivationResult.Inactive, "技能在提交期间结束");
 
         private bool Activate(GameplayAbilitySpec spec, EffectEvaluationContext context)
         {
@@ -190,25 +186,22 @@ namespace ZFramework.GAS
             spec.ActivationVersion++;
             spec.IsActive = true;
             spec.IsCommitted = false;
-            var tags = spec.Definition.ActivationOwnedTags;
-            for (int i = 0; i < tags.Count && spec.IsActive; i++)
-            {
-                spec.OwnedTagCount++;
-                OwnedTags.AddTag(tags[i]);
-            }
+            GameplayTagSet tags = spec.Definition.ActivationOwnedTags;
+            for (int i = 0; i < tags.Count && spec.IsActive; i++) { spec.OwnedTagCount++; OwnedTags.AddTag(tags[i]); }
+            if (spec.IsActive) OnAbilityActivated?.Invoke(spec);
             return spec.IsActive;
         }
 
         private AbilityActivationCheck CheckCost(GameplayEffectDefinition cost, EffectEvaluationContext context)
         {
-            if (cost == null) return default;
+            int count = cost?.Modifiers.Length ?? 0;
+            if (count == 0) return default;
             var effect = new GameplayEffectSpec(cost, Attributes, this, context: context);
             float[] rented = null;
-            Span<float> values = cost.Modifiers.Length <= 128 ? stackalloc float[cost.Modifiers.Length]
-                : (rented = ArrayPool<float>.Shared.Rent(cost.Modifiers.Length));
+            Span<float> values = count <= 128 ? stackalloc float[count] : (rented = ArrayPool<float>.Shared.Rent(count));
             try
             {
-                for (int i = 0; i < cost.Modifiers.Length; i++) values[i] = effect.Resolve(cost.Modifiers[i].Magnitude, Attributes);
+                for (int i = 0; i < count; i++) values[i] = effect.Resolve(cost.Modifiers[i].Magnitude, Attributes);
                 return CheckCost(cost, values);
             }
             finally { if (rented != null) ArrayPool<float>.Shared.Return(rented); }
@@ -219,15 +212,16 @@ namespace ZFramework.GAS
             GasAssert.That(ReferenceEquals(spec.Owner, this), "Unknown grant.");
             if (_clearing || !spec.IsGranted) return new AbilityActivationCheck(AbilityActivationResult.Inactive, "技能已被撤销");
             if (spec.IsActive || spec.Committing) return new AbilityActivationCheck(AbilityActivationResult.AlreadyActive, "技能正在执行");
-            var definition = spec.Definition;
-            if (!definition.ActivationRequirements.Matches(OwnedTags))
+
+            GameplayAbilityDefinition d = spec.Definition;
+            if (!d.ActivationRequirements.Matches(OwnedTags))
             {
-                for (int i = 0; i < definition.ActivationRequiredTags.Count; i++)
-                    if (!OwnedTags.HasTag(definition.ActivationRequiredTags[i]))
-                        return new AbilityActivationCheck(AbilityActivationResult.Blocked, "缺少必需标签", definition.ActivationRequiredTags[i]);
-                for (int i = 0; i < definition.ActivationBlockedTags.Count; i++)
-                    if (OwnedTags.HasTag(definition.ActivationBlockedTags[i]))
-                        return new AbilityActivationCheck(AbilityActivationResult.Blocked, "被标签阻止", definition.ActivationBlockedTags[i]);
+                for (int i = 0; i < d.ActivationRequiredTags.Count; i++)
+                    if (!OwnedTags.HasTag(d.ActivationRequiredTags[i]))
+                        return new AbilityActivationCheck(AbilityActivationResult.Blocked, "缺少必需标签", d.ActivationRequiredTags[i]);
+                for (int i = 0; i < d.ActivationBlockedTags.Count; i++)
+                    if (OwnedTags.HasTag(d.ActivationBlockedTags[i]))
+                        return new AbilityActivationCheck(AbilityActivationResult.Blocked, "被标签阻止", d.ActivationBlockedTags[i]);
             }
             return CheckPaymentGates(spec);
         }
@@ -244,130 +238,106 @@ namespace ZFramework.GAS
         private AbilityActivationCheck CheckPaymentGates(GameplayAbilitySpec spec)
         {
             if (spec.IsOnCooldown) return new AbilityActivationCheck(AbilityActivationResult.OnCooldown, "技能冷却中", amount: spec.CooldownRemaining);
-            var cost = spec.Definition.Cost;
-            var cooldown = spec.Definition.Cooldown;
-            return cost != null && !cost.ApplicationRequirements.Matches(OwnedTags) ||
-                   cooldown != null && !cooldown.ApplicationRequirements.Matches(OwnedTags)
+            GameplayEffectDefinition cost = spec.Definition.Cost, cd = spec.Definition.Cooldown;
+            return (cost != null && !cost.ApplicationRequirements.Matches(OwnedTags)) ||
+                   (cd != null && !cd.ApplicationRequirements.Matches(OwnedTags))
                 ? new AbilityActivationCheck(AbilityActivationResult.Blocked, "消耗或冷却效果被标签阻止") : default;
         }
 
-        /// <summary>结束激活状态，撤下激活期标签。已结束或非本组件授予的返回 false。</summary>
-        public bool EndAbility(GameplayAbilitySpec spec)
+        public bool EndAbility(GameplayAbilitySpec spec, bool cancelled = false)
         {
-            if (spec == null || !ReferenceEquals(spec.Owner, this) || !spec.IsActive)
-            {
-                return false;
-            }
-
-            DeactivateInternal(spec);
+            if (spec == null || !ReferenceEquals(spec.Owner, this) || !spec.IsActive) return false;
+            DeactivateInternal(spec, cancelled);
             return true;
         }
 
-        /// <summary>结束所有「能力标签」命中给定集合的激活中能力，返回结束数量。</summary>
-        public int CancelAbilitiesWithTags(in GameplayTagSet tags)
-        {
-            if (tags.IsEmpty)
-            {
-                return 0;
-            }
+        public bool CancelAbility(GameplayAbilitySpec spec) => EndAbility(spec, cancelled: true);
 
-            return CancelMatching(tags, false);
-        }
+        public int CancelAbilitiesWithTags(in GameplayTagSet tags) => tags.IsEmpty ? 0 : CancelMatching(tags, all: false);
 
-        public int CancelAllAbilities()
-        {
-            return CancelMatching(default, true);
-        }
+        public int CancelAllAbilities() => CancelMatching(default, all: true);
 
         private int CancelMatching(in GameplayTagSet tags, bool all)
         {
-            int count = _abilities.Count, cancelled = 0;
+            int count = _abilities.Count;
             if (count == 0) return 0;
+            if (count == 1)
+            {
+                GameplayAbilitySpec s = _abilities[0];
+                return s.IsActive && (all || s.Definition.AbilityTags.HasAnyMatching(tags)) && EndAbility(s, true) ? 1 : 0;
+            }
+            int cancelled = 0;
             var snapshot = ArrayPool<(GameplayAbilitySpec spec, int version)>.Shared.Rent(count);
             for (int i = 0; i < count; i++) snapshot[i] = (_abilities[i], _abilities[i].ActivationVersion);
             try
             {
                 for (int i = count - 1; i >= 0; i--)
                 {
-                    var item = snapshot[i]; var spec = item.spec;
-                    if (spec.ActivationVersion == item.version && spec.IsActive && (all || spec.Definition.AbilityTags.HasAnyMatching(tags)) && EndAbility(spec)) cancelled++;
+                    var (s, v) = snapshot[i];
+                    if (s.ActivationVersion == v && s.IsActive && (all || s.Definition.AbilityTags.HasAnyMatching(tags)) && EndAbility(s, true))
+                        cancelled++;
                 }
             }
-            finally { ArrayPool<(GameplayAbilitySpec, int)>.Shared.Return(snapshot, true); }
+            finally { ArrayPool<(GameplayAbilitySpec, int)>.Shared.Return(snapshot, clearArray: true); }
             return cancelled;
         }
 
-        /// <summary>回收复用前的清场：结束全部能力（连带取消其任务）、清空效果与标签。属性保留，由下次初始化覆写。</summary>
         public void Clear()
         {
             if (_clearing) return;
             _clearing = true;
             try
             {
-            Generation++;
-            SourceIdentity = new AbilitySourceIdentity(this);
-            for (int i = _abilities.Count - 1; i >= 0; i--)
-                if (i < _abilities.Count) EndAbility(_abilities[i]);
-            foreach (var spec in _abilities) spec.IsGranted = false;
-            _abilities.Clear();
-            _tasks.Clear();
-            Effects.Clear();
-            OwnedTags.Clear();
-            Events.Clear();
+                Generation++;
+                SourceIdentity = new AbilitySourceIdentity(this);
+                for (int i = _abilities.Count - 1; i >= 0; i--)
+                    if (i < _abilities.Count) EndAbility(_abilities[i], true);
+                for (int i = 0; i < _abilities.Count; i++) _abilities[i].IsGranted = false;
+                _abilities.Clear();
+                _tasks.Clear();
+                Effects.Clear();
+                OwnedTags.Clear();
+                Events.Clear();
             }
             finally { _clearing = false; }
         }
 
-        /// <summary>
-        /// 消耗是否付得起。只有 Add 操作可判断（当前值加上负数后不得为负）；
-        /// 其余操作无法在不实际结算的情况下判定，跳过检查。
-        /// </summary>
         private AbilityActivationCheck CheckCost(GameplayEffectDefinition cost, ReadOnlySpan<float> values)
         {
-            if (cost == null)
+            if (cost == null) return default;
+            ReadOnlySpan<EffectModifier> mods = cost.Modifiers;
+            for (int i = 0; i < mods.Length; i++)
             {
-                return default;
+                ref readonly EffectModifier m = ref mods[i];
+                if (!Attributes.TryGet(m.Target, out GameplayAttribute attr))
+                    return new AbilityActivationCheck(AbilityActivationResult.InvalidConfiguration, "缺少消耗属性", attribute: m.Target);
+                if (m.Operation != ModifierOperation.Add) continue;
+
+                bool seen = false;
+                for (int prev = 0; prev < i; prev++)
+                    if (mods[prev].Target == m.Target && mods[prev].Operation == ModifierOperation.Add) { seen = true; break; }
+                if (seen) continue;
+
+                float sum = values[i];
+                for (int next = i + 1; next < mods.Length; next++)
+                    if (mods[next].Target == m.Target && mods[next].Operation == ModifierOperation.Add) sum += values[next];
+                if (attr.CurrentValue + sum < 0f)
+                    return new AbilityActivationCheck(AbilityActivationResult.CannotAfford, "资源不足", attribute: m.Target, amount: -(attr.CurrentValue + sum));
             }
-
-            ReadOnlySpan<EffectModifier> modifiers = cost.Modifiers;
-            for (int i = 0; i < modifiers.Length; i++)
-            {
-                ref readonly EffectModifier modifier = ref modifiers[i];
-                if (!Attributes.TryGet(modifier.Target, out GameplayAttribute attribute))
-                {
-                    return new AbilityActivationCheck(AbilityActivationResult.InvalidConfiguration, "缺少消耗属性", attribute: modifier.Target);
-                }
-                if (modifier.Operation != ModifierOperation.Add) continue;
-
-                float sum = 0;
-                for (int j = 0; j <= i; j++)
-                    if (modifiers[j].Target == modifier.Target && modifiers[j].Operation == ModifierOperation.Add)
-                        sum += values[j];
-                if (attribute.CurrentValue + sum < 0f)
-                {
-                    return new AbilityActivationCheck(AbilityActivationResult.CannotAfford, "资源不足", attribute: modifier.Target,
-                        amount: -(attribute.CurrentValue + sum));
-                }
-            }
-
             return default;
         }
 
-        private void DeactivateInternal(GameplayAbilitySpec spec)
+        private void DeactivateInternal(GameplayAbilitySpec spec, bool cancelled)
         {
-            if (!spec.IsActive)
-            {
-                return;
-            }
-
+            if (!spec.IsActive) return;
             int version = spec.ActivationVersion;
             spec.IsActive = false;
-            var tags = spec.Definition.ActivationOwnedTags;
+            GameplayTagSet tags = spec.Definition.ActivationOwnedTags;
             int count = spec.OwnedTagCount;
             spec.OwnedTagCount = 0;
             for (int i = 0; i < count; i++) OwnedTags.RemoveTag(tags[i]);
             _tasks.Cancel(spec, version);
+            OnAbilityEnded?.Invoke(spec, cancelled);
         }
-
     }
 }

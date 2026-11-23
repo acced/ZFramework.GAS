@@ -1,10 +1,10 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace ZFramework.GAS.Unity
 {
     public sealed class SkillParameterReferenceAttribute : PropertyAttribute { }
+
     [Serializable]
     public sealed class SkillParameter
     {
@@ -15,13 +15,13 @@ namespace ZFramework.GAS.Unity
         public SkillParameterKind kind;
         public float defaultValue;
         public float[] levels = Array.Empty<float>();
+
         public SkillParameterValue Resolve(int level)
         {
-            SkillParameterValue.FromNumber(kind, defaultValue);
-            if (levels != null) foreach (var v in levels) SkillParameterValue.FromNumber(kind, v);
-            float value = levels != null && levels.Length > 0 ? levels[Mathf.Clamp(level - 1, 0, levels.Length - 1)] : defaultValue;
-            if (float.IsNaN(value) || float.IsInfinity(value)) throw new InvalidOperationException($"参数 {displayName} 的值不是有限数。");
-            return SkillParameterValue.FromNumber(kind, value);
+            SkillParameterValue def = SkillParameterValue.FromNumber(kind, defaultValue);
+            if (levels == null || levels.Length == 0) return def;
+            for (int i = 0; i < levels.Length; i++) SkillParameterValue.FromNumber(kind, levels[i]);
+            return SkillParameterValue.FromNumber(kind, levels[Mathf.Clamp(level - 1, 0, levels.Length - 1)]);
         }
     }
 
@@ -32,12 +32,9 @@ namespace ZFramework.GAS.Unity
         public SkillParameterKind kind;
         public float value;
         public float[] levels;
+
         public SkillParameterValue Resolve(int level)
-        {
-            float number = levels != null && levels.Length > 0 ? levels[Mathf.Clamp(level - 1, 0, levels.Length - 1)] : value;
-            if (!float.IsFinite(number)) throw new InvalidOperationException("参数覆盖必须为有限数: " + parameterId);
-            return SkillParameterValue.FromNumber(kind, number);
-        }
+            => SkillParameterValue.FromNumber(kind, levels != null && levels.Length > 0 ? levels[Mathf.Clamp(level - 1, 0, levels.Length - 1)] : value);
     }
 
     [Serializable]
@@ -47,6 +44,7 @@ namespace ZFramework.GAS.Unity
         public string parameterId;
         public float coefficient;
         public SkillNumber(float value) { this.value = value; parameterId = null; coefficient = 1; }
+
         public float Resolve(EffectEvaluationContext context)
         {
             float number = string.IsNullOrEmpty(parameterId) ? value : context.Parameter(parameterId) * coefficient;
@@ -54,6 +52,4 @@ namespace ZFramework.GAS.Unity
             return number;
         }
     }
-
-
 }

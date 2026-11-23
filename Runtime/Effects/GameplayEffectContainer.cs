@@ -6,33 +6,13 @@ using System.Threading;
 
 namespace ZFramework.GAS
 {
-    public enum EffectApplicationResult
-    {
-        /// <summary>Instant 效果已结算完毕。</summary>
-        Completed,
-        /// <summary>
-        /// 新的持续效果已发布。注意：OnActive 回调可同步移除它，因此返回时 Handle 可能已无法由
-        /// <see cref="GameplayEffectContainer.TryGetInfo"/> 解析。
-        /// </summary>
-        Applied,
-        /// <summary>叠加到既有效果上，层数 +1。</summary>
-        Stacked,
-        /// <summary>已达层数上限且策略为 <see cref="StackOverflowPolicy.Deny"/>，仅刷新了既有效果。</summary>
-        Refreshed,
-        /// <summary>已达层数上限且策略为 <see cref="StackOverflowPolicy.RemoveExisting"/>，既有效果已被移除。</summary>
-        Overflowed,
-        /// <summary>标签检查未通过，未产生任何作用。</summary>
-        Blocked,
-    }
+    public enum EffectApplicationResult { Completed, Applied, Stacked, Refreshed, Overflowed, Blocked }
 
-    /// <summary>
-    /// 某个目标身上的全部生效效果。外界只持有 <see cref="ActiveGameplayEffectHandle"/>；
-    /// 内部状态对象由容器延迟回收并复用，不会把可复用引用泄漏到容器之外。
-    /// </summary>
+    /// <summary>目标身上的持续效果容器；外部只持 <see cref="ActiveGameplayEffectHandle"/>，内部对象延迟回收复用。</summary>
     public sealed class GameplayEffectContainer
     {
         private const int MaxChainDepth = 8;
-
+        private const int MaxClearPasses = MaxChainDepth * 4;
         private static long s_nextHandle;
 
         private readonly AttributeSet _attributes;
@@ -41,32 +21,28 @@ namespace ZFramework.GAS
         private readonly object _owner;
         private readonly List<ActiveGameplayEffect> _active = new();
         private readonly Stack<ActiveGameplayEffect> _pool = new();
-        private int _operationDepth;
-        private int _chainDepth;
-        private int _pendingRemoveCount;
-        private bool _ticking;
-        private bool _clearing;
+        private int _opDepth, _chainDepth, _pendingRemoves;
+        private bool _ticking, _clearing;
 
-        public GameplayEffectContainer(
-            AttributeSet attributes,
-            GameplayTagCountContainer ownedTags,
-            GameplayCueRouter cueRouter = null,
-            object owner = null)
+        public event Action<ActiveGameplayEffectInfo> OnEffectAdded;
+        public event Action<ActiveGameplayEffectInfo> OnEffectRemoved;
+        public event Action<ActiveGameplayEffectInfo> OnEffectStackChanged;
+
+        public GameplayEffectContainer(AttributeSet attributes, GameplayTagCountContainer ownedTags,
+            GameplayCueRouter cueRouter = null, object owner = null)
         {
             _attributes = attributes ?? throw new ArgumentNullException(nameof(attributes));
             _ownedTags = ownedTags ?? throw new ArgumentNullException(nameof(ownedTags));
-            _cueRouter = cueRouter;
-            _owner = owner;
+            _cueRouter = cueRouter; _owner = owner;
         }
 
-        public int Count => _active.Count - _pendingRemoveCount;
+        public int Count => _active.Count - _pendingRemoves;
 
-        /// <summary>按当前容器顺序取得只读快照。删除或 swap-remove 不会改变已取得的快照。</summary>
         public ActiveGameplayEffectInfo this[int index]
         {
             get
             {
-                if (_pendingRemoveCount == 0) return CreateInfo(_active[index]);
+                if (_pendingRemoves == 0) return CreateInfo(_active[index]);
                 for (int i = 0; i < _active.Count; i++)
                     if (!_active[i].PendingRemove && index-- == 0) return CreateInfo(_active[i]);
                 throw new ArgumentOutOfRangeException(nameof(index));
@@ -75,102 +51,97 @@ namespace ZFramework.GAS
 
         public EffectApplicationResult Apply(in GameplayEffectSpec spec) => Apply(spec, out _);
 
-        /// <summary>
-        /// 应用效果并返回其稳定身份。Instant、Blocked 与 Overflowed 返回无效 Handle；
-        /// Stacked/Refreshed 返回既有效果的 Handle。Applied 表示效果曾成功发布，但 OnActive 回调
-        /// 可能已同步移除它；需要确认返回时仍存活，应调用 <see cref="TryGetInfo"/>。
-        /// </summary>
         public EffectApplicationResult Apply(in GameplayEffectSpec spec, out ActiveGameplayEffectHandle handle)
         {
-            BeginOperation();
-            try
-            {
-                return ApplyCore(spec, out handle, default, false, 0, 0);
-            }
-            finally
-            {
-                EndOperation();
-            }
+            _opDepth++;
+            try { return ApplyCore(spec, out handle, default, false, 0f, 0f); }
+            finally { EndOp(); }
         }
 
         internal EffectApplicationResult ApplyResolved(in GameplayEffectSpec spec, ReadOnlySpan<float> magnitudes, float duration, float period)
         {
-            BeginOperation();
+            _opDepth++;
             try { return ApplyCore(spec, out _, magnitudes, true, duration, period); }
-            finally { EndOperation(); }
+            finally { EndOp(); }
         }
 
-        private EffectApplicationResult ApplyCore(
-            GameplayEffectSpec spec, out ActiveGameplayEffectHandle handle, ReadOnlySpan<float> magnitudes, bool resolved, float duration, float period)
+        private EffectApplicationResult ApplyCore(GameplayEffectSpec spec, out ActiveGameplayEffectHandle handle,
+            ReadOnlySpan<float> magnitudes, bool resolved, float duration, float period)
         {
             handle = default;
-            GameplayEffectDefinition definition = spec.Definition;
-            EffectTags tags = definition.Tags;
+            GameplayEffectDefinition def = spec.Definition;
+            EffectTags tags = def.Tags;
+            if (!resolved && !def.ApplicationRequirements.Matches(_ownedTags)) return EffectApplicationResult.Blocked;
 
-            if (!resolved && !definition.ApplicationRequirements.Matches(_ownedTags))
+            if (def.DurationPolicy == EffectDurationPolicy.Instant)
             {
-                return EffectApplicationResult.Blocked;
-            }
-
-            if (definition.DurationPolicy == EffectDurationPolicy.Instant)
-            {
-                if (resolved) ApplyMagnitudes(definition.Modifiers, magnitudes, 1);
-                else ApplyInstant(spec, stackCount: 1);
-                GasDebugHooks.Apply(_owner, definition, spec.Source, 1);
+                if (resolved) ApplyMagnitudes(def.Modifiers, magnitudes, 1);
+                else ApplyInstant(spec, 1);
+                GasDebugHooks.Apply(_owner, def, spec.Source, 1);
                 RemoveEffectsWithAnyTag(tags.RemoveEffectsWith);
-                DispatchCues(definition, GameplayCueEvent.Executed, spec.Source, 1);
+                DispatchCues(def, GameplayCueEvent.Executed, spec.Source, 1);
                 ApplyConditional(spec, EffectTrigger.Applied);
                 return EffectApplicationResult.Completed;
             }
 
             if (!resolved) { period = spec.ResolvePeriod(_attributes); duration = spec.ResolveDuration(_attributes); }
+            if (!float.IsFinite(duration)) throw new InvalidOperationException($"Effect resolved to non-finite duration ({duration}).");
+            if (duration < 0f) duration = 0f;
+            if (!float.IsFinite(period) || period < 0f) throw new InvalidOperationException($"Effect resolved to invalid period ({period}).");
+
             ActiveGameplayEffect existing = FindStackable(spec);
             if (existing != null)
             {
                 handle = existing.Handle;
-                int limit = definition.Stacking.Limit;
+                int limit = def.Stacking.Limit;
                 if (limit > 0 && existing.StackCount >= limit)
                 {
-                    if (definition.Stacking.Overflow == StackOverflowPolicy.RemoveExisting)
+                    if (def.Stacking.Overflow == StackOverflowPolicy.RemoveExisting)
                     {
-                        MarkForRemoval(existing);
-                        handle = default;
+                        MarkForRemoval(existing); handle = default;
                         return EffectApplicationResult.Overflowed;
                     }
-
                     RefreshTimers(existing);
-                    GasDebugHooks.Refresh(_owner, definition, spec.Source, existing.StackCount);
+                    GasDebugHooks.Refresh(_owner, def, spec.Source, existing.StackCount);
                     return EffectApplicationResult.Refreshed;
                 }
-
                 existing.StackCount++;
                 PushStackCount(existing);
                 RefreshTimers(existing);
-                GasDebugHooks.Stack(_owner, definition, spec.Source, existing.StackCount);
+                GasDebugHooks.Stack(_owner, def, spec.Source, existing.StackCount);
+                OnEffectStackChanged?.Invoke(CreateInfo(existing));
                 return EffectApplicationResult.Stacked;
             }
 
-            ActiveGameplayEffect active = RentEffect(
-                definition, spec.Source, period, duration);
+            ActiveGameplayEffect active = _pool.Count > 0 ? _pool.Pop() : new ActiveGameplayEffect();
+            active.Initialize(NextHandle(), def, spec.Source, period, duration);
             active.Spec = spec;
             handle = active.Handle;
 
-            ReadOnlySpan<EffectModifier> modifiers = definition.Modifiers;
-            if (resolved)
+            ReadOnlySpan<EffectModifier> mods = def.Modifiers;
+            if (mods.Length > 0)
             {
-                if (active.ResolvedMagnitudes == null || active.ResolvedMagnitudes.Length < modifiers.Length)
-                    active.ResolvedMagnitudes = new float[modifiers.Length];
-                magnitudes.CopyTo(active.ResolvedMagnitudes);
+                if (active.ResolvedMagnitudes == null || active.ResolvedMagnitudes.Length < mods.Length)
+                    active.ResolvedMagnitudes = new float[mods.Length];
+                if (resolved) magnitudes.CopyTo(active.ResolvedMagnitudes);
+                else for (int i = 0; i < mods.Length; i++) active.ResolvedMagnitudes[i] = spec.Resolve(mods[i].Magnitude, _attributes);
             }
-            else ResolveMagnitudes(spec, active, modifiers);
+
             RemoveEffectsWithAnyTag(tags.RemoveEffectsWith);
             _active.Add(active);
-            if (active.ResolvedPeriod <= 0f)
+
+            if (mods.Length > 0)
             {
-                PrepareModifierAttributes(active, modifiers);
-                for (int i = 0; i < modifiers.Length && !active.PendingRemove; i++)
-                    active.ModifierAttributes[i]?.AddModifier(
-                        modifiers[i].Operation, active.ResolvedMagnitudes[i], active);
+                if (active.ModifierAttributes == null || active.ModifierAttributes.Length < mods.Length)
+                    active.ModifierAttributes = new GameplayAttribute[mods.Length];
+                active.ModifierAttributeCount = mods.Length;
+                for (int i = 0; i < mods.Length; i++) _attributes.TryGet(mods[i].Target, out active.ModifierAttributes[i]);
+                if (active.ResolvedPeriod <= 0f)
+                {
+                    active.HasOngoingModifiers = true;
+                    for (int i = 0; i < mods.Length && !active.PendingRemove; i++)
+                        active.ModifierAttributes[i]?.AddModifier(mods[i].Operation, active.ResolvedMagnitudes[i], active);
+                }
             }
 
             for (int i = 0; i < tags.Granted.Count && !active.PendingRemove; i++)
@@ -179,512 +150,333 @@ namespace ZFramework.GAS
                 _ownedTags.AddTag(tags.Granted[i]);
             }
             if (active.PendingRemove) return EffectApplicationResult.Applied;
-            GasDebugHooks.Apply(_owner, definition, spec.Source, active.StackCount);
 
-            // 回调可立即删除 active；operation scope 保证它在本调用退出前不会被复用。
-            DispatchCues(definition, GameplayCueEvent.OnActive, spec.Source, active.StackCount);
+            GasDebugHooks.Apply(_owner, def, spec.Source, active.StackCount);
+            OnEffectAdded?.Invoke(CreateInfo(active));
+            if (active.PendingRemove) return EffectApplicationResult.Applied;
+
+            DispatchCues(def, GameplayCueEvent.OnActive, spec.Source, active.StackCount);
             ApplyConditional(spec, EffectTrigger.Applied);
-
-            if (definition.ExecutePeriodicOnApplication && active.ResolvedPeriod > 0f && !active.PendingRemove)
-            {
-                ApplyPeriodic(active);
-            }
-
+            if (def.ExecutePeriodicOnApplication && active.ResolvedPeriod > 0f && !active.PendingRemove) ApplyPeriodic(active);
             return EffectApplicationResult.Applied;
         }
 
         public bool Remove(ActiveGameplayEffectHandle handle)
         {
-            if (!handle.IsValid)
-            {
-                return false;
-            }
-
-            BeginOperation();
-            try
-            {
-                ActiveGameplayEffect effect = FindByHandle(handle);
-                return effect != null && MarkForRemoval(effect);
-            }
-            finally
-            {
-                EndOperation();
-            }
+            if (!handle.IsValid) return false;
+            _opDepth++;
+            try { var e = FindByHandle(handle); return e != null && MarkForRemoval(e); }
+            finally { EndOp(); }
         }
 
-        /// <summary>移除所有「授予标签」命中给定集合的效果，返回移除数量。</summary>
+        public bool RemoveStacks(ActiveGameplayEffectHandle handle, int count = 1)
+        {
+            if (count <= 0) throw new ArgumentOutOfRangeException(nameof(count));
+            if (!handle.IsValid) return false;
+            _opDepth++;
+            try
+            {
+                ActiveGameplayEffect e = FindByHandle(handle);
+                if (e == null) return false;
+                if (e.StackCount <= count) return MarkForRemoval(e);
+                e.StackCount -= count;
+                PushStackCount(e);
+                GasDebugHooks.Stack(_owner, e.Definition, e.Source, e.StackCount);
+                OnEffectStackChanged?.Invoke(CreateInfo(e));
+                return true;
+            }
+            finally { EndOp(); }
+        }
+
+        public bool ModifyRemainingTime(ActiveGameplayEffectHandle handle, float deltaSeconds)
+        {
+            if (!handle.IsValid) return false;
+            _opDepth++;
+            try { var e = FindByHandle(handle); return e != null && AdjustRemainingTime(e, deltaSeconds); }
+            finally { EndOp(); }
+        }
+
+        public int ModifyRemainingTimeWithAnyTag(in GameplayTagSet tags, float deltaSeconds)
+        {
+            if (tags.IsEmpty) return 0;
+            _opDepth++;
+            try
+            {
+                int modified = 0;
+                for (int i = _active.Count - 1; i >= 0; i--)
+                {
+                    ActiveGameplayEffect e = _active[i];
+                    if (!e.PendingRemove && e.Definition.DurationPolicy == EffectDurationPolicy.Duration &&
+                        e.Definition.Tags.Granted.HasAnyMatching(tags) && AdjustRemainingTime(e, deltaSeconds))
+                        modified++;
+                }
+                return modified;
+            }
+            finally { EndOp(); }
+        }
+
         public int RemoveEffectsWithAnyTag(in GameplayTagSet tags)
         {
-            if (tags.IsEmpty)
-            {
-                return 0;
-            }
-
-            BeginOperation();
+            if (tags.IsEmpty) return 0;
+            _opDepth++;
             try
             {
                 int removed = 0;
                 for (int i = _active.Count - 1; i >= 0; i--)
                 {
-                    ActiveGameplayEffect effect = _active[i];
-                    if (!effect.PendingRemove && effect.Definition.Tags.Granted.HasAnyMatching(tags) && MarkForRemoval(effect))
-                    {
-                        removed++;
-                    }
+                    ActiveGameplayEffect e = _active[i];
+                    if (!e.PendingRemove && e.Definition.Tags.Granted.HasAnyMatching(tags) && MarkForRemoval(e)) removed++;
                 }
-
                 return removed;
             }
-            finally
+            finally { EndOp(); }
+        }
+
+        public bool TryGetLongestRemainingWithAnyTag(in GameplayTagSet tags, out float remaining, out float duration)
+        {
+            remaining = duration = 0f;
+            if (tags.IsEmpty) return false;
+            bool found = false;
+            for (int i = 0; i < _active.Count; i++)
             {
-                EndOperation();
+                ActiveGameplayEffect e = _active[i];
+                if (e.PendingRemove || !e.Definition.Tags.Granted.HasAnyMatching(tags)) continue;
+                float r = e.Definition.DurationPolicy == EffectDurationPolicy.Duration ? e.RemainingTime : 0f;
+                if (!found || r > remaining || (r == remaining && e.ResolvedDuration > duration))
+                {
+                    found = true; remaining = r; duration = e.ResolvedDuration;
+                }
             }
+            return found;
         }
 
         public ActiveGameplayEffectHandle Find(GameplayEffectDefinition definition)
         {
             for (int i = 0; i < _active.Count; i++)
-            {
-                ActiveGameplayEffect effect = _active[i];
-                if (!effect.PendingRemove && ReferenceEquals(effect.Definition, definition))
-                {
-                    return effect.Handle;
-                }
-            }
-
+                if (!_active[i].PendingRemove && ReferenceEquals(_active[i].Definition, definition)) return _active[i].Handle;
             return default;
         }
 
-        /// <summary>按定义与来源引用查找；用于多个同定义光环并存时只移除自己的效果。</summary>
         public ActiveGameplayEffectHandle FindFrom(GameplayEffectDefinition definition, object source)
         {
             if (source is AbilitySystemComponent owner) source = owner.SourceIdentity;
             for (int i = 0; i < _active.Count; i++)
-            {
-                ActiveGameplayEffect effect = _active[i];
-                if (!effect.PendingRemove && ReferenceEquals(effect.Definition, definition) &&
-                    ReferenceEquals(effect.Source, source))
-                {
-                    return effect.Handle;
-                }
-            }
-
+                if (!_active[i].PendingRemove && ReferenceEquals(_active[i].Definition, definition) && ReferenceEquals(_active[i].Source, source))
+                    return _active[i].Handle;
             return default;
         }
 
-        /// <summary>
-        /// 查询 Handle 当前是否仍对应存活效果，并返回浅快照。快照中的 Definition 和 Source 是对象引用；
-        /// 长期缓存 Info 会相应延长这些对象的存活期。
-        /// </summary>
         public bool TryGetInfo(ActiveGameplayEffectHandle handle, out ActiveGameplayEffectInfo info)
         {
-            ActiveGameplayEffect effect = FindByHandle(handle);
-            if (effect == null)
-            {
-                info = default;
-                return false;
-            }
-
-            info = CreateInfo(effect);
+            ActiveGameplayEffect e = FindByHandle(handle);
+            if (e == null) { info = default; return false; }
+            info = CreateInfo(e);
             return true;
         }
 
         public void Tick(float deltaTime)
         {
-            if (deltaTime < 0f)
-            {
-                throw new ArgumentOutOfRangeException(nameof(deltaTime), deltaTime, "Delta time must not be negative.");
-            }
-
-            if (_ticking)
-            {
-                throw new InvalidOperationException("GameplayEffectContainer.Tick cannot be called recursively.");
-            }
+            if (deltaTime < 0f) throw new ArgumentOutOfRangeException(nameof(deltaTime));
+            if (_ticking) throw new InvalidOperationException("GameplayEffectContainer.Tick cannot be called recursively.");
+            if (_active.Count == 0) return;
 
             _ticking = true;
-            BeginOperation();
+            _opDepth++;
             try
             {
                 int count = _active.Count;
                 for (int i = 0; i < count && i < _active.Count; i++)
                 {
-                    ActiveGameplayEffect effect = _active[i];
-                    if (effect.PendingRemove)
-                    {
-                        continue;
-                    }
+                    ActiveGameplayEffect e = _active[i];
+                    if (e.PendingRemove) continue;
+                    GameplayEffectDefinition def = e.Definition;
+                    if (!def.OngoingRequirements.Matches(_ownedTags)) { MarkForRemoval(e); continue; }
 
-                    GameplayEffectDefinition definition = effect.Definition;
-                    if (!definition.OngoingRequirements.Matches(_ownedTags))
+                    float dt = def.DurationPolicy == EffectDurationPolicy.Duration
+                        ? Math.Min(deltaTime, Math.Max(0f, e.ResolvedDuration - e.ElapsedTime)) : deltaTime;
+                    e.ElapsedTime += dt;
+                    if (e.ResolvedPeriod > 0f)
                     {
-                        MarkForRemoval(effect);
-                        continue;
-                    }
-
-                    float activeTime = definition.DurationPolicy == EffectDurationPolicy.Duration
-                        ? Math.Min(deltaTime, Math.Max(0f, effect.ResolvedDuration - effect.ElapsedTime))
-                        : deltaTime;
-                    effect.ElapsedTime += activeTime;
-
-                    if (effect.ResolvedPeriod > 0f)
-                    {
-                        effect.PeriodTimer += activeTime;
-                        while (!effect.PendingRemove && effect.PeriodTimer >= effect.ResolvedPeriod)
+                        e.PeriodTimer += dt;
+                        while (!e.PendingRemove && e.PeriodTimer >= e.ResolvedPeriod)
                         {
-                            effect.PeriodTimer -= effect.ResolvedPeriod;
-                            ApplyPeriodic(effect);
+                            e.PeriodTimer -= e.ResolvedPeriod;
+                            ApplyPeriodic(e);
                         }
                     }
-
-                    if (!effect.PendingRemove && definition.DurationPolicy == EffectDurationPolicy.Duration &&
-                        effect.ElapsedTime >= effect.ResolvedDuration)
-                    {
-                        MarkForRemoval(effect);
-                    }
+                    if (!e.PendingRemove && def.DurationPolicy == EffectDurationPolicy.Duration && e.ElapsedTime >= e.ResolvedDuration)
+                        MarkForRemoval(e);
                 }
             }
-            finally
-            {
-                try
-                {
-                    EndOperation();
-                }
-                finally
-                {
-                    _ticking = false;
-                }
-            }
+            finally { try { EndOp(); } finally { _ticking = false; } }
         }
 
-        /// <summary>
-        /// 清空容器。Removed 回调期间新建的持续效果也属于本次清理范围；反复清理直到没有存活效果。
-        /// 重入 Clear 由最外层调用统一完成。
-        /// </summary>
         public void Clear()
         {
-            if (_clearing)
-            {
-                return;
-            }
-
+            if (_clearing) return;
             _clearing = true;
-            BeginOperation();
+            _opDepth++;
             try
             {
+                int passes = 0;
                 while (Count > 0)
                 {
+                    if (++passes > MaxClearPasses)
+                        throw new InvalidOperationException("GameplayEffectContainer.Clear exceeded maximum passes.");
                     for (int i = _active.Count - 1; i >= 0; i--)
-                    {
-                        ActiveGameplayEffect effect = _active[i];
-                        if (!effect.PendingRemove)
-                        {
-                            MarkForRemoval(effect);
-                        }
-                    }
+                        if (!_active[i].PendingRemove) MarkForRemoval(_active[i]);
                 }
             }
-            finally
-            {
-                try
-                {
-                    EndOperation();
-                }
-                finally
-                {
-                    _clearing = false;
-                }
-            }
+            finally { try { EndOp(); } finally { _clearing = false; } }
         }
 
-        private void BeginOperation() => _operationDepth++;
-
-        private void EndOperation()
+        private bool AdjustRemainingTime(ActiveGameplayEffect e, float delta)
         {
-            _operationDepth--;
-            if (_operationDepth != 0)
-            {
-                return;
-            }
-
-            FlushPendingRemovals();
-        }
-
-        private bool MarkForRemoval(ActiveGameplayEffect effect)
-        {
-            if (effect.PendingRemove)
-            {
-                return false;
-            }
-
-            effect.PendingRemove = true;
-            _pendingRemoveCount++;
-            DetachEffect(effect);
+            if (e.Definition.DurationPolicy != EffectDurationPolicy.Duration) return false;
+            float next = e.RemainingTime + delta;
+            if (next <= 0f) { MarkForRemoval(e); return true; }
+            if (next > e.ResolvedDuration) { e.ResolvedDuration = next; e.ElapsedTime = 0f; }
+            else e.ElapsedTime = e.ResolvedDuration - next;
             return true;
         }
 
-        private void FlushPendingRemovals()
+        private void EndOp()
         {
-            if (_pendingRemoveCount == 0) return;
+            if (--_opDepth != 0 || _pendingRemoves == 0) return;
             for (int i = _active.Count - 1; i >= 0; i--)
             {
-                var effect = _active[i];
-                if (!effect.PendingRemove) continue;
+                ActiveGameplayEffect e = _active[i];
+                if (!e.PendingRemove) continue;
                 int last = _active.Count - 1;
-                _active[i] = _active[last]; _active.RemoveAt(last);
-                if (effect.FullyDetached) ReturnToPool(effect);
+                _active[i] = _active[last];
+                _active.RemoveAt(last);
+                if (e.FullyDetached) { e.PrepareForPool(); _pool.Push(e); }
             }
-            _pendingRemoveCount = 0;
+            _pendingRemoves = 0;
         }
 
-        private ActiveGameplayEffect RentEffect(
-            GameplayEffectDefinition definition,
-            object source,
-            float resolvedPeriod,
-            float resolvedDuration)
+        private bool MarkForRemoval(ActiveGameplayEffect e)
         {
-            ActiveGameplayEffect effect = _pool.Count > 0 ? _pool.Pop() : new ActiveGameplayEffect();
-            effect.Initialize(NextHandle(), definition, source, resolvedPeriod, resolvedDuration);
-            return effect;
-        }
-
-        private void ReturnToPool(ActiveGameplayEffect effect)
-        {
-            effect.PrepareForPool();
-            _pool.Push(effect);
+            if (e.PendingRemove) return false;
+            e.PendingRemove = true;
+            _pendingRemoves++;
+            if (e.HasOngoingModifiers)
+                for (int i = 0; i < e.ModifierAttributeCount; i++) e.ModifierAttributes[i]?.RemoveModifiersFromSource(e);
+            for (int i = 0; i < e.GrantedTagCount; i++) _ownedTags.RemoveTag(e.Definition.Tags.Granted[i]);
+            GasDebugHooks.Remove(_owner, e.Definition, e.Source, e.StackCount);
+            OnEffectRemoved?.Invoke(CreateInfo(e));
+            DispatchCues(e.Definition, GameplayCueEvent.Removed, e.Source, e.StackCount);
+            ApplyConditional(e.Spec, EffectTrigger.Removed);
+            e.FullyDetached = true;
+            return true;
         }
 
         private static ActiveGameplayEffectHandle NextHandle()
         {
-            long value;
-            do
-            {
-                value = Interlocked.Increment(ref s_nextHandle);
-            }
-            while (value == 0);
-
-            return new ActiveGameplayEffectHandle(value);
-        }
-
-        private void DetachEffect(ActiveGameplayEffect effect)
-        {
-            for (int i = 0; i < effect.ModifierAttributeCount; i++)
-                effect.ModifierAttributes[i]?.RemoveModifiersFromSource(effect);
-            for (int i = 0; i < effect.GrantedTagCount; i++)
-                _ownedTags.RemoveTag(effect.Definition.Tags.Granted[i]);
-            GasDebugHooks.Remove(_owner, effect.Definition, effect.Source, effect.StackCount);
-            DispatchCues(effect.Definition, GameplayCueEvent.Removed, effect.Source, effect.StackCount);
-            ApplyConditional(effect.Spec, EffectTrigger.Removed);
-            effect.FullyDetached = true;
+            long v; do { v = Interlocked.Increment(ref s_nextHandle); } while (v == 0);
+            return new ActiveGameplayEffectHandle(v);
         }
 
         private ActiveGameplayEffect FindByHandle(ActiveGameplayEffectHandle handle)
         {
-            if (!handle.IsValid)
-            {
-                return null;
-            }
-
+            if (!handle.IsValid) return null;
             for (int i = 0; i < _active.Count; i++)
-            {
-                ActiveGameplayEffect effect = _active[i];
-                if (!effect.PendingRemove && effect.Handle == handle)
-                {
-                    return effect;
-                }
-            }
-
+                if (!_active[i].PendingRemove && _active[i].Handle == handle) return _active[i];
             return null;
         }
 
-        private static ActiveGameplayEffectInfo CreateInfo(ActiveGameplayEffect effect) =>
-            new ActiveGameplayEffectInfo(
-                effect.Handle, effect.Definition, effect.Source, effect.StackCount, effect.RemainingTime,
-                effect.ResolvedDuration, effect.ResolvedPeriod);
+        private static ActiveGameplayEffectInfo CreateInfo(ActiveGameplayEffect e)
+            => new(e.Handle, e.Definition, e.Source, e.StackCount, e.RemainingTime, e.ResolvedDuration, e.ResolvedPeriod);
 
-        private void DispatchCues(GameplayEffectDefinition definition, GameplayCueEvent cueEvent, object source, int stackCount)
+        private void DispatchCues(GameplayEffectDefinition def, GameplayCueEvent evt, object source, int stacks)
         {
-            if (_cueRouter == null)
-            {
-                return;
-            }
-
-            GameplayTagSet cueTags = definition.CueTags;
-            for (int i = 0; i < cueTags.Count; i++)
-            {
-                _cueRouter.Dispatch(new GameplayCueParameters(cueTags[i], cueEvent, _owner, source, stackCount));
-            }
+            if (_cueRouter == null) return;
+            GameplayTagSet cues = def.CueTags;
+            for (int i = 0; i < cues.Count; i++) _cueRouter.Dispatch(new GameplayCueParameters(cues[i], evt, _owner, source, stacks));
         }
 
-        private void ApplyConditional(
-            in GameplayEffectSpec spec, EffectTrigger trigger)
+        private void ApplyConditional(in GameplayEffectSpec spec, EffectTrigger trigger)
         {
             ReadOnlySpan<ConditionalEffect> children = spec.Definition.ConditionalEffects;
-            if (children.Length == 0)
-            {
-                return;
-            }
-
-            if (_chainDepth >= MaxChainDepth)
-            {
-                throw new InvalidOperationException(
-                    $"Conditional effect chain exceeded depth {MaxChainDepth}; the effect definitions likely form a cycle.");
-            }
-
+            if (children.Length == 0) return;
+            if (_chainDepth >= MaxChainDepth) throw new InvalidOperationException($"Conditional effect chain exceeded depth {MaxChainDepth}.");
             _chainDepth++;
             try
             {
                 for (int i = 0; i < children.Length; i++)
-                {
-                    ref readonly ConditionalEffect child = ref children[i];
-                    if (child.Trigger == trigger)
-                    {
-                        Apply(spec.ForChild(child.Effect));
-                    }
-                }
+                    if (children[i].Trigger == trigger) Apply(spec.ForChild(children[i].Effect));
             }
-            finally
-            {
-                _chainDepth--;
-            }
+            finally { _chainDepth--; }
         }
 
         private ActiveGameplayEffect FindStackable(in GameplayEffectSpec spec)
         {
             EffectStacking mode = spec.Definition.Stacking.Mode;
-            if (mode == EffectStacking.None)
-            {
-                return null;
-            }
-
+            if (mode == EffectStacking.None) return null;
             for (int i = 0; i < _active.Count; i++)
             {
-                ActiveGameplayEffect effect = _active[i];
-                if (effect.PendingRemove || !ReferenceEquals(effect.Definition, spec.Definition))
-                {
-                    continue;
-                }
-
-                if (mode == EffectStacking.AggregateByTarget || ReferenceEquals(effect.Source, spec.Source))
-                {
-                    return effect;
-                }
+                ActiveGameplayEffect e = _active[i];
+                if (!e.PendingRemove && ReferenceEquals(e.Definition, spec.Definition) &&
+                    (mode == EffectStacking.AggregateByTarget || ReferenceEquals(e.Source, spec.Source)))
+                    return e;
             }
-
             return null;
         }
 
-        private void PushStackCount(ActiveGameplayEffect effect)
+        private static void PushStackCount(ActiveGameplayEffect e)
         {
-            ReadOnlySpan<EffectModifier> modifiers = effect.Definition.Modifiers;
-            for (int i = 0; i < modifiers.Length; i++)
-            {
-                if (_attributes.TryGet(modifiers[i].Target, out GameplayAttribute attribute))
-                {
-                    attribute.SetSourceStackCount(effect, effect.StackCount);
-                }
-            }
+            if (!e.HasOngoingModifiers) return;
+            for (int i = 0; i < e.ModifierAttributeCount; i++) e.ModifierAttributes[i]?.SetSourceStackCount(e, e.StackCount);
         }
 
-        private static void RefreshTimers(ActiveGameplayEffect effect)
+        private static void RefreshTimers(ActiveGameplayEffect e)
         {
-            effect.ElapsedTime = 0f;
-            effect.PeriodTimer = 0f;
+            EffectStackingRule rule = e.Definition.Stacking;
+            if (rule.DurationRefresh == StackDurationRefreshPolicy.RefreshOnApply) e.ElapsedTime = 0f;
+            if (rule.PeriodReset == StackPeriodResetPolicy.ResetOnApply) e.PeriodTimer = 0f;
         }
 
-        private void PrepareModifierAttributes(ActiveGameplayEffect effect, ReadOnlySpan<EffectModifier> modifiers)
+        private void ApplyPeriodic(ActiveGameplayEffect e)
         {
-            if (effect.ModifierAttributes == null || effect.ModifierAttributes.Length < modifiers.Length)
+            if (e.ResolvedMagnitudes != null && e.ModifierAttributeCount > 0)
             {
-                effect.ModifierAttributes = new GameplayAttribute[modifiers.Length];
+                ReadOnlySpan<EffectModifier> mods = e.Definition.Modifiers;
+                for (int i = 0; i < e.ModifierAttributeCount; i++)
+                    if (e.ModifierAttributes[i] != null) ApplyToBase(e.ModifierAttributes[i], mods[i].Operation, e.ResolvedMagnitudes[i], e.StackCount);
             }
-
-            effect.ModifierAttributeCount = modifiers.Length;
-            for (int i = 0; i < modifiers.Length; i++)
-            {
-                _attributes.TryGet(modifiers[i].Target, out effect.ModifierAttributes[i]);
-            }
+            GasDebugHooks.Period(_owner, e.Definition, e.Source, e.StackCount);
+            DispatchCues(e.Definition, GameplayCueEvent.Executed, e.Source, e.StackCount);
+            ApplyConditional(e.Spec, EffectTrigger.Periodic);
         }
 
-        private void ResolveMagnitudes(
-            in GameplayEffectSpec spec, ActiveGameplayEffect effect, ReadOnlySpan<EffectModifier> modifiers)
+        private void ApplyInstant(in GameplayEffectSpec spec, int stacks)
         {
-            if (modifiers.Length == 0)
-            {
-                return;
-            }
-
-            if (effect.ResolvedMagnitudes == null || effect.ResolvedMagnitudes.Length < modifiers.Length)
-            {
-                effect.ResolvedMagnitudes = new float[modifiers.Length];
-            }
-
-            for (int i = 0; i < modifiers.Length; i++)
-            {
-                effect.ResolvedMagnitudes[i] = spec.Resolve(modifiers[i].Magnitude, _attributes);
-            }
-        }
-
-        private void ApplyPeriodic(ActiveGameplayEffect effect)
-        {
-            float[] magnitudes = effect.ResolvedMagnitudes;
-            if (magnitudes != null)
-            {
-                ReadOnlySpan<EffectModifier> modifiers = effect.Definition.Modifiers;
-                for (int i = 0; i < modifiers.Length; i++)
-                {
-                    ref readonly EffectModifier modifier = ref modifiers[i];
-                    if (_attributes.TryGet(modifier.Target, out GameplayAttribute attribute))
-                    {
-                        ApplyToBase(attribute, modifier.Operation, magnitudes[i], effect.StackCount);
-                    }
-                }
-            }
-
-            GasDebugHooks.Period(_owner, effect.Definition, effect.Source, effect.StackCount);
-            DispatchCues(effect.Definition, GameplayCueEvent.Executed, effect.Source, effect.StackCount);
-            ApplyConditional(effect.Spec, EffectTrigger.Periodic);
-        }
-
-        private void ApplyInstant(in GameplayEffectSpec spec, int stackCount)
-        {
-            ReadOnlySpan<EffectModifier> modifiers = spec.Definition.Modifiers;
+            ReadOnlySpan<EffectModifier> mods = spec.Definition.Modifiers;
+            if (mods.Length == 0) return;
             float[] rented = null;
-            Span<float> resolved = modifiers.Length <= 128 ? stackalloc float[modifiers.Length]
-                : (rented = ArrayPool<float>.Shared.Rent(modifiers.Length));
+            Span<float> resolved = mods.Length <= 128 ? stackalloc float[mods.Length] : (rented = ArrayPool<float>.Shared.Rent(mods.Length));
             try
             {
-                // Each nested application owns its buffer. Resolve against the pre-effect state
-                // before the first write/notification, just like a persistent effect's prepare phase.
-                for (int i = 0; i < modifiers.Length; i++) resolved[i] = spec.Resolve(modifiers[i].Magnitude, _attributes);
-                ApplyMagnitudes(modifiers, resolved, stackCount);
+                for (int i = 0; i < mods.Length; i++) resolved[i] = spec.Resolve(mods[i].Magnitude, _attributes);
+                ApplyMagnitudes(mods, resolved, stacks);
             }
             finally { if (rented != null) ArrayPool<float>.Shared.Return(rented); }
         }
 
-        private void ApplyMagnitudes(ReadOnlySpan<EffectModifier> modifiers, ReadOnlySpan<float> values, int stacks)
+        private void ApplyMagnitudes(ReadOnlySpan<EffectModifier> mods, ReadOnlySpan<float> values, int stacks)
         {
-            for (int i = 0; i < modifiers.Length; i++)
-                if (_attributes.TryGet(modifiers[i].Target, out var attribute))
-                    ApplyToBase(attribute, modifiers[i].Operation, values[i], stacks);
+            for (int i = 0; i < mods.Length; i++)
+                if (_attributes.TryGet(mods[i].Target, out GameplayAttribute attr)) ApplyToBase(attr, mods[i].Operation, values[i], stacks);
         }
 
-        private static void ApplyToBase(
-            GameplayAttribute attribute, ModifierOperation operation, float magnitude, int stackCount)
+        private static void ApplyToBase(GameplayAttribute attr, ModifierOperation op, float mag, int stacks)
         {
-            switch (operation)
+            switch (op)
             {
-                case ModifierOperation.Add:
-                    attribute.BaseValue += magnitude * stackCount;
-                    break;
-                case ModifierOperation.Multiply:
-                    attribute.BaseValue *= 1f + (magnitude - 1f) * stackCount;
-                    break;
-                case ModifierOperation.Divide:
-                    attribute.BaseValue /= 1f + (magnitude - 1f) * stackCount;
-                    break;
-                case ModifierOperation.Override:
-                    attribute.BaseValue = magnitude;
-                    break;
+                case ModifierOperation.Add: attr.BaseValue += mag * stacks; break;
+                case ModifierOperation.Multiply: attr.BaseValue *= 1f + (mag - 1f) * stacks; break;
+                case ModifierOperation.Divide: attr.BaseValue /= 1f + (mag - 1f) * stacks; break;
+                case ModifierOperation.Override: attr.BaseValue = mag; break;
             }
         }
     }

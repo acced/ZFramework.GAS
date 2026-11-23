@@ -211,22 +211,31 @@ namespace ZFramework.GAS.Editor
                 .OrderBy(path => path, StringComparer.Ordinal).SelectMany(AssetDatabase.LoadAllAssetsAtPath)
                 .OfType<ScriptableObject>().Distinct().ToArray();
             var issues = new List<Issue>();
+            var seenIssues = new HashSet<(ScriptableObject asset, string id, string path, string message)>();
+            void Collect(IReadOnlyList<Issue> batch)
+            {
+                foreach (var issue in batch)
+                    if (seenIssues.Add((issue.Asset, issue.Id, issue.PropertyPath, issue.Message))) issues.Add(issue);
+            }
             var checkedAssets = new HashSet<ScriptableObject>();
             foreach (var ability in assets.OfType<GameplayAbilityAsset>())
             {
                 using var doc = new SkillDocument(); doc.Open(ability, false);
                 using var service = new ValidationService(doc); service.ValidateNow(strict: true);
-                issues.AddRange(service.Issues);
+                Collect(service.Issues);
                 checkedAssets.UnionWith(doc.Assets);
             }
             using var standalone = new SkillDocument();
             using var standaloneValidation = new ValidationService(standalone);
             var context = new ValidationContext(standalone);
+            var standaloneIssues = new List<Issue>();
             foreach (var asset in assets)
             {
                 if (!checkedAssets.Add(asset)) continue;
                 if (asset is IDefinitionAsset definition) definition.InvalidateDefinition();
-                standaloneValidation.ValidateAsset(context, asset, issues);
+                standaloneIssues.Clear();
+                standaloneValidation.ValidateAsset(context, asset, standaloneIssues);
+                Collect(standaloneIssues);
             }
             return issues;
         }

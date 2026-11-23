@@ -53,6 +53,7 @@ namespace ZFramework.GAS.Editor
         private readonly Dictionary<string, Node> _nodes = new();
         private readonly List<(string ownerPath,string field,bool detached)> _branchModes = new();
         private Node _entryNode;
+        private Node _pausedNode;
         private readonly Dictionary<string, float> _liveStrength = new();
         public SkillFlowView(SkillDocument doc, ValidationService validation)
         {
@@ -76,9 +77,14 @@ namespace ZFramework.GAS.Editor
             };
             _graph.RegisterCallback<AttachToPanelEvent>(_=>SkillEventRecorder.Acquire());
             _graph.RegisterCallback<DetachFromPanelEvent>(_=>SkillEventRecorder.Release());
-            _graph.RegisterCallback<KeyDownEvent>(e=>
+            _graph.RegisterCallback<KeyDownEvent>(e =>
             {
-                if (e.keyCode==KeyCode.Space && _owner!=null && _rootPath!=null) { SkillActionSearch.Open(GUIUtility.GUIToScreenPoint(_graph.worldBound.center),t=>Insert(_rootPath,t)); e.StopPropagation(); }
+                if (e.target is TextField || e.target is TextElement || (e.target is VisualElement ve && ve.GetFirstAncestorOfType<TextField>() != null)) return;
+                if (e.keyCode == KeyCode.Space && _owner != null && _rootPath != null)
+                {
+                    SkillActionSearch.Open(GUIUtility.GUIToScreenPoint(_graph.worldBound.center), t => Insert(_rootPath, t));
+                    e.StopPropagation();
+                }
             });
             RuntimeDebugSession.Changed+=Live;
             _doc.Changed+=Changed; _validation.Changed+=RefreshIssues;
@@ -105,9 +111,12 @@ namespace ZFramework.GAS.Editor
         public void ToggleBreakpoint(){if(_selected!=null){SkillActionDebugger.Toggle(_selected);Rebuild();}}
         public void DuplicateSelection()
         {
-            if(_selected==null || !_nodes.TryGetValue(_selected,out var node) || node is not FlowNode f)return;
-            string path=f.Path; int split=path.LastIndexOf(".Array.data[",StringComparison.Ordinal);string list=path.Substring(0,split);
-            Edit("复制动作",so=>SkillActionClipboard.Duplicate(so.FindProperty(list),SkillFlowCommands.IndexIn(list,path)+1,
+            if (_selected == null || !_nodes.TryGetValue(_selected, out var node) || node is not FlowNode f) return;
+            string path = f.Path;
+            int split = path.LastIndexOf(".Array.data[", StringComparison.Ordinal);
+            if (split < 0) return;
+            string list = path.Substring(0, split);
+            Edit("复制动作", so => SkillActionClipboard.Duplicate(so.FindProperty(list), SkillFlowCommands.IndexIn(list, path) + 1,
                 (SkillAction)so.FindProperty(path).managedReferenceValue));
         }
         private void Changed(ChangeSet change)
@@ -138,7 +147,8 @@ namespace ZFramework.GAS.Editor
         private void RefreshEntries(out string entry)
         {
             _entries.menu.MenuItems().Clear();
-            _entries.menu.AppendAction("激活动作",_=>Choose(_doc.Root,null));
+            _rootPath = null;
+            _entries.menu.AppendAction("激活动作", _ => Choose(_doc.Root, null));
             var presentation = SkillEditorExtensions.Asset(_doc.Root);
             entry = "激活动作";
             foreach (var item in SkillEditorExtensions.Entries(_doc.Serialized(presentation)))
@@ -155,7 +165,7 @@ namespace ZFramework.GAS.Editor
         {
             _graph.ClearSelection();
             foreach(var e in _graph.graphElements.ToList()) _graph.RemoveElement(e);
-            _nodes.Clear(); _branchModes.Clear(); _entries.menu.MenuItems().Clear(); _rootPath=null; _crumb.text="";
+            _nodes.Clear(); _branchModes.Clear(); _entries.menu.MenuItems().Clear(); _rootPath=null; _pausedNode=null; _crumb.text="";
             if (_doc.Root==null) return;
             RefreshEntries(out string entry);
             _layoutKey=AssetReferences.Key(_owner)+"#"+(_marker ?? _rootPath);
@@ -287,8 +297,18 @@ namespace ZFramework.GAS.Editor
                 pair.Value.EnableInClassList("flow-live",live);
                 pair.Value.style.borderTopColor = live ? new StyleColor(new Color(active.r,active.g,active.b,weight)) : new StyleColor(StyleKeyword.Null);
             }
+            Node pausedNow = null;
             if(SkillActionDebugger.Frame is { } frame && EditorApplication.isPaused && frame.Owner==snapshot?.Owner &&
-                frame.Asset==_doc.Root && _nodes.TryGetValue(frame.ActionId,out var paused))paused.tooltip=frame.Summary;
+                frame.Asset==_doc.Root && _nodes.TryGetValue(frame.ActionId,out var paused))
+            {
+                pausedNow = paused;
+                paused.tooltip = frame.Summary;
+            }
+            if (_pausedNode != pausedNow)
+            {
+                _pausedNode = pausedNow;
+                if (pausedNow == null) RefreshIssues();
+            }
             foreach(var edge in _graph.edges)
             {
                 if (edge.input?.node?.userData is not string target || edge.output?.node?.userData is not string from) continue;

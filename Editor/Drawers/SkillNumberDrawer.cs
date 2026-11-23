@@ -25,9 +25,16 @@ namespace ZFramework.GAS.Editor
             void Refresh() { bool bound = !string.IsNullOrEmpty(id.stringValue); constant.style.display = bound ? DisplayStyle.None : DisplayStyle.Flex; scale.style.display = bound ? DisplayStyle.Flex : DisplayStyle.None; }
             menu.RegisterValueChangedCallback(e =>
             {
-                int selected = names.IndexOf(e.newValue); if (selected > all.Length) return;
+                int selected = names.IndexOf(e.newValue); if (selected < 0 || selected > all.Length) return;
+                property.serializedObject.Update();
                 id.stringValue = selected == 0 ? "" : all[selected - 1].Id;
                 property.serializedObject.ApplyModifiedProperties(); Refresh();
+            });
+            root.TrackPropertyValue(id, _ =>
+            {
+                int current = System.Array.FindIndex(all, p => p.Id == id.stringValue) + 1;
+                if (current >= 0 && current < names.Count) menu.SetValueWithoutNotify(names[current]);
+                Refresh();
             });
             bool CanDrop()=>DragAndDrop.GetGenericData("GAS.SkillParameter") is string pid && all.Any(p=>p.Id==pid && p.kind!=SkillParameterKind.Bool);
             root.RegisterCallback<DragUpdatedEvent>(e=>{if(CanDrop()){DragAndDrop.visualMode=DragAndDropVisualMode.Link;e.StopPropagation();}});
@@ -58,8 +65,15 @@ namespace ZFramework.GAS.Editor
             var popup = new PopupField<string>(label, names, index) { tooltip = property.stringValue };
             popup.RegisterValueChangedCallback(e =>
             {
-                int selected = names.IndexOf(e.newValue); if (selected > all.Length) return;
+                int selected = names.IndexOf(e.newValue); if (selected < 0 || selected > all.Length) return;
+                property.serializedObject.Update();
                 property.stringValue = selected == 0 ? "" : all[selected - 1].Id; property.serializedObject.ApplyModifiedProperties(); popup.tooltip = property.stringValue;
+            });
+            popup.TrackPropertyValue(property, p =>
+            {
+                int current = System.Array.FindIndex(all, item => item.Id == p.stringValue) + 1;
+                if (current >= 0 && current < names.Count) popup.SetValueWithoutNotify(names[current]);
+                popup.tooltip = p.stringValue;
             });
             return popup;
         }

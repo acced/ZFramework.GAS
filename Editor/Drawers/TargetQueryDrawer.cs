@@ -27,7 +27,7 @@ namespace ZFramework.GAS.Editor
             Field("requiredTags", "必需标签"); Field("anyTags", "任一标签"); Field("blockedTags", "排除标签");
             void Refresh(SerializedProperty p)
             {
-                var mode = (TargetQueryKind)p.enumValueIndex;
+                var mode = (TargetQueryKind)p.intValue;
                 bool volume = TargetQuery.IsVolume(mode);
                 void Show(VisualElement e, bool show) => e.style.display = show ? DisplayStyle.Flex : DisplayStyle.None;
                 Show(key, mode is TargetQueryKind.Hitbox or TargetQueryKind.Project);

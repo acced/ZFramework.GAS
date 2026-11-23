@@ -39,6 +39,7 @@ namespace ZFramework.GAS.Editor
             if (_task == null || contentRect.width <= 16) return;
             var definition = _task.Definition;
             float width = contentRect.width - 12, duration = definition.Duration;
+            if (!(duration > 0f) || !float.IsFinite(duration)) return;
             float X(float time) => 6 + TimelineMath.X(Mathf.Clamp(time, 0, duration), width / duration, 0);
             var p = context.painter2D;
             void Rect(float x, float y, float w, float h, Color color)
@@ -63,6 +64,8 @@ namespace ZFramework.GAS.Editor
                 Rect(X(region.Start), 37, Mathf.Max(1, X(region.End < 0 ? duration : region.End) - X(region.Start)), 7, SkillColors.Cue);
             foreach (var window in definition.TagWindows)
                 Rect(X(window.Start), 49, Mathf.Max(1, X(window.End < 0 ? duration : window.End) - X(window.Start)), 7, SkillColors.Cost);
+            foreach (var track in definition.RuntimeTracks)
+                Rect(X(track.Start), 60, Mathf.Max(1, X(track.End) - X(track.Start)), 6, SkillColors.Instant);
             p.strokeColor = SkillColors.Cooldown; p.lineWidth = 2; p.BeginPath();
             p.MoveTo(new Vector2(X(_task.Time), 1)); p.LineTo(new Vector2(X(_task.Time), 74)); p.Stroke();
         }

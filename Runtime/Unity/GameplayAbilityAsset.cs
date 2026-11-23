@@ -5,12 +5,6 @@ using UnityEngine;
 
 namespace ZFramework.GAS.Unity
 {
-    /// <summary>
-    /// 能力定义的授权资产。消耗与冷却直接引用两个效果资产——
-    /// 与 UE 的 <c>CostGameplayEffectClass</c> / <c>CooldownGameplayEffectClass</c> 同构。
-    ///
-    /// <see cref="Definition"/> 同样缓存复用同一实例。
-    /// </summary>
     [CreateAssetMenu(menuName = "ZFramework GAS/Gameplay Ability", fileName = "NewGameplayAbility")]
     public sealed class GameplayAbilityAsset : ScriptableObject, IDefinitionAsset
     {
@@ -19,64 +13,72 @@ namespace ZFramework.GAS.Unity
         [TextArea] public string description;
         public Sprite icon;
         public string DisplayName => string.IsNullOrEmpty(displayName) ? name : displayName;
+
         [Header("参数")]
         public SkillParameter[] parameters = Array.Empty<SkillParameter>();
+
         [Header("激活动作（按顺序执行）")]
         [SerializeReference] public SkillAction[] activationActions = Array.Empty<SkillAction>();
+
+        [NonSerialized] private SkillActionDefinition[] _actions;
+        [NonSerialized] private GameplayAbilityDefinition _definition;
+
         public SkillParameterValues ResolveParameters(int level, SkillParameterOverride[] overrides = null)
         {
-            var values = new Dictionary<string, SkillParameterValue>(parameters.Length);
-            foreach (var parameter in parameters) values.Add(parameter.Id, parameter.Resolve(level));
-            if (overrides != null)
-                foreach (var entry in overrides)
-                {
-                    var value = entry.Resolve(level);
-                    if (values[entry.parameterId].Kind != value.Kind) throw new InvalidOperationException("参数类型不匹配: " + entry.parameterId);
-                    values[entry.parameterId] = value;
-                }
-            return values.Count == 0 ? SkillParameterValues.Empty : new SkillParameterValues(values);
+            int pCount = parameters?.Length ?? 0, oCount = overrides?.Length ?? 0;
+            if (pCount == 0 && oCount == 0) return SkillParameterValues.Empty;
+
+            var values = new Dictionary<string, SkillParameterValue>(pCount, StringComparer.Ordinal);
+            for (int i = 0; i < pCount; i++)
+            {
+                SkillParameter p = parameters[i];
+                if (string.IsNullOrEmpty(p.Id) || !values.TryAdd(p.Id, p.Resolve(level)))
+                    throw new InvalidOperationException("参数 ID 缺失或重复: " + p.Id);
+            }
+            for (int i = 0; i < oCount; i++)
+            {
+                SkillParameterOverride o = overrides[i];
+                if (string.IsNullOrEmpty(o.parameterId) || !values.TryGetValue(o.parameterId, out var declared))
+                    throw new InvalidOperationException("未声明的技能参数覆盖: " + o.parameterId);
+                SkillParameterValue value = o.Resolve(level);
+                if (declared.Kind != value.Kind) throw new InvalidOperationException("参数类型不匹配: " + o.parameterId);
+                values[o.parameterId] = value;
+            }
+            return values.Count == 0 ? SkillParameterValues.Empty : new SkillParameterValues(values, takeOwnership: true);
         }
-        [NonSerialized] private SkillActionDefinition[] _actions;
-        public SkillActionDefinition[] BuildActions() => _actions ??= new SkillActionBuildContext(this).Build(activationActions);
+
+        public SkillActionDefinition[] BuildActions()
+            => _actions ??= new SkillActionBuildContext(this).Build(activationActions);
+
         [Header("标签")]
-        [Tooltip("本能力的标识标签，供「取消带某标签的能力」匹配")]
         [SerializeField] private GameplayTag[] abilityTags = Array.Empty<GameplayTag>();
         [SerializeField] private GameplayTag[] activationRequiredTags = Array.Empty<GameplayTag>();
         [SerializeField] private GameplayTag[] activationBlockedTags = Array.Empty<GameplayTag>();
-        [Tooltip("激活期间授予持有者，结束时移除")]
         [SerializeField] private GameplayTag[] activationOwnedTags = Array.Empty<GameplayTag>();
         [SerializeField] private GameplayTag[] cancelAbilitiesWithTags = Array.Empty<GameplayTag>();
 
         [Header("消耗与冷却")]
-        [Tooltip("激活时提交消耗与冷却。关闭后由「提交消耗与冷却」动作或 CommitAbility 显式提交。")]
         public bool autoCommit = true;
-        [Tooltip("必须是 Instant 效果")]
         [SerializeField] private GameplayEffectAsset cost;
-        [Tooltip("必须至少授予一个标签——那个标签就是「在冷却中」的标志")]
         [SerializeField] private GameplayEffectAsset cooldown;
 
         [Header("表现（由扩展解释）")]
         [SerializeField] private ScriptableObject animation;
         public ScriptableObject Presentation { get => animation; set => animation = value; }
 
-        [NonSerialized] private GameplayAbilityDefinition _definition;
-
-        /// <summary>构建（并缓存）运行期定义。同一资产始终返回同一实例。</summary>
         public GameplayAbilityDefinition Definition => _definition ??= Build();
 
         private GameplayAbilityDefinition Build()
         {
-            DefinitionSource.DependsOn(this, cost); DefinitionSource.DependsOn(this, cooldown);
-            var definition = new GameplayAbilityDefinition(
-                TagAssetUtility.ToSet(abilityTags),
-                TagAssetUtility.ToSet(activationRequiredTags),
-                TagAssetUtility.ToSet(activationBlockedTags),
-                TagAssetUtility.ToSet(activationOwnedTags),
+            DefinitionSource.DependsOn(this, cost);
+            DefinitionSource.DependsOn(this, cooldown);
+            var def = new GameplayAbilityDefinition(
+                TagAssetUtility.ToSet(abilityTags), TagAssetUtility.ToSet(activationRequiredTags),
+                TagAssetUtility.ToSet(activationBlockedTags), TagAssetUtility.ToSet(activationOwnedTags),
                 TagAssetUtility.ToSet(cancelAbilitiesWithTags),
-                cost != null ? cost.Definition : null,
-                cooldown != null ? cooldown.Definition : null);
-            DefinitionSource.Register(definition, this);
-            return definition;
+                cost != null ? cost.Definition : null, cooldown != null ? cooldown.Definition : null);
+            DefinitionSource.Register(def, this);
+            return def;
         }
 
         public void InvalidateDefinition() { _definition = null; _actions = null; DefinitionSource.InvalidateDependents(this); }

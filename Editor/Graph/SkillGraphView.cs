@@ -29,6 +29,7 @@ namespace ZFramework.GAS.Editor
         private GameplayAbilityAsset _root;
         private Vector2 _mouse;
         private ScriptableObject[] _clipboard = Array.Empty<ScriptableObject>();
+        private SkillNodeSearchProvider _searchProvider;
         public int NodeCount => _nodes.Count;
         private int _layoutPassCount, _queueCount;
         public string LayoutDiagnostics => $"passes={_layoutPassCount}, queued={_queueCount}, arrange={_arrangeRequested}, pending={_pendingPlacement.Count}, measured={_measuredSizes.Count}, disposed={_disposed}, panel={panel != null}";
@@ -42,7 +43,7 @@ namespace ZFramework.GAS.Editor
             nodeCreationRequest = ctx => Search(ctx.screenMousePosition);
             RegisterCallback<MouseMoveEvent>(e => _mouse = e.localMousePosition);
             RegisterCallback<KeyDownEvent>(OnKey);
-            RegisterCallback<DragUpdatedEvent>(e => { if (DragAndDrop.objectReferences.Any(o => o is ScriptableObject)) DragAndDrop.visualMode = DragAndDropVisualMode.Link; });
+            RegisterCallback<DragUpdatedEvent>(e => { if (DragAndDrop.objectReferences.Any(o => o is GameplayAbilityAsset || o is GameplayEffectAsset || SkillEditorExtensions.Supports(o))) DragAndDrop.visualMode = DragAndDropVisualMode.Link; });
             RegisterCallback<DragPerformEvent>(e =>
             {
                 foreach (var obj in DragAndDrop.objectReferences)
@@ -146,7 +147,10 @@ namespace ZFramework.GAS.Editor
         public void Search(Vector2 screen, ScriptableObject parent = null, PortId? port = null)
         {
             if (_doc.Root == null) { _doc.Report("先从技能库选择或新建一个技能"); return; }
+            if (_searchProvider != null) { Object.DestroyImmediate(_searchProvider); _searchProvider = null; }
             var provider = ScriptableObject.CreateInstance<SkillNodeSearchProvider>();
+            provider.hideFlags = HideFlags.HideAndDontSave;
+            _searchProvider = provider;
             Vector2 graphPosition = contentViewContainer.WorldToLocal(screen - (EditorWindow.focusedWindow != null ? EditorWindow.focusedWindow.position.position : Vector2.zero));
             provider.Initialize(_doc, parent, port, graphPosition, this);
             SearchWindow.Open(new SearchWindowContext(screen), provider);
@@ -224,7 +228,7 @@ namespace ZFramework.GAS.Editor
             if (_framing)
             {
                 // SetPosition 后再等实际布局更新；否则 FrameAll 仍会按旧坐标取景。
-                if (_nodes.Any(p => (p.Value.GetPosition().position - _layoutPositions[p.Key]).sqrMagnitude > 1)) return;
+                if (_nodes.Any(p => _layoutPositions.TryGetValue(p.Key, out var expected) && (p.Value.GetPosition().position - expected).sqrMagnitude > 1)) return;
                 _layoutWork.Pause(); _framing = false; _frameRequested = false; FrameAll(); return;
             }
             // 字段绑定和 Cue 条会改变高度。连续两次取得相同的有效尺寸后才定位。
@@ -303,11 +307,11 @@ namespace ZFramework.GAS.Editor
         }
         private void OnKey(KeyDownEvent e)
         {
-            if (e.target is TextField || e.target is TextElement) return;
+            if (e.target is TextField || e.target is TextElement || (e.target is VisualElement ve && ve.GetFirstAncestorOfType<TextField>() != null)) return;
             if (e.keyCode == KeyCode.Space) { Search(GUIUtility.GUIToScreenPoint(_mouse)); e.StopPropagation(); }
-            else if (e.keyCode == KeyCode.A && !e.ctrlKey) { FrameAll(); e.StopPropagation(); }
-            else if (e.ctrlKey && e.keyCode == KeyCode.C) { _clipboard = selection.OfType<SkillNode>().Select(n => n.Asset).Where(a => a != _doc.Root).ToArray(); e.StopPropagation(); }
-            else if (e.ctrlKey && e.keyCode == KeyCode.V)
+            else if (e.keyCode == KeyCode.A && !e.actionKey) { FrameAll(); e.StopPropagation(); }
+            else if (e.actionKey && e.keyCode == KeyCode.C) { _clipboard = selection.OfType<SkillNode>().Select(n => n.Asset).Where(a => a != _doc.Root).ToArray(); e.StopPropagation(); }
+            else if (e.actionKey && e.keyCode == KeyCode.V)
             {
                 Duplicate(_clipboard);
                 e.StopPropagation();
@@ -336,7 +340,7 @@ namespace ZFramework.GAS.Editor
                 }
             }
         }
-        public void Dispose() { _disposed = true; _layoutWork?.Pause(); _doc.Changed -= Sync; _doc.Selection.Changed -= SyncSelection; this.Unbind(); }
+        public void Dispose() { _disposed = true; _layoutWork?.Pause(); if (_searchProvider != null) { Object.DestroyImmediate(_searchProvider); _searchProvider = null; } _doc.Changed -= Sync; _doc.Selection.Changed -= SyncSelection; this.Unbind(); }
     }
 
     internal sealed class SkillNode : Node, ISkillNodeFields

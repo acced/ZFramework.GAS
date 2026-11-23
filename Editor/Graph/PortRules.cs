@@ -16,7 +16,7 @@ namespace ZFramework.GAS.Editor
         public bool Equals(PortId other) => Kind == other.Kind && ElementId == other.ElementId;
         public override bool Equals(object obj) => obj is PortId other && Equals(other);
         public override int GetHashCode() => ((int)Kind * 397) ^ (ElementId?.GetHashCode() ?? 0);
-        public string Label => Kind switch { PortKind.Cost => "消耗", PortKind.Cooldown => "冷却", PortKind.Animation => SkillEditorExtensions.Timeline?.DisplayName ?? "表现", PortKind.Marker => "事件", PortKind.TimelineEffect => "区间效果", PortKind.Applied => "生效时", PortKind.Periodic => "每周期", _ => "移除时" };
+        public string Label => Kind switch { PortKind.Cost => "消耗", PortKind.Cooldown => "冷却", PortKind.Animation => SkillEditorExtensions.Timeline?.DisplayName ?? "表现", PortKind.Marker => "事件", PortKind.TimelineEffect => "区间效果", PortKind.ActionReference => "动作引用", PortKind.Applied => "生效时", PortKind.Periodic => "每周期", _ => "移除时" };
         public Type AcceptedType => Kind == PortKind.ActionReference ? typeof(ScriptableObject) : Kind == PortKind.Animation ? SkillEditorExtensions.Timeline?.AssetType : typeof(GameplayEffectAsset);
         public bool Single => Kind <= PortKind.Marker || Kind == PortKind.TimelineEffect;
         public EffectTrigger Trigger => Kind == PortKind.Periodic ? EffectTrigger.Periodic : Kind == PortKind.Removed ? EffectTrigger.Removed : EffectTrigger.Applied;
@@ -79,7 +79,10 @@ namespace ZFramework.GAS.Editor
                 using var owner = new SerializedObject(parent);
                 if (!SkillEditorExtensions.EffectSlots(owner).Any(slot => slot.Id == port.ElementId)) error = "效果区间已不存在";
             }
-            else if (parent is GameplayAbilityAsset && port.Kind > PortKind.Animation || SkillEditorExtensions.Supports(parent) && port.Kind != PortKind.Marker || parent is GameplayEffectAsset && port.Kind < PortKind.Applied)
+            else if (parent is GameplayAbilityAsset && port.Kind > PortKind.Animation ||
+                SkillEditorExtensions.Supports(parent) && port.Kind != PortKind.Marker ||
+                parent is GameplayEffectAsset && port.Kind < PortKind.Applied ||
+                parent is not GameplayAbilityAsset && parent is not GameplayEffectAsset && !SkillEditorExtensions.Supports(parent))
                 error = "该资产没有此端口";
             else
             {
@@ -113,7 +116,7 @@ namespace ZFramework.GAS.Editor
         }
         private static bool Reaches(ScriptableObject node, ScriptableObject target, HashSet<ScriptableObject> path, int depth)
         {
-            if (node == target || depth >= 8 || !path.Add(node)) return true;
+            if (node == target || depth > 8 || !path.Add(node)) return true;
             bool result = Links(node).Any(link => Reaches(link.Child, target, path, depth + 1));
             path.Remove(node); return result;
         }

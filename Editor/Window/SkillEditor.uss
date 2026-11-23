@@ -85,9 +85,8 @@
 .time-ruler { background-color: #272c33; border-bottom-width: 1px; border-bottom-color: #14171b; }
 .ruler-tick { position: absolute; top: 4px; height: 20px; border-left-width: 1px; border-left-color: #57616e; padding-left: 4px; color: var(--gas-muted); font-size: 10px; }
 .track-row { flex-direction: row; flex-shrink: 0; border-bottom-width: 1px; border-bottom-color: #181b20; }
-.track-heading { flex-shrink: 0; -unity-text-align: middle-left; padding-left: 10px; font-size: 11px; border-right-width: 1px; border-right-color: #14171b; border-left-width: 3px; background-color: #252a31; }
+.track-heading { flex-shrink: 0; -unity-text-align: middle-left; padding-left: 10px; font-size: 11px; border-right-width: 1px; border-right-color: #14171b; border-left-width: 3px; background-color: #252a31; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track-lane { flex-grow: 1; overflow: hidden; background-color: #20242a; }
-.track-heading { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cue-track-row .track-heading:hover { background-color: #303a42; }
 .timeline-scroll { min-height: 0; }
 .timeline-scroll .unity-scroll-view__content-container { flex-grow: 1; }
